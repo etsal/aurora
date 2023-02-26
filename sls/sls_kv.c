@@ -182,9 +182,9 @@ slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value)
 {
 	int error;
 
-	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	//lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 	error = slskv_find_unlocked(table, key, value);
-	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	//unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 
 	return (error);
 }
@@ -223,9 +223,9 @@ slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
 	newkv->key = key;
 	newkv->value = value;
 
-	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	//lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 	error = slskv_add_unlocked(table, newkv);
-	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	//unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 
 	if (error != 0)
 		uma_zfree(slskvpair_zone, newkv);
@@ -264,9 +264,9 @@ slskv_del(struct slskv_table *table, uint64_t key)
 {
 	struct slskv_pair *kv;
 
-	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	//lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 	kv = slskv_del_unlocked(table, key);
-	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	//unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 
 	uma_zfree(slskvpair_zone, kv);
 }
@@ -303,9 +303,9 @@ slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 {
 	struct slskv_pair *kv;
 
-	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	//lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 	kv = slskv_pop_unlocked(table, key, value);
-	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	//unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
 
 	if (kv != NULL) {
 		uma_zfree(slskvpair_zone, kv);
