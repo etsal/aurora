@@ -271,7 +271,7 @@ slsckpt_io_slos(struct slspart *slsp, struct slsckpt_data *sckpt_data)
 
 	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
 	taskqueue_drain_all(slos.slos_tq);
-	error = slsfs_wakeup_syncer(0);
+	//error = slsfs_wakeup_syncer(0);
 
 	SDT_PROBE1(sls, , sls_ckpt, , "Draining taskqueue");
 
