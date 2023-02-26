@@ -128,8 +128,10 @@ sls_pager_done(struct buf *bp)
 
 	bdone(bp);
 
+#if 0
 	if (objid != 0)
 		slspre_mark(objid, start, end);
+#endif
 }
 
 /*
