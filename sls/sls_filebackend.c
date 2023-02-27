@@ -42,7 +42,6 @@ sls_writedata_file_pages(int fd, vm_object_t obj)
 {
 	struct iovec aiov[MAXIO];
 	vm_page_t ms[MAXIO];
-	vm_pindex_t pinit;
 	int error = 0;
 	vm_page_t m;
 	size_t index;
@@ -52,9 +51,9 @@ sls_writedata_file_pages(int fd, vm_object_t obj)
 	vm_object_pip_add(obj, 1);
 
 	index = 0;
-	for (m = vm_page_find_least(obj, 0), pinit = m->pindex; m != NULL;
-	     m = vm_page_next(m)) {
-		if ((m->pindex != pinit + index) || (index == MAXIO)) {
+	for (m = vm_page_find_least(obj, 0); m != NULL;
+	     m = TAILQ_NEXT(m, listq)) {
+		if (index == MAXIO) {
 			VM_OBJECT_WUNLOCK(obj);
 			error = sls_writedata_file_write(
 			    fd, aiov, index, off, ms);
@@ -70,10 +69,8 @@ sls_writedata_file_pages(int fd, vm_object_t obj)
 		KASSERT(pagesizes[m->psind] <= PAGE_SIZE,
 		    ("dumping page %p with size %ld", m, pagesizes[m->psind]));
 
-		if (index == 0) {
+		if (index == 0)
 			off = (m->pindex + SLOS_OBJOFF) * PAGE_SIZE;
-			pinit = m->pindex;
-		}
 
 		m->oflags |= VPO_SWAPINPROG;
 		aiov[index].iov_base = (char *)PHYS_TO_DMAP(m->phys_addr);
