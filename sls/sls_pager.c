@@ -227,7 +227,7 @@ sls_pager_writebuf(
 	KASSERT(bp->b_resid == 0, ("Buffer already has resid"));
 
 	for (m = vm_page_find_least(obj, pindex); m != NULL;
-	     m = vm_page_next(m)) {
+	     m = TAILQ_NEXT(m, listq)) {
 		if (npages == 0)
 			pindex_init = m->pindex;
 
@@ -236,10 +236,6 @@ sls_pager_writebuf(
 		    ("page %p in object %p "
 		     "associated with object %p",
 			m, obj, m->object));
-		KASSERT(pindex_init + npages == m->pindex,
-		    ("pages in the buffer are not consecutive "
-		     "(pindex should be %ld, is %ld)",
-			pindex_init + npages, m->pindex));
 		KASSERT(pagesizes[m->psind] <= PAGE_SIZE,
 		    ("dumping page %p with size %ld", m, pagesizes[m->psind]));
 
