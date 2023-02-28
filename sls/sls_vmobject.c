@@ -43,6 +43,9 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt)
 	struct sbuf *sb;
 	int error;
 
+	if (obj->type == OBJT_VNODE)
+		return (slsckpt_vnode((struct vnode *)obj->handle, sckpt));
+
 	/* Find if we have already checkpointed the object. */
 	if (slskv_find(sckpt->sckpt_rectable, (uint64_t)obj->objid,
 		(uintptr_t *)&sb) == 0)
@@ -74,6 +77,12 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt)
 	 * If the backer has the same ID as we do, we're an Aurora shadow. Find
 	 * the first non-Aurora ancestor.
 	 */
+	info.magic = SLSVMOBJECT_ID;
+	info.slsid = obj->objid;
+	info.backer = 0UL;
+	info.backer_off = 0;
+	info.backer_type = OBJT_DEAD;
+
 	curobj = obj;
 	backer = obj->backing_object;
 	while ((backer != NULL) && (backer->objid == curobj->objid)) {
@@ -81,15 +90,19 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt)
 		backer = backer->backing_object;
 	}
 
-	info.backer = (backer != NULL) ? backer->objid : 0UL;
-	info.backer_off = (backer != NULL) ? obj->backing_object_offset : 0;
-	info.magic = SLSVMOBJECT_ID;
-	info.slsid = obj->objid;
-	if (obj->type == OBJT_VNODE) {
-		error = slsckpt_vnode((struct vnode *)obj->handle, sckpt);
-		if (error != 0)
-			goto error;
-		info.vnode = (uint64_t)obj->handle;
+	if (backer != NULL) {
+		/* XXX Fix the restore side accordingly*/
+		if (OBJT_ISANONYMOUS(backer)) {
+			info.backer = backer->objid;
+		} else {
+			if (backer->type != OBJT_VNODE)
+				panic("unexpected backer type");
+			//KASSERT(backer->type == OBJT_VNODE, ("unexpected backer type"));
+			info.backer = (uint64_t) backer->handle;
+		}
+
+		info.backer_off = obj->backing_object_offset;
+		info.backer_type = backer->type;
 	}
 
 	error = sbuf_bcat(sb, (void *)&info, sizeof(info));
@@ -100,7 +113,6 @@ slsvmobj_checkpoint(vm_object_t obj, struct slsckpt_data *sckpt)
 	if (error != 0)
 		goto error;
 
-	info.backer = (backer != NULL) ? backer->objid : 0UL;
 	KASSERT((info.type != OBJT_DEVICE) || (info.backer == 0),
 	    ("device object has a backer"));
 	KASSERT(info.slsid != 0, ("object has an ID of 0"));
