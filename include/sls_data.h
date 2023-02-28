@@ -87,6 +87,7 @@ struct slsvmobject {
 	vm_pindex_t size;
 	enum obj_type type;
 	/* Used for objects that are shadows of others */
+	enum obj_type backer_type;
 	uint64_t backer;
 	vm_ooffset_t backer_off;
 	uint64_t vnode; /* Backing SLS vnode */

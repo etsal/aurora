@@ -102,6 +102,8 @@ slsckpt_vnode(struct vnode *vp, struct slsckpt_data *sckpt_data)
 {
 	int error;
 
+	return (0);
+
 	if (slsset_find(sckpt_data->sckpt_vntable, (uint64_t)vp) == 0)
 		return (0);
 
