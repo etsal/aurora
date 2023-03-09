@@ -508,8 +508,8 @@ slskq_slsid(struct file *fp, uint64_t *slsidp)
 }
 
 static int
-slskq_checkpoint(struct file *fp, struct sls_record *rec,
-    struct slsckpt_data *sckpt_data __unused)
+slskq_checkpoint(
+    struct file *fp, struct sbuf *sb, struct slsckpt_data *sckpt_data)
 {
 	struct proc *p = curproc;
 	struct kqueue *kq;
@@ -520,7 +520,7 @@ slskq_checkpoint(struct file *fp, struct sls_record *rec,
 	if (error != 0)
 		return (error);
 
-	error = slskq_checkpoint_kqueue(p, kq, rec->srec_sb);
+	error = slskq_checkpoint_kqueue(p, kq, sb);
 
 	kqueue_release(kq, 0);
 
