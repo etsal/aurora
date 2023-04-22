@@ -24,7 +24,7 @@
 #define GB ((size_t)((MB) * (size_t)1024))
 
 static const size_t CHUNK_SIZE = (16 * MB);
-static const size_t WAL_CHUNK = (50 * GB);
+static const size_t WAL_CHUNK = (150 * GB);
 static diskptr_t wal_allocations;
 /*
  * Generic uint64_t comparison function.

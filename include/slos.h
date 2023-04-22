@@ -25,6 +25,8 @@
  */
 typedef uint64_t bnode_ptr;
 
+#define BLKSIZE(slos) ((slos)->slos_sb->sb_bsize)
+
 /* Physical extent on-disk pointer */
 struct slos_diskptr {
 	uint64_t

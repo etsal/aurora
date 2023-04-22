@@ -22,7 +22,6 @@ struct fbtree;
 #define SMPSLOS(mp) ((mp)->sdev->slos)
 #define SECTORSIZE(smp) ((smp)->sp_sdev->devblocksize)
 #define IOSIZE(svp) (BLKSIZE((svp)->sn_slos))
-#define BLKSIZE(slos) ((slos)->slos_sb->sb_bsize)
 
 #define SVINUM(sp) (SLSINO(sp).ino_pid)
 #define VINUM(vp) (SVINUM(SLSVP(vp)))
