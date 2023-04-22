@@ -16,6 +16,8 @@
 #include <vm/uma.h>
 #include <vm/vm_object.h>
 
+#include "vtree.h"
+
 /* Maximum number of superblocks, one per epoch. */
 #define NUMSBS (100)
 
@@ -26,15 +28,7 @@
 typedef uint64_t bnode_ptr;
 
 #define BLKSIZE(slos) ((slos)->slos_sb->sb_bsize)
-
-/* Physical extent on-disk pointer */
-struct slos_diskptr {
-	uint64_t
-	    offset;    /* The block offset of the first block of the region. */
-	uint64_t size; /* The size of the region in bytes. */
-	uint64_t epoch;
-};
-typedef struct slos_diskptr diskptr_t;
+extern struct vtreeops *default_treeops;
 
 /* Shorthands for creating disk pointers. */
 #define DISKPTR(blkno, size)     \

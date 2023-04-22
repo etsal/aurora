@@ -2,12 +2,24 @@
 #define _VTREE_H_
 
 #include <sys/types.h>
+#include <sys/malloc.h>
 #include <sys/param.h>
 #include <sys/buf.h>
 #include <sys/bufobj.h>
 #include <sys/vnode.h>
 
-#include "slos.h"
+#define DPTR_COW (1)
+
+/* Physical extent on-disk pointer */
+struct slos_diskptr {
+	uint64_t
+	    offset;    /* The block offset of the first block of the region. */
+	uint64_t size; /* The size of the region in bytes. */
+	uint64_t epoch;
+  uint8_t flags;
+};
+typedef struct slos_diskptr diskptr_t;
+
 /*
  * Virtual Tree Interface
  */
@@ -64,33 +76,38 @@ struct vtreeops
 #define VTREE_WITHWAL (0x1)
 #define VTREE_WALBULK (0x2)
 
+#define VTREE_BASETREE (128)
+#define VTREE_LOCK(tree, flags) (lockmgr(&(tree)->bt_lock, flags, 0))
+
 typedef struct vtree
 {
-  void* v_tree;
+  unsigned char v_tree[VTREE_BASETREE];
   uint32_t v_flags;
   kvp* v_wal;
   struct vnode *v_vp;
   int v_cur_wal_idx;
   struct vtreeops* v_ops;
+
+	struct lock bt_lock;
 } vtree;
 
 #define VTREE_INIT(tree, ptr, keysize)                                         \
-  ((tree)->v_ops->vtree_init((tree)->v_tree, (tree)->v_vp, ptr, keysize))
+  ((tree)->v_ops->vtree_init((void *)(tree)->v_tree, (tree)->v_vp, ptr, keysize))
 
 #define VTREE_INSERT(tree, key, value)                                         \
-  ((tree)->v_ops->vtree_insert((tree)->v_tree, key, value))
+  ((tree)->v_ops->vtree_insert((void *)(tree)->v_tree, key, value))
 
 #define VTREE_BULKINSERT(tree, kvp, len)                                       \
-  ((tree)->v_ops->vtree_bulkinsert((tree)->v_tree, kvp, len))
+  ((tree)->v_ops->vtree_bulkinsert((void *)(tree)->v_tree, kvp, len))
 
 #define VTREE_DELETE(tree, key, value)                                         \
-  ((tree)->v_ops->vtree_delete((tree)->v_tree, key, value))
+  ((tree)->v_ops->vtree_delete((void *)(tree)->v_tree, key, value))
 
 #define VTREE_FIND(tree, key, value)                                           \
-  ((tree)->v_ops->vtree_find((tree)->v_tree, key, value))
+  ((tree)->v_ops->vtree_find((void *)(tree)->v_tree, key, value))
 
 #define VTREE_GE(tree, key, value)                                             \
-  ((tree)->v_ops->vtree_ge((tree)->v_tree, key, value))
+  ((tree)->v_ops->vtree_ge((void *)(tree)->v_tree, key, value))
 
 #define VTREE_RANGEQUERY(tree, keylow, keymax, results, results_max)           \
   ((tree)->v_ops->vtree_rangequery(                                            \
@@ -100,8 +117,9 @@ typedef struct vtree
 
 #define VTREE_GETKEYSIZE(tree) ((tree)->v_ops->vtree_getkeysize((tree)->v_tree))
 
-struct vtree
-vtree_create(void* tree, struct vtreeops* ops, uint32_t v_flags);
+int
+vtree_create(struct vtree *vtree, struct vtreeops* ops, 
+    diskptr_t root, size_t ks, uint32_t v_flags);
 int
 vtree_insert(vtree* tree, uint64_t key, void* value);
 int
@@ -125,6 +143,18 @@ vtree_checkpoint(vtree* tree);
 void
 vtree_empty_wal(vtree* tree);
 
+size_t
+vtree_dirty_cnt(vtree *tree);
+
+void
+vtree_free(vtree *tree);
+
+void
+vtree_interface_init(void);
+
 
 extern struct buf_ops bufops_vtree;
+
+extern struct vtreeops btreeops;
+extern struct vtreeops *defaultops;
 #endif

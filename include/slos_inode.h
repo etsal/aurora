@@ -3,6 +3,7 @@
 
 #include <slos.h>
 
+#include "vtree.h"
 #include "btree.h"
 
 /* Record types */
@@ -93,11 +94,12 @@ struct slos_node {
 #define sn_blk sn_ino.ino_blk
 	uint64_t sn_status;		  /* status of vnode */
 	LIST_ENTRY(slos_node) sn_entries; /* link for in-memory vnodes */
-	struct fbtree sn_tree;		  /* Data btree */
 	struct mtx sn_mtx;		  /* vnode mutex */
 	struct slos *sn_slos;		  /* Slos the node belong to */
 
 	struct vnode *sn_fdev; /* Fake vnode for btree back */
+
+  struct vtree sn_vtree;
 };
 
 /* Inode flags */

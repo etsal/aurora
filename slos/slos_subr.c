@@ -202,11 +202,11 @@ slos_truncate(struct vnode *vp, size_t size)
 int
 slos_sync_vp(struct vnode *vp, int release)
 {
-	struct fbtree *tree = &SLSVP(vp)->sn_tree;
+	struct vtree *tree = &SLSVP(vp)->sn_vtree;
 	ASSERT_VOP_LOCKED(vp, __func__);
 
 	vn_fsync_buf(vp, 0);
-	fbtree_sync(tree);
+	vtree_checkpoint(tree);
 
 	/*
 	 * Trying to update the time on the vnode holding the inodes

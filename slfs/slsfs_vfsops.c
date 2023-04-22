@@ -153,42 +153,42 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 static int
 slsfs_checksumtree_init(struct slos *slos)
 {
-	diskptr_t ptr;
-	int error = 0;
+	/* diskptr_t ptr; */
+	/* int error = 0; */
 
-	size_t offset = ((NUMSBS * slos->slos_sb->sb_ssize) /
-			    slos->slos_sb->sb_bsize) +
-	    1;
-	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
-		MPASS(error == 0);
-		error = fbtree_sysinit(slos, offset, &ptr);
-		DEBUG1("Initializing checksum tree %lu", ptr.offset);
-		MPASS(error == 0);
-	} else {
-		ptr = slos->slos_sb->sb_cksumtree;
-	}
+	/* size_t offset = ((NUMSBS * slos->slos_sb->sb_ssize) / */
+	/* 		    slos->slos_sb->sb_bsize) + */
+	/*     1; */
+	/* if (slos->slos_sb->sb_epoch == EPOCH_INVAL) { */
+	/* 	MPASS(error == 0); */
+	/* 	error = fbtree_sysinit(slos, offset, &ptr); */
+	/* 	DEBUG1("Initializing checksum tree %lu", ptr.offset); */
+	/* 	MPASS(error == 0); */
+	/* } else { */
+	/* 	ptr = slos->slos_sb->sb_cksumtree; */
+	/* } */
 
-	// In case of remounting of a snapshot
-	if (slos->slos_cktree != NULL) {
-		slos_vpfree(slos, slos->slos_cktree);
-	}
+	/* // In case of remounting of a snapshot */
+	/* if (slos->slos_cktree != NULL) { */
+	/* 	slos_vpfree(slos, slos->slos_cktree); */
+	/* } */
 
-	DEBUG1("Loading Checksum tree %lu", ptr.offset);
-	error = slos_svpimport(slos, ptr.offset, true, &slos->slos_cktree);
-	KASSERT(error == 0, ("importing checksum tree failed with %d", error));
+	/* DEBUG1("Loading Checksum tree %lu", ptr.offset); */
+	/* error = slos_svpimport(slos, ptr.offset, true, &slos->slos_cktree); */
+	/* KASSERT(error == 0, ("importing checksum tree failed with %d", error)); */
 
-	fbtree_init(slos->slos_cktree->sn_fdev,
-	    slos->slos_cktree->sn_tree.bt_root, sizeof(uint64_t),
-	    sizeof(uint32_t), &uint64_t_comp, "Checksum tree", 0,
-	    &slos->slos_cktree->sn_tree);
-	KASSERT(
-	    slos->slos_cktree != NULL, ("could not initialize checksum tree"));
+	/* fbtree_init(slos->slos_cktree->sn_fdev, */
+	/*     slos->slos_cktree->sn_tree.bt_root, sizeof(uint64_t), */
+	/*     sizeof(uint32_t), &uint64_t_comp, "Checksum tree", 0, */
+	/*     &slos->slos_cktree->sn_tree); */
+	/* KASSERT( */
+	/*     slos->slos_cktree != NULL, ("could not initialize checksum tree")); */
 
-	fbtree_reg_rootchange(
-	    &slos->slos_cktree->sn_tree, &slsfs_root_rc, slos->slos_cktree);
-	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
-		MPASS(fbtree_size(&slos->slos_cktree->sn_tree) == 0);
-	}
+	/* fbtree_reg_rootchange( */
+	/*     &slos->slos_cktree->sn_tree, &slsfs_root_rc, slos->slos_cktree); */
+	/* if (slos->slos_sb->sb_epoch == EPOCH_INVAL) { */
+	/* 	MPASS(fbtree_size(&slos->slos_cktree->sn_tree) == 0); */
+	/* } */
 
 	return (0);
 }
@@ -609,22 +609,6 @@ again:
 			panic("Problem with allocation");
 		}
 
-		DEBUG1("Flushing checksum %p",
-		    slos.slos_cktree->sn_tree.bt_backend);
-		ino = &slos.slos_cktree->sn_ino;
-		MPASS(slos.slos_cktree != SLSVP(slos.slsfs_inodes));
-		ino->ino_blk = ptr.offset;
-		if (checksum_enabled)
-			fbtree_sync(&slos.slos_cktree->sn_tree);
-		bp = getblk(svp->sn_fdev, ptr.offset, BLKSIZE(&slos), 0, 0, 0);
-		MPASS(bp);
-		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
-		/* Async because we have a barrier below. */
-		bawrite(bp);
-
-		slos.slos_sb->sb_cksumtree = ptr;
-
-		DEBUG1("Checksum tree at %lu", ptr.offset);
 		DEBUG1("Root Dir at %lu",
 		    SLSVP(slos.slsfs_inodes)->sn_ino.ino_blk);
 		DEBUG1("Inodes File at %lu", slos.slos_sb->sb_root.offset);
@@ -644,10 +628,6 @@ again:
 		    slos.slos_sb->sb_ssize, 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, slos.slos_sb, sizeof(struct slos_sb));
-
-		DEBUG("Flushing the checksum tree again");
-		if (checksum_enabled)
-			fbtree_sync(&slos.slos_cktree->sn_tree);
 
 		nanotime(&te);
 		slos.slos_sb->sb_time = te.tv_sec;

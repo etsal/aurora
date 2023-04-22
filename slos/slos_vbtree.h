@@ -16,12 +16,15 @@
  */
 
 #include <sys/types.h>
+#include <sys/malloc.h>
 #include <sys/param.h>
 #include <sys/buf.h>
 #include <sys/bufobj.h>
 #include <sys/vnode.h>
 
 #include "vtree.h"
+
+MALLOC_DECLARE(M_SLOS_VTREE);
 
 #define BLKSZ (64 * 1024)
 #define BT_MAX_KEY_SIZE (8)
@@ -130,6 +133,8 @@ btree_rangequery(void* tree,
 diskptr_t
 btree_checkpoint(void* tree);
 
-extern struct vtreeops btreeops;
+size_t
+btree_getkeysize(void* treep);
+
 
 #endif

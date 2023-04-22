@@ -4,7 +4,8 @@
 KMOD	= slos
 DPSRCS = offset.inc
 
-SRCS	= slos_alloc.c slos_btree.c slos_inode.c slos_io.c slos_subr.c slos_vbtree.c slos_vtree.c
+SRCS	= slos_alloc.c slos_btree.c slos_inode.c slos_io.c slos_subr.c \
+		slos_vbtree.c slos_vtree.c
 
 SRCS	+= slsfs_vnops.c slsfs_vfsops.c slsfs_dir.c \
 	  slsfs_buf.c vnode_if.h

@@ -28,6 +28,8 @@
 #include "slos_subr.h"
 #include "slsfs_buf.h"
 
+#include "vtree.h"
+
 static MALLOC_DEFINE(M_SLOS_INO, "slos inodes", "SLOSI");
 
 struct unrhdr *slsid_unr;
@@ -70,6 +72,8 @@ slos_node_fini(void *mem, int size)
 int
 slos_init(void)
 {
+  vtree_interface_init();
+
 	struct sysctl_oid *root;
 	int error;
 
@@ -187,24 +191,23 @@ slsfs_root_rc(void *ctx, bnode_ptr p)
 static int
 slos_svpsize(struct slos_node *svp)
 {
-	struct fbtree *tree = &svp->sn_tree;
-	struct slos_diskptr ptr;
-	struct fnode_iter iter;
-	uint64_t offset = 0;
+	/* struct slos_diskptr ptr; */
+	/* struct fnode_iter iter; */
+	/* uint64_t offset = 0; */
 	size_t bytecount = 0;
-	int error;
+	/* int error; */
 
 	/* Start from the beginning of the file. */
-	error = fbtree_keymin_iter(tree, &offset, &iter);
-	if (error != 0)
-		return (error);
+	/* error = fbtree_keymin_iter(tree, &offset, &iter); */
+	/* if (error != 0) */
+	/* 	return (error); */
 
-	/* Each key-value pair is an extent. */
-	for (; !ITER_ISNULL(iter); ITER_NEXT(iter)) {
-		/* Get size from the physical disk pointer. */
-		ptr = ITER_VAL_T(iter, diskptr_t);
-		bytecount += ptr.size;
-	}
+	/* /1* Each key-value pair is an extent. *1/ */
+	/* for (; !ITER_ISNULL(iter); ITER_NEXT(iter)) { */
+	/* 	/1* Get size from the physical disk pointer. *1/ */
+	/* 	ptr = ITER_VAL_T(iter, diskptr_t); */
+	/* 	bytecount += ptr.size; */
+	/* } */
 
 	atomic_add_64(&slos_bytes_opened, bytecount);
 
@@ -229,10 +232,6 @@ slos_svpimport(
 	DEBUG("Creating slos_node in memory");
 	svp = uma_zalloc(slos_node_zone, M_WAITOK);
 	ino = &svp->sn_ino;
-
-	error = slos_setupfakedev(slos, svp);
-	if (error)
-		goto error;
 
 	DEBUG2("Importing inode for %s %lu", system ? "block" : "OID", svpid);
 	/*
@@ -260,22 +259,14 @@ slos_svpimport(
 		goto error;
 	}
 
+  error = vtree_create(&svp->sn_vtree, defaultops,
+      ino->ino_btree, sizeof(diskptr_t), 0);
+
 	/*
 	 * Move each field separately, translating between the two.
 	 * The refcount will be incremented by the caller.
 	 */
 	svp->sn_slos = slos;
-	fbtree_init(svp->sn_fdev, ino->ino_btree.offset, sizeof(uint64_t),
-	    sizeof(diskptr_t), &compare_vnode_t, "VNode Tree", 0,
-	    &svp->sn_tree);
-
-	// The root node requires its own update function as generic calls
-	// update root and we end up with a recursive locking problem of
-	if (system && (svpid == slos->slos_sb->sb_root.offset)) {
-		fbtree_reg_rootchange(&svp->sn_tree, &slsfs_root_rc, svp);
-	} else {
-		fbtree_reg_rootchange(&svp->sn_tree, &slos_generic_rc, svp);
-	}
 
 	/* Measure the size in bytes of the imported inode. */
 
@@ -284,12 +275,13 @@ slos_svpimport(
 	 * measure a file multiple times if the userspace
 	 * access pattern causes us to constantly
 	 * deallocate/reallocate a vnode for it.
+   * TODO: Update btrees to keep track of number of keys
 	 */
-	if (!system && slos_count_opened_bytes) {
-		error = slos_svpsize(svp);
-		if (error)
-			printf("Error %d for slos_svpsize\n", error);
-	}
+	/* if (!system && slos_count_opened_bytes) { */
+	/* 	error = slos_svpsize(svp); */
+	/* 	if (error) */
+	/* 		printf("Error %d for slos_svpsize\n", error); */
+	/* } */
 
 	*svpp = svp;
 
@@ -306,7 +298,7 @@ error:
 void
 slos_vpfree(struct slos *slos, struct slos_node *vp)
 {
-	fbtree_destroy(&vp->sn_tree);
+	vtree_free(&vp->sn_vtree);
 	uma_zfree(slos_node_zone, vp);
 }
 
@@ -315,7 +307,6 @@ int
 slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 {
 	int error;
-	struct fnode_iter iter;
 	struct slos_inode ino;
 	struct buf *bp;
 	diskptr_t ptr;
@@ -328,19 +319,14 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 
 	// For now we will use the blkno for our svpids
 	VOP_LOCK(root_vp, LK_EXCLUSIVE);
-	error = slsfs_lookupbln(svp, svpid, &iter);
-	VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
-	if (error) {
-		return (error);
-	}
+	error = vtree_find(&svp->sn_vtree, svpid, &ptr);
 
-	if (ITER_ISNULL(iter) || ITER_KEY_T(iter, uint64_t) != svpid) {
-		ITER_RELEASE(iter);
-	} else {
-		ITER_RELEASE(iter);
-		DEBUG1("Failed to create inode %lu", svpid);
+	if (error) {
 		return (EEXIST);
 	}
+	error = vtree_insert(&svp->sn_vtree, svpid, &ptr);
+  MPASS(error != 0);
+	VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
 
 	iov.iov_base = &ino;
 	iov.iov_len = sizeof(ino);
@@ -528,7 +514,6 @@ initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 	int error;
 
 	struct slos_inode ino = {};
-	struct dnode *dn;
 	// We can use the fake device from the allocators they should be inited
 	struct vnode *fdev = slos->slos_alloc.a_offset->sn_fdev;
 
@@ -555,8 +540,6 @@ initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 	MPASS(bp);
 
 	vfs_bio_clrbuf(bp);
-	dn = (struct dnode *)bp->b_data;
-	dn->dn_magic = DN_MAGIC;
 	bwrite(bp);
 
 	return (0);

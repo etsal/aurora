@@ -60,6 +60,7 @@ slos_blkalloc_wal(struct slos *slos, size_t bytes, diskptr_t *ptr)
 		ptr->offset = wal_allocations.offset;
 		ptr->size = rounded;
 		ptr->epoch = slos->slos_sb->sb_epoch;
+    ptr->flags = 0;
 		wal_allocations.offset += blocks;
 		wal_allocations.size -= rounded;
 		return (0);
@@ -80,6 +81,7 @@ fast_path(struct slos *slos, uint64_t bytes, diskptr_t *ptr)
 		ptr->offset = chunk->offset;
 		ptr->size = rounded;
 		ptr->epoch = slos->slos_sb->sb_epoch;
+    ptr->flags = 0;
 		chunk->offset += blocks;
 		chunk->size -= rounded;
 		return (0);
@@ -91,7 +93,6 @@ fast_path(struct slos *slos, uint64_t bytes, diskptr_t *ptr)
 static int
 slos_blkalloc_large_unlocked(struct slos *slos, size_t size, diskptr_t *ptr)
 {
-	struct fnode_iter iter;
 	uint64_t temp;
 	uint64_t fullsize;
 	uint64_t off;
@@ -101,27 +102,22 @@ slos_blkalloc_large_unlocked(struct slos *slos, size_t size, diskptr_t *ptr)
 	uint64_t asked = roundup(size, blksize);
 	int error;
 
-	error = fbtree_keymax_iter(STREE(slos), &asked, &iter);
+	error = vtree_ge(STREE(slos), &fullsize, &off);
 	if (error != 0) {
-		panic("Problem with keymax %d\n", error);
-	}
-	if (ITER_ISNULL(iter)) {
-		printf("SLOS is full!\n");
 		return (ENOSPC);
 	}
-	fullsize = ITER_KEY_T(iter, uint64_t);
-	off = ITER_VAL_T(iter, uint64_t);
+
 	location = off;
 
 	/* Temporarily remove the extent from the allocator. */
-	error = fbtree_remove(STREE(slos), &fullsize, &off);
+	error = vtree_delete(STREE(slos), fullsize, &off);
 	if (error) {
 		panic("Problem removing element in allocation");
 	}
 
 	KASSERT(fullsize >= asked, ("Simple allocation first"));
 
-	error = fbtree_remove(OTREE(slos), &off, &temp);
+	error = vtree_delete(OTREE(slos), off, &temp);
 	if (error) {
 		panic("Failure in allocation - %d", error);
 	}
@@ -130,12 +126,12 @@ slos_blkalloc_large_unlocked(struct slos *slos, size_t size, diskptr_t *ptr)
 	fullsize -= asked;
 	off += (asked / blksize);
 
-	error = fbtree_insert(STREE(slos), &fullsize, &off);
+	error = vtree_insert(STREE(slos), fullsize, &off);
 	if (error) {
 		panic("Problem removing element in allocation");
 	}
 
-	error = fbtree_insert(OTREE(slos), &off, &fullsize);
+	error = vtree_insert(OTREE(slos), off, &fullsize);
 	if (error) {
 		panic("Problem removing element in allocation");
 	}
@@ -143,6 +139,7 @@ slos_blkalloc_large_unlocked(struct slos *slos, size_t size, diskptr_t *ptr)
 	ptr->offset = location;
 	ptr->size = asked;
 	ptr->epoch = slos->slos_sb->sb_epoch;
+  ptr->flags = 0;
 
 	return (0);
 }
@@ -174,7 +171,7 @@ slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 	BTREE_LOCK(STREE(slos), LK_EXCLUSIVE);
 	while (true) {
 		if (!fast_path(slos, bytes, ptr)) {
-			BTREE_UNLOCK(STREE(slos), 0);
+	    BTREE_UNLOCK(STREE(slos), LK_EXCLUSIVE);
 			return (0);
 		}
 
@@ -203,22 +200,16 @@ slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 int slos_freebytes(SYSCTL_HANDLER_ARGS)
 {
 	uint64_t freebytes;
-	struct fnode_iter iter;
+  uint64_t value;
 	uint64_t asked = 0;
 	int error;
 
-	error = fbtree_keymax_iter(STREE(&slos), &asked, &iter);
+	error = vtree_ge(STREE(&slos), &asked, &value);
 	if (error != 0) {
-		return (error);
+    return (ENOSPC);
 	}
 
-	if (ITER_ISNULL(iter)) {
-		printf("SLOS is full!\n");
-		return (ENOSPC);
-	}
-
-	freebytes = ITER_KEY_T(iter, uint64_t);
-	error = SYSCTL_OUT(req, &freebytes, sizeof(freebytes));
+	error = SYSCTL_OUT(req, &value, sizeof(freebytes));
 
 	return (error);
 }
@@ -271,12 +262,16 @@ slos_allocator_init(struct slos *slos)
 	DEBUG("Initing Allocator");
 	/* Create the in-memory vnodes from the on-disk state. */
 	error = slos_svpimport(slos, offbl, true, &offt);
+  /* Have to readjust the trees to use uint64_t as values */
+  VTREE_INIT(&offt->sn_vtree, slos->slos_sb->sb_allocoffset, sizeof(uint64_t));
 	KASSERT(error == 0,
 	    ("importing allocator offset tree failed with %d", error));
 	error = slos_svpimport(slos, sizebl, true, &sizet);
+  VTREE_INIT(&sizet->sn_vtree, slos->slos_sb->sb_allocsize, sizeof(uint64_t));
 	KASSERT(error == 0,
 	    ("importing allocator size tree failed with %d", error));
 
+	MPASS(offt && sizet);
 	// This is a remount so we must free the allocator slos_nodes as they
 	// are not cleaned up in the vflush as they have no associated vnode to
 	// them.
@@ -293,17 +288,7 @@ slos_allocator_init(struct slos *slos)
 	slos->slos_alloc.chunk.offset = 0;
 	slos->slos_alloc.chunk.size = 0;
 
-	// We just have to readjust the elements in the btree since we are not
-	// using them for the same purpose of keeping track of data
-	MPASS(offt && sizet);
-	fbtree_init(offt->sn_fdev, offt->sn_tree.bt_root, sizeof(uint64_t),
-	    sizeof(uint64_t), &uint64_t_comp, "Off Tree", 0, OTREE(slos));
-	fbtree_reg_rootchange(OTREE(slos), &slos_generic_rc, offt);
-
-	fbtree_init(sizet->sn_fdev, sizet->sn_tree.bt_root, sizeof(uint64_t),
-	    sizeof(uint64_t), &uint64_t_comp, "Size Tree", 0, STREE(slos));
-	fbtree_reg_rootchange(STREE(slos), &slos_generic_rc, sizet);
-
+	
 	// New tree add the initial amount allocations.  Im just making some
 	// constant just makes it easier
 	/*
@@ -320,17 +305,8 @@ slos_allocator_init(struct slos *slos)
 		wal_allocations.offset = wal_off;
 		total -= WAL_CHUNK;
 
-		KASSERT(fbtree_size(OTREE(slos)) == 0, ("Bad size\n"));
-		KASSERT(fbtree_size(STREE(slos)) == 0, ("Bad size\n"));
-
-		BTREE_LOCK(OTREE(slos), LK_EXCLUSIVE);
-		BTREE_LOCK(STREE(slos), LK_EXCLUSIVE);
-
-		fbtree_insert(OTREE(slos), &off, &total);
-		fbtree_insert(STREE(slos), &total, &off);
-
-		BTREE_UNLOCK(STREE(slos), 0);
-		BTREE_UNLOCK(OTREE(slos), 0);
+    vtree_insert(OTREE(slos), off, &total);
+    vtree_insert(STREE(slos), total, &off);
 
 		/*
 		 * Carve of a region from the beginning of the device.
@@ -367,9 +343,9 @@ slos_allocator_uninit(struct slos *slos)
 int
 slos_allocator_sync(struct slos *slos, struct slos_sb *newsb)
 {
-	int error;
-	struct buf *bp;
-	diskptr_t ptr;
+	/* int error; */
+	/* struct buf *bp; */
+	/* diskptr_t ptr; */
 
 	/* This is just arbitrary right now.  We need a better way of
 	 * calculating the dirty blocks we over allocate because we need to
@@ -383,44 +359,35 @@ slos_allocator_sync(struct slos *slos, struct slos_sb *newsb)
 	 * has been marked you can just stop that iteration. As you know all the
 	 * parents have been marked
 	 */
-	int total_allocations = (FBTREE_DIRTYCNT(OTREE(slos)) * 5) +
-	    (FBTREE_DIRTYCNT(STREE(slos)) * 5) + 2;
 
-	DEBUG("Syncing Allocator");
-	// Allocate and sync the btree's
-	error = slos_blkalloc(slos, total_allocations * BLKSIZE(slos), &ptr);
-	if (error != 0) {
-		printf("Unexpected slos_blkalloc failed %d!\n", error);
-		return (error);
-	}
-	error = fbtree_sync_withalloc(OTREE(slos), &ptr);
-	MPASS(error == 0);
-	error = fbtree_sync_withalloc(STREE(slos), &ptr);
-	MPASS(error == 0);
+  vtree_checkpoint(OTREE(slos));
+  vtree_checkpoint(STREE(slos));
+	/* int total_allocations = (vtree_dirty_cnt(OTREE(slos)) * 5) + */
+	/*     (vtree_dirty_cnt(STREE(slos)) * 5) + 2; */
 
-	DEBUG2("off(%p), size(%p)", slos->slos_alloc.a_offset->sn_fdev,
-	    slos->slos_alloc.a_size->sn_fdev);
-	// Update the inodes and dirty them as well
-	bp = getblk(slos->slos_alloc.a_offset->sn_fdev, ptr.offset,
-	    BLKSIZE(slos), 0, 0, 0);
-	MPASS(bp);
-	struct slos_inode *ino = &slos->slos_alloc.a_offset->sn_ino;
-	ino->ino_blk = ptr.offset;
-	slos->slos_sb->sb_allocoffset = ptr;
-	ino->ino_btree = (diskptr_t) { OTREE(slos)->bt_root, BLKSIZE(slos) };
-	memcpy(bp->b_data, ino, sizeof(struct slos_inode));
-	bwrite(bp);
-	ptr.offset += 1;
+	/* DEBUG2("off(%p), size(%p)", slos->slos_alloc.a_offset->sn_fdev, */
+	/*     slos->slos_alloc.a_size->sn_fdev); */
+	/* // Update the inodes and dirty them as well */
+	/* bp = getblk(slos->slos_alloc.a_offset->sn_fdev, ptr.offset, */
+	/*     BLKSIZE(slos), 0, 0, 0); */
+	/* MPASS(bp); */
+	/* struct slos_inode *ino = &slos->slos_alloc.a_offset->sn_ino; */
+	/* ino->ino_blk = ptr.offset; */
+	/* slos->slos_sb->sb_allocoffset = ptr; */
+	/* ino->ino_btree = (diskptr_t) { OTREE(slos)->bt_root, BLKSIZE(slos) }; */
+	/* memcpy(bp->b_data, ino, sizeof(struct slos_inode)); */
+	/* bwrite(bp); */
+	/* ptr.offset += 1; */
 
-	bp = getblk(slos->slos_alloc.a_size->sn_fdev, ptr.offset, BLKSIZE(slos),
-	    0, 0, 0);
-	MPASS(bp);
-	ino = &slos->slos_alloc.a_size->sn_ino;
-	ino->ino_blk = ptr.offset;
-	ino->ino_btree = (diskptr_t) { STREE(slos)->bt_root, BLKSIZE(slos) };
-	slos->slos_sb->sb_allocsize = ptr;
-	memcpy(bp->b_data, ino, sizeof(struct slos_inode));
-	bwrite(bp);
+	/* bp = getblk(slos->slos_alloc.a_size->sn_fdev, ptr.offset, BLKSIZE(slos), */
+	/*     0, 0, 0); */
+	/* MPASS(bp); */
+	/* ino = &slos->slos_alloc.a_size->sn_ino; */
+	/* ino->ino_blk = ptr.offset; */
+	/* ino->ino_btree = (diskptr_t) { STREE(slos)->bt_root, BLKSIZE(slos) }; */
+	/* slos->slos_sb->sb_allocsize = ptr; */
+	/* memcpy(bp->b_data, ino, sizeof(struct slos_inode)); */
+	/* bwrite(bp); */
 
 	// XXX Check how much is left and free them - but since we dont have
 	// free yet leave this for later.

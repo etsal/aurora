@@ -4,8 +4,8 @@
 #include <sys/param.h>
 #include <sys/sysctl.h>
 
-#define OTREE(slos) (&((slos)->slos_alloc.a_offset->sn_tree))
-#define STREE(slos) (&((slos)->slos_alloc.a_size->sn_tree))
+#define OTREE(slos) (&((slos)->slos_alloc.a_offset->sn_vtree))
+#define STREE(slos) (&((slos)->slos_alloc.a_size->sn_vtree))
 
 int slos_allocator_init(struct slos *slos);
 int uint64_t_comp(const void *k1, const void *k2);

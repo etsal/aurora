@@ -41,6 +41,6 @@ int slsfs_bundirty(struct buf *buf);
  * On failure will return a physical block number of -1
  */
 int slsfs_lookupbln(
-    struct slos_node *svp, uint64_t lbn, struct fnode_iter *iter);
+    struct slos_node *svp, uint64_t lbn, diskptr_t *ptr);
 
 #endif /* _SLSFS_BUF_H_ */

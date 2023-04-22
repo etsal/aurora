@@ -263,40 +263,19 @@ slos_ptr_trimstart(
 
 /* Do the necessary btree manipulations before initiating an IO. */
 static int __attribute__((noinline))
-slos_io_setdaddr(struct slos_node *svp, size_t size, struct buf *bp)
+slos_io_setdaddr(struct slos_node *svp, struct buf *bp)
 {
-	struct fbtree *tree = &svp->sn_tree;
 	struct slos_diskptr ptr;
-	size_t end;
 	int error;
 
-	BTREE_LOCK(tree, LK_EXCLUSIVE);
-	VOP_LOCK(tree->bt_backend, LK_EXCLUSIVE);
-
-	error = fbtree_rangeinsert(tree, bp->b_lblkno, size);
+	error = slos_blkalloc(svp->sn_slos, BLKSIZE(&slos), &ptr);
 	if (error != 0)
 		goto error;
-
-	end = (bp->b_lblkno * IOSIZE(svp)) + size;
-	if (svp->sn_ino.ino_size < end) {
-		svp->sn_ino.ino_size = end;
-		svp->sn_status |= SLOS_DIRTY;
-	}
-
-	error = slos_blkalloc(svp->sn_slos, size, &ptr);
-	if (error != 0)
-		goto error;
-
-	KASSERT(ptr.size == size,
-	    ("requested %lu bytes on disk, got %lu", ptr.size, size));
 
 	/* No need to free the block if we fail, it'll get GCed. */
-	error = fbtree_replace(&svp->sn_tree, &bp->b_lblkno, &ptr);
+	error = vtree_insert(&svp->sn_vtree, bp->b_lblkno, &ptr);
 	if (error != 0)
 		goto error;
-
-	VOP_UNLOCK(tree->bt_backend, 0);
-	BTREE_UNLOCK(tree, 0);
 
 	/* Set the buffer to point to the physical block. */
 	bp->b_blkno = ptr.offset;
@@ -308,9 +287,6 @@ slos_io_setdaddr(struct slos_node *svp, size_t size, struct buf *bp)
 error:
 	bp->b_flags |= B_INVAL;
 	bp->b_error = error;
-
-	VOP_UNLOCK(tree->bt_backend, 0);
-	BTREE_UNLOCK(tree, 0);
 	return (error);
 }
 
@@ -320,43 +296,20 @@ slos_io_getdaddr(struct slos_node *svp, struct buf *bp)
 	int error;
 	struct slos_diskptr ptr;
 	struct fnode_iter iter;
-	struct fbtree *tree = &svp->sn_tree;
-	daddr_t lblkno;
 
 	atomic_add_64(&slos_io_initiated, 1);
-	VOP_LOCK(tree->bt_backend, LK_EXCLUSIVE);
-	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
-
 	/* Get the physical segment from where we will read. */
-	error = fbtree_keymin_iter(&svp->sn_tree, &bp->b_lblkno, &iter);
+	error = vtree_find(&svp->sn_vtree, bp->b_lblkno, &iter);
 	if (error != 0)
 		goto error;
 
-	/* Adjust the physical pointer to start where the buffer points. */
-	lblkno = ITER_KEY_T(iter, uint64_t);
-	KASSERT(!ITER_ISNULL(iter),
-	    ("could not find logical offset %lu on disk", lblkno));
-	ptr = ITER_VAL_T(iter, diskptr_t);
-	slos_ptr_trimstart(bp->b_lblkno, lblkno, SLOS_BSIZE(slos), &ptr);
-
-	KASSERT(bp->b_bcount <= ptr.size,
-	    ("Reading %lu bytes from a physical "
-	     "segment with %lu bytes",
-		bp->b_bcount, ptr.size));
-
 	bp->b_blkno = ptr.offset;
-
-	VOP_UNLOCK(tree->bt_backend, 0);
-	BTREE_UNLOCK(tree, 0);
 
 	return (0);
 
 error:
 	bp->b_flags |= B_INVAL;
 	bp->b_error = error;
-
-	VOP_UNLOCK(tree->bt_backend, 0);
-	BTREE_UNLOCK(tree, 0);
 	return (error);
 }
 
@@ -406,7 +359,7 @@ slos_io(void *ctx, int __unused pending)
 
 	if (iocmd == BIO_WRITE) {
 		/* Create the physical segment backing the write. */
-		error = slos_io_setdaddr(svp, bp->b_resid, bp);
+		error = slos_io_setdaddr(svp, bp);
 		if (error != 0) {
 			printf("ERROR: IO failed with %d\n", error);
 			goto out;
@@ -503,12 +456,11 @@ slos_iotask_create(struct vnode *vp, struct buf *bp, bool async)
 boolean_t
 slos_hasblock(struct vnode *vp, uint64_t lblkno_req, int *rbehind, int *rahead)
 {
-	struct fbtree *tree = &SLSVP(vp)->sn_tree;
-	struct fnode_iter iter;
-	struct slos_diskptr ptr;
+	diskptr_t ptr;
 	uint64_t lblkstart;
 	uint64_t lblkno;
 	boolean_t ret;
+  struct slos_node *svp = SLSVP(vp);
 	int error;
 
 	if (rbehind != NULL)
@@ -516,29 +468,16 @@ slos_hasblock(struct vnode *vp, uint64_t lblkno_req, int *rbehind, int *rahead)
 	if (rahead != NULL)
 		*rahead = 0;
 
-	VOP_LOCK(tree->bt_backend, LK_EXCLUSIVE);
-	BTREE_LOCK(tree, LK_SHARED);
-
+  panic("Not implemented");
 	/* Get the physical segment from where we will read. */
 	lblkstart = lblkno_req;
-	error = fbtree_keymin_iter(tree, &lblkstart, &iter);
+	error = vtree_find(&svp->sn_vtree, lblkstart, &ptr);
 	if (error != 0) {
 		printf("WARNING: Failed to look up swapped out page\n");
 		ret = FALSE;
 		goto out;
 	}
 
-	/* We do not have an infimum. */
-	if (ITER_ISNULL(iter)) {
-		ret = FALSE;
-		goto out;
-	}
-
-	lblkno = ITER_KEY_T(iter, uint64_t);
-	ptr = ITER_VAL_T(iter, diskptr_t);
-	KASSERT(ptr.size > 0, ("found extent of size 0"));
-	KASSERT(lblkno <= lblkstart,
-	    ("keymin returned start %lu for lblkstart %lu", lblkno, lblkstart));
 
 	/* Check if our infimum includes us. */
 	if (lblkno + (ptr.size / PAGE_SIZE) <= lblkno_req) {
@@ -554,8 +493,6 @@ slos_hasblock(struct vnode *vp, uint64_t lblkno_req, int *rbehind, int *rahead)
 		    (lblkno + (ptr.size / PAGE_SIZE) - 1 - lblkno_req), 0);
 
 out:
-	BTREE_UNLOCK(tree, 0);
-	VOP_UNLOCK(tree->bt_backend, 0);
 
 	return (ret);
 }

@@ -1,14 +1,20 @@
 #include <sys/types.h>
+#include <sys/malloc.h>
 #include <sys/param.h>
 #include <sys/buf.h>
 #include <sys/bufobj.h>
 #include <sys/vnode.h>
 
 #include "vtree.h"
+#include "slos_vbtree.h"
+#include "slos.h"
 
 #define BINARY_SEARCH_CUTOFF (64)
 
-static MALLOC_DEFINE(M_SLOS_VTREE, "vtree", "SLOS Virtual Tree Interface");
+MALLOC_DEFINE(M_SLOS_VTREE, "vtree", "Vtree interface");
+
+struct vtreeops btreeops;
+struct vtreeops *defaultops;
 
 static int
 binary_search(kvp* arr, size_t size, uint64_t key)
@@ -66,15 +72,14 @@ vtree_empty_wal(vtree* tree)
   }
 }
 
-struct vtree
-vtree_create(void* tree, struct vtreeops* ops, uint32_t v_flags)
+int
+vtree_create(struct vtree *vtree, struct vtreeops* ops, 
+    diskptr_t root, size_t ks, uint32_t v_flags)
 {
-  struct vtree vtree;
   struct vnode *vp;
   int error;
 
-  vtree.v_tree = tree;
-  vtree.v_flags = v_flags;
+  vtree->v_flags = v_flags;
 
 	error = getnewvnode("SLSFS Fake VNode", slos.slsfs_mount,
 	    &dead_vnodeops, &vp);
@@ -93,13 +98,15 @@ vtree_create(void* tree, struct vtreeops* ops, uint32_t v_flags)
 
 
   if (v_flags & VTREE_WITHWAL) {
-    vtree.v_wal = (kvp*)malloc(VTREE_WALSIZE, M_SLOS_VTREE, M_WAITOK | M_ZERO);
+    vtree->v_wal = (kvp*)malloc(VTREE_WALSIZE, M_SLOS_VTREE, M_WAITOK | M_ZERO);
   }
-  vtree.v_ops = ops;
-  vtree.v_cur_wal_idx = 0;
-  vtree.v_vp = vp;
+  vtree->v_ops = ops;
+  vtree->v_cur_wal_idx = 0;
+  vtree->v_vp = vp;
+  VTREE_INIT(vtree, root, ks);
+	lockinit(&vtree->bt_lock, PVFS, "Vtree Lock", 0, LK_CANRECURSE);
 
-  return vtree;
+  return error;
 }
 
 static inline void
@@ -178,4 +185,37 @@ vtree_checkpoint(vtree* tree)
 {
   vtree_empty_wal(tree);
   return VTREE_CHECKPOINT(tree);
+}
+
+size_t
+vtree_dirty_cnt(vtree *tree)
+{
+  return tree->v_vp->v_bufobj.bo_dirty.bv_cnt;
+}
+
+void
+vtree_free(vtree *tree)
+{
+  if (tree->v_flags & VTREE_WITHWAL) {
+    free(tree->v_wal, M_SLOS_VTREE);
+  }
+}
+
+void
+vtree_interface_init()
+{
+  btreeops.vtree_init = &btree_init;
+  btreeops.vtree_insert = &btree_insert;
+  btreeops.vtree_bulkinsert = &btree_bulkinsert;
+  btreeops.vtree_delete = &btree_delete;
+
+  btreeops.vtree_find = &btree_find;
+  btreeops.vtree_ge = &btree_greater_equal;
+  btreeops.vtree_rangequery = &btree_rangequery;
+
+  btreeops.vtree_checkpoint = &btree_checkpoint;
+  btreeops.vtree_getkeysize = &btree_getkeysize;
+
+  /* Set the default */
+  defaultops = &btreeops;
 }

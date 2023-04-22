@@ -914,22 +914,9 @@ btree_rangequery(void* treep,
   return 0;
 }
 
-static size_t
+size_t
 btree_getkeysize(void* treep)
 {
   btree_t tree = (btree_t)treep;
   return tree->tr_vs;
 }
-
-struct vtreeops btreeops = { .vtree_init = &btree_init,
-
-                             .vtree_insert = &btree_insert,
-                             .vtree_bulkinsert = &btree_bulkinsert,
-                             .vtree_delete = &btree_delete,
-
-                             .vtree_find = &btree_find,
-                             .vtree_ge = &btree_greater_equal,
-                             .vtree_rangequery = &btree_rangequery,
-
-                             .vtree_checkpoint = &btree_checkpoint,
-                             .vtree_getkeysize = &btree_getkeysize };

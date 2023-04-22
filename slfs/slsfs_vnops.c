@@ -103,7 +103,6 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 {
 	struct vnode *vp = args->a_vp;
 	struct slos_node *svp = SLSVP(vp);
-	struct fbtree *tree = &svp->sn_tree;
 	if (vp == slos.slsfs_inodes) {
 		DEBUG("Special vnode trying to be reclaimed");
 	}
@@ -111,10 +110,6 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 	 * TODO: Need to figure out why some vnodes have 1 dirty btree node when
 	 * reclaimed
 	 */
-	if (svp->sn_status == SLOS_DIRTY || FBTREE_DIRTYCNT(tree)) {
-		DEBUG2("RECLAIMING DIRTY NODE %d %d\n",
-		    vp->v_bufobj.bo_dirty.bv_cnt, FBTREE_DIRTYCNT(tree));
-	}
 
 	vp->v_data = NULL;
 
@@ -733,7 +728,6 @@ slsfs_bmap(struct vop_bmap_args *args)
 	size_t fsbsize, devbsize;
 	size_t scaling;
 
-	struct fnode_iter biter;
 	uint64_t extsize;
 	daddr_t extlbn;
 	daddr_t extbn;
@@ -777,24 +771,14 @@ slsfs_bmap(struct vop_bmap_args *args)
 	}
 
 	/* Look up the physical block number. */
-	error = slsfs_lookupbln(svp, lbn, &biter);
+	error = slsfs_lookupbln(svp, lbn, &ptr);
 	if (error != 0)
 		return (error);
 
-	if (ITER_ISNULL(biter)) {
-		ITER_RELEASE(biter);
-		*bnp = -1;
-		return (0);
-	}
-
-	/* Extract the extent's dimensions. */
-	ptr = ITER_VAL_T(biter, diskptr_t);
-
 	/* Turn everything into sector size blocks.*/
-	extlbn = ITER_KEY_T(biter, uint64_t);
+	extlbn = lbn;
 	extbn = ptr.offset;
 	extsize = ptr.size / fsbsize;
-	ITER_RELEASE(biter);
 
 	/* Check if we're in a hole. */
 	if (extlbn + extsize <= lbn) {
@@ -838,106 +822,108 @@ slsfs_print(struct vop_print_args *args)
 static int
 slsfs_check_cksum(struct buf *bp)
 {
-	size_t cksize;
-	uint32_t cksum, check;
-	int error;
-	struct fbtree *tree = &slos.slos_cktree->sn_tree;
-	uint64_t blk = bp->b_blkno;
-	size_t size = 0;
+	/* size_t cksize; */
+	/* uint32_t cksum, check; */
+	/* int error; */
+	/* struct fbtree *tree = &slos.slos_cktree->sn_tree; */
+	/* uint64_t blk = bp->b_blkno; */
+	/* size_t size = 0; */
 
-	MPASS((bp->b_bcount % BLKSIZE(&slos)) == 0);
+	/* MPASS((bp->b_bcount % BLKSIZE(&slos)) == 0); */
 
-	while (size < bp->b_bcount) {
-		cksize = min(PAGE_SIZE, bp->b_bcount - size);
-		cksum = calculate_crc32c(~0, bp->b_data + size, cksize);
-		size += cksize;
-		blk++;
-		error = fbtree_get(tree, &blk, &check);
-		if (error == EINVAL) {
-			return 0;
-		} else if (error) {
-			panic("Problem with read cksum %d", error);
-		}
+	/* while (size < bp->b_bcount) { */
+	/* 	cksize = min(PAGE_SIZE, bp->b_bcount - size); */
+	/* 	cksum = calculate_crc32c(~0, bp->b_data + size, cksize); */
+	/* 	size += cksize; */
+	/* 	blk++; */
+	/* 	error = fbtree_get(tree, &blk, &check); */
+	/* 	if (error == EINVAL) { */
+	/* 		return 0; */
+	/* 	} else if (error) { */
+	/* 		panic("Problem with read cksum %d", error); */
+	/* 	} */
 
-		if (check != cksum) {
-			printf("%lu, %lu, %lu", blk, cksize, bp->b_bcount);
-			return EINVAL;
-		}
-	}
+	/* 	if (check != cksum) { */
+	/* 		printf("%lu, %lu, %lu", blk, cksize, bp->b_bcount); */
+	/* 		return EINVAL; */
+	/* 	} */
+	/* } */
 	return (0);
 }
 
 static int
 slsfs_update_cksum(struct buf *bp)
 {
-	size_t cksize;
-	uint32_t cksum;
-	struct fnode_iter iter;
-	int error = 0;
+	/* size_t cksize; */
+	/* uint32_t cksum; */
+	/* struct fnode_iter iter; */
+	/* int error = 0; */
 
-	struct fbtree *tree = &slos.slos_cktree->sn_tree;
-	uint64_t blk = bp->b_blkno;
-	size_t size = 0;
-	while (size < bp->b_bcount) {
-		cksize = min(PAGE_SIZE, bp->b_bcount - size);
-		cksum = calculate_crc32c(~0, bp->b_data + size, cksize);
-		size += cksize;
-		error = fbtree_keymin_iter(tree, &blk, &iter);
-		KASSERT(error == 0, ("error %d by fbtree_keymin_iter", error));
-		if (ITER_ISNULL(iter) || ITER_KEY_T(iter, uint64_t) != blk) {
-			error = fnode_insert(iter.it_node, &blk, &cksum);
-		} else {
-			fiter_replace(&iter, &cksum);
-		}
-		if (error) {
-			panic("Issue with updating checksum tree %d", error);
-		}
-		blk++;
-	}
-	return (0);
+	/* struct fbtree *tree = &slos.slos_cktree->sn_tree; */
+	/* uint64_t blk = bp->b_blkno; */
+	/* size_t size = 0; */
+	/* while (size < bp->b_bcount) { */
+	/* 	cksize = min(PAGE_SIZE, bp->b_bcount - size); */
+	/* 	cksum = calculate_crc32c(~0, bp->b_data + size, cksize); */
+	/* 	size += cksize; */
+	/* 	error = fbtree_keymin_iter(tree, &blk, &iter); */
+	/* 	KASSERT(error == 0, ("error %d by fbtree_keymin_iter", error)); */
+	/* 	if (ITER_ISNULL(iter) || ITER_KEY_T(iter, uint64_t) != blk) { */
+	/* 		error = fnode_insert(iter.it_node, &blk, &cksum); */
+	/* 	} else { */
+	/* 		fiter_replace(&iter, &cksum); */
+	/* 	} */
+	/* 	if (error) { */
+	/* 		panic("Issue with updating checksum tree %d", error); */
+	/* 	} */
+	/* 	blk++; */
+	/* } */
+	/* return (0); */
+  return 0;
 }
 
 int
 slsfs_cksum(struct buf *bp)
 {
-	int error;
-	struct fbtree *tree = &slos.slos_cktree->sn_tree;
+	/* int error; */
+	/* struct fbtree *tree = &slos.slos_cktree->sn_tree; */
 
-	if (bp->b_data == unmapped_buf ||
-	    (bp->b_vp == slos.slos_cktree->sn_fdev) ||
-	    slos.slos_sb->sb_epoch == EPOCH_INVAL) {
-		return 0;
-	}
+	/* if (bp->b_data == unmapped_buf || */
+	/*     (bp->b_vp == slos.slos_cktree->sn_fdev) || */
+	/*     slos.slos_sb->sb_epoch == EPOCH_INVAL) { */
+	/* 	return 0; */
+	/* } */
 
-	switch (bp->b_iocmd) {
-	case BIO_READ:
-		BTREE_LOCK(tree, LK_SHARED);
-		error = slsfs_check_cksum(bp);
-		BTREE_UNLOCK(tree, 0);
+	/* switch (bp->b_iocmd) { */
+	/* case BIO_READ: */
+	/* 	BTREE_LOCK(tree, LK_SHARED); */
+	/* 	error = slsfs_check_cksum(bp); */
+	/* 	BTREE_UNLOCK(tree, 0); */
 
-		return (error);
-	case BIO_WRITE:
-		BTREE_LOCK(tree, LK_EXCLUSIVE);
-		error = slsfs_update_cksum(bp);
-		BTREE_UNLOCK(tree, 0);
+	/* 	return (error); */
+	/* case BIO_WRITE: */
+	/* 	BTREE_LOCK(tree, LK_EXCLUSIVE); */
+	/* 	error = slsfs_update_cksum(bp); */
+	/* 	BTREE_UNLOCK(tree, 0); */
 
-		return (error);
-	default:
-		panic(
-		    "Unknown buffer IO command %d for bp %p", bp->b_iocmd, bp);
-	};
+	/* 	return (error); */
+	/* default: */
+	/* 	panic( */
+	/* 	    "Unknown buffer IO command %d for bp %p", bp->b_iocmd, bp); */
+	/* }; */
 
-	return (-1);
+	/* return (-1); */
+  return 0;
 }
 
 static int
 slsfs_strategy(struct vop_strategy_args *args)
 {
 	int error;
-	struct slos_diskptr ptr;
+	diskptr_t ptr;
 	struct buf *bp = args->a_bp;
 	struct vnode *vp = args->a_vp;
-	struct fnode_iter iter;
+  struct slos_node *svp = SLSVP(vp);
 	size_t fsbsize, devbsize;
 
 #ifdef VERBOSE
@@ -946,126 +932,29 @@ slsfs_strategy(struct vop_strategy_args *args)
 	/* The FS and device block sizes are needed below. */
 	fsbsize = bp->b_bufobj->bo_bsize;
 	devbsize = slos.slos_vp->v_bufobj.bo_bsize;
+
 	KASSERT(fsbsize >= devbsize,
 	    ("FS bsize %lu > device bsize %lu", fsbsize, devbsize));
 	KASSERT((fsbsize % devbsize) == 0,
 	    ("FS bsize %lu not multiple of device bsize %lu", fsbsize,
 		devbsize));
 
-	if (vp->v_type != VCHR) {
-		/* We are a regular vnode, so there are mappings. */
-		KASSERT(bp->b_lblkno != EPOCH_INVAL,
-		    ("No logical block number should be -1 - vnode effect %lu",
-			SLSVP(vp)->sn_pid));
+  vtree_find(&svp->sn_vtree, bp->b_lblkno, &ptr);
+  if (bp->b_iocmd == BIO_WRITE) {
+    /* This are on disk is marked as cow */
+    if (ptr.flags & DPTR_COW) {
+      /* Allocate a new block */
+      error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
+      MPASS(error == 0);
+      /* Update the vtree with this value */
+      vtree_insert(&svp->sn_vtree, bp->b_lblkno, &ptr);
+      MPASS(error == 0);
+    }
 
-		/* Get the physical segment for the buffer. */
-		error = BTREE_LOCK(&SLSVP(vp)->sn_tree, LK_SHARED);
-		if (error != 0) {
-			bp->b_error = error;
-			bp->b_ioflags |= BIO_ERROR;
-			bufdone(bp);
-
-			return (0);
-		}
-
-		error = fbtree_keymin_iter(
-		    &SLSVP(vp)->sn_tree, &bp->b_lblkno, &iter);
-		if (error != 0)
-			goto error;
-
-		/*
-		 * Out of bounds.
-		 * XXX Why is this a problem? What if there is a hole?
-		 */
-		if (ITER_ISNULL(iter)) {
-			fnode_print(iter.it_node);
-			DEBUG4(
-			    "Issue finding block vp(%p), lbn(%lu), fnode(%p) bp(%p)",
-			    vp, bp->b_lblkno, iter.it_node, bp);
-			goto error;
-		}
-
-		/* Make sure the segment includes the buffer's start. */
-		ptr = ITER_VAL_T(iter, diskptr_t);
-		if (ITER_KEY_T(iter, uint64_t) != bp->b_lblkno) {
-			if (!INTERSECT(iter, bp->b_lblkno, IOSIZE(SLSVP(vp)))) {
-				fnode_print(iter.it_node);
-				DEBUG4(
-				    "Key %lu not found, got (%lu %lu) on block %lu instead",
-				    ITER_KEY_T(iter, uint64_t), ptr.offset,
-				    ptr.size, bp->b_lblkno);
-				goto error;
-			}
-		}
-
-		if (bp->b_iocmd == BIO_WRITE) {
-			if (ptr.epoch == slos.slos_sb->sb_epoch &&
-			    ptr.offset != 0) {
-				/* The segment is current and exists on disk. */
-				slos_ptr_trimstart(bp->b_lblkno,
-				    ITER_KEY_T(iter, uint64_t), fsbsize, &ptr);
-			} else {
-				/* Otherwise we need to create it. */
-				error = BTREE_LOCK(
-				    &SLSVP(vp)->sn_tree, LK_UPGRADE);
-				if (error != 0)
-					goto error;
-
-				/*
-				 * Insert the range into the tree, possibly
-				 * overwriting or clipping existing ranges.
-				 * Actually allocate the block, then insert it
-				 * to actually back the new range.
-				 */
-				error = fbtree_rangeinsert(&SLSVP(vp)->sn_tree,
-				    bp->b_lblkno, bp->b_bcount);
-				if (error != 0)
-					goto error;
-
-				error = slos_blkalloc(
-				    SLSVP(vp)->sn_slos, bp->b_bcount, &ptr);
-				if (error != 0)
-					goto error;
-
-				error = fbtree_replace(
-				    &SLSVP(vp)->sn_tree, &bp->b_lblkno, &ptr);
-				if (error != 0)
-					goto error;
-			}
-
-			atomic_add_64(
-			    &slos.slos_sb->sb_data_synced, bp->b_bcount);
-			bp->b_blkno = ptr.offset;
-		} else if (bp->b_iocmd == BIO_READ) {
-			if (ptr.offset != 0) {
-				/* Find where we must start reading from. */
-				slos_ptr_trimstart(bp->b_lblkno,
-				    ITER_KEY_T(iter, uint64_t), fsbsize, &ptr);
-				bp->b_blkno = ptr.offset;
-			} else {
-				/* The segment is unbacked, zero fill.  */
-				ITER_RELEASE(iter);
-				bp->b_blkno = (daddr_t)(-1);
-				vfs_bio_clrbuf(bp);
-				bufdone(bp);
-				return (0);
-			}
-		}
-
-		/* This unlocks the btree. */
-		ITER_RELEASE(iter);
-	} else {
-		/*
-		 * No other translation, the blocks are right in the disk.
-		 */
-		bp->b_blkno = bp->b_lblkno;
-		SDT_PROBE3(slos, , , slsfs_deviceblk, bp->b_blkno, fsbsize,
-		    fsbsize / devbsize);
-		if (bp->b_iocmd == BIO_WRITE) {
-			atomic_add_64(
-			    &slos.slos_sb->sb_meta_synced, bp->b_bcount);
-		}
-	}
+    atomic_add_64(
+        &slos.slos_sb->sb_data_synced, bp->b_bcount);
+    bp->b_blkno = ptr.offset;
+  };
 
 	KASSERT(bp->b_resid <= ptr.size,
 	    ("Filling buffer %p with "
@@ -1082,30 +971,14 @@ slsfs_strategy(struct vop_strategy_args *args)
 	bp->b_blkno *= (fsbsize / devbsize);
 	bp->b_iooffset = dbtob(bp->b_blkno);
 
-#ifdef VERBOSE
-	if (bp->b_iocmd == BIO_WRITE) {
-		DEBUG4("bio_write: bp(%p), vp(%lu) - %lu:%lu", bp,
-		    SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno);
-	} else {
-		DEBUG4("bio_read: bp(%p), vp(%lu) - %lu:%lu", bp,
-		    SLSVP(vp)->sn_pid, bp->b_lblkno, bp->b_blkno);
-	}
-#endif
-	g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
-	if (checksum_enabled) {
-		error = slsfs_cksum(bp);
-		if (error) {
-			panic("Problem with checksum for buffer %p", bp);
-		}
-	}
+  g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
 
 	return (0);
 
-error:
-	ITER_RELEASE(iter);
-	bp->b_error = error;
-	bp->b_ioflags |= BIO_ERROR;
-	bufdone(bp);
+/* error: */
+/* 	bp->b_error = error; */
+/* 	bp->b_ioflags |= BIO_ERROR; */
+/* 	bufdone(bp); */
 
 	return (0);
 }
@@ -1669,33 +1542,7 @@ bad:
 static int
 slsfs_numextents(struct slos_node *svp, uint64_t *numextentsp)
 {
-	/* Read the offset we want to start from. */
-	uint64_t lblkno = *numextentsp;
-	uint64_t numextents = 0;
-	struct fnode_iter iter;
-	int error;
-
-	/* Find the first logical block after the given block number. */
-	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
-	error = fbtree_keymax_iter(&svp->sn_tree, &lblkno, &iter);
-	if (error != 0) {
-		BTREE_UNLOCK(&svp->sn_tree, 0);
-		return (error);
-	}
-
-	/* There are no extentp after the limit, notify the caller. */
-	if (ITER_ISNULL(iter)) {
-		numextents = 0;
-		ITER_RELEASE(iter);
-		return (0);
-	}
-
-	for (; !ITER_ISNULL(iter); ITER_NEXT(iter))
-		numextents += 1;
-
-	ITER_RELEASE(iter);
-
-	*numextentsp = numextents;
+  panic("NOT IMPLEMENTED");
 	return (0);
 }
 
@@ -1703,38 +1550,7 @@ slsfs_numextents(struct slos_node *svp, uint64_t *numextentsp)
 static int
 slsfs_getextents(struct slos_node *svp, struct slos_extent *extents)
 {
-	/* Read the offset we want to start from. */
-	uint64_t lblkno = extents[0].sxt_lblkno;
-	struct fnode_iter iter;
-	uint64_t fileblkcnt;
-	int error;
-	int i;
-
-	/* Find the first logical block after the given block number. */
-	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
-	error = fbtree_keymax_iter(&svp->sn_tree, &lblkno, &iter);
-	if (error != 0) {
-		BTREE_UNLOCK(&svp->sn_tree, 0);
-		return (error);
-	}
-
-	/* There are no extentp after the limit, notify the caller. */
-	if (ITER_ISNULL(iter)) {
-		ITER_RELEASE(iter);
-		return (0);
-	}
-
-	for (i = 0; !ITER_ISNULL(iter); ITER_NEXT(iter), i++) {
-		fileblkcnt = svp->sn_ino.ino_size / IOSIZE(svp);
-		KASSERT(lblkno < fileblkcnt, ("extent past the end of file"));
-
-		extents[i].sxt_lblkno = ITER_KEY_T(iter, uint64_t);
-		extents[i].sxt_cnt = (ITER_VAL_T(iter, diskptr_t).size) /
-		    IOSIZE(svp);
-	}
-
-	ITER_RELEASE(iter);
-
+  panic("NOT IMPLEMENTED");
 	return (0);
 }
 

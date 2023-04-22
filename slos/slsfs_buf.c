@@ -33,32 +33,17 @@ SDT_PROBE_DEFINE(slsfsbuf, , , end);
  * the truee
  */
 static int
-slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno,
+slsfs_buf_insert(struct vnode *vp, diskptr_t *ptr, uint64_t bno,
     uint64_t size, enum uio_rw rw, int gbflag, struct buf **bp)
 {
-	uint64_t nextkey;
 	int error;
 	struct slos_node *svp = SLSVP(vp);
-	struct fbtree *tree = &svp->sn_tree;
-	uint64_t blksize = IOSIZE(svp);
-	diskptr_t ptr;
-
-	ITER_NEXT(*biter);
-	// First key
-	if (!ITER_ISNULL(*biter)) {
-		// Fill the whole upto the key or the full size
-		nextkey = ITER_KEY_T(*biter, uint64_t);
-		size = omin((nextkey - bno) * blksize, size);
-	}
-
-	ptr.offset = 0;
-	ptr.size = size;
-	ptr.epoch = EPOCH_INVAL;
-	error = BTREE_LOCK(tree, LK_UPGRADE);
-	if (error) {
-		panic("Could not acquire lock upgrade on Btree %d", error);
-	}
-	error = fbtree_insert(tree, &bno, &ptr);
+	struct vtree *tree = &svp->sn_vtree;
+	uint64_t blksize = BLKSIZE(&slos);
+	ptr->offset = 0;
+	ptr->size = size;
+	ptr->epoch = EPOCH_INVAL;
+	error = vtree_insert(tree, bno, ptr);
 	if (error) {
 		panic("Problem inserting into tree");
 		return (error);
@@ -71,10 +56,7 @@ slsfs_buf_nocollide(struct vnode *vp, struct fnode_iter *biter, uint64_t bno,
 	 * in exclusive, we get a panic as we try to acquire the lock in shared
 	 * when doing the lookup within slsfs_strategy
 	 */
-	ITER_RELEASE(*biter)
-	size = omin(size, MAXBCACHEBUF);
-	MPASS(size <= MAXBCACHEBUF);
-	error = slsfs_balloc(vp, bno, size, gbflag, bp);
+	error = slsfs_balloc(vp, bno, blksize, gbflag, bp);
 	if (error != 0)
 		panic("Balloc failed\n");
 
@@ -88,16 +70,10 @@ int
 slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
     enum uio_rw rw, int gbflag, struct buf **bp)
 {
-	struct fnode_iter biter;
-	bool covered, isaligned;
-	size_t extoff;
 	diskptr_t ptr;
 	int error;
-
-	uint64_t iter_key;
 	struct slos_node *svp = SLSVP(vp);
 
-	uint64_t original_size = size;
 	size_t blksize = IOSIZE(svp);
 	uint64_t bno = offset / blksize;
 
@@ -107,47 +83,12 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 	KASSERT(
 	    vp->v_type != VCHR, ("Retrieving buffer for btree backing vnode"));
 
-	error = slsfs_lookupbln(svp, bno, &biter);
+	error = slsfs_lookupbln(svp, bno, &ptr);
 	if (error) {
-		return (error);
-	}
-	size = roundup(size, IOSIZE(svp));
-
-	/* Past the end of the file, create a new dummy buffer. */
-	if (ITER_ISNULL(biter)) {
-		return (
-		    slsfs_buf_nocollide(vp, &biter, bno, size, rw, gbflag, bp));
+		return slsfs_buf_insert(vp, &ptr, bno, size, rw, gbflag, bp);
 	}
 
-	/* If all the buffer is a hole, return a dummy buffer. */
-	iter_key = ITER_KEY_T(biter, uint64_t);
-	if (!INTERSECT(biter, bno, blksize)) {
-		return (
-		    slsfs_buf_nocollide(vp, &biter, bno, size, rw, gbflag, bp));
-	}
-
-	/*
-	 * Otherwise we overlap with an existing buffer.
-	 */
-
-	ptr = ITER_VAL_T(biter, diskptr_t);
-	ITER_RELEASE(biter);
-
-	/* Truncate the size to be down to the extent.*/
-	/* XXX This manipulation may not work with 4K blocks.  */
-	original_size = size;
-	extoff = bno - iter_key;
-	size = omin(size, ptr.size - (extoff * blksize));
-	size = omin(size, MAXBCACHEBUF);
-
-	isaligned = ((offset % blksize) == 0);
-	covered = (original_size <= size);
-
-	/*
-	 * For aligned, covered writes we just grab random space since
-	 * we overwrite it anyway.
-	 */
-	if (isaligned && covered && (rw == UIO_WRITE)) {
+  if (ptr.offset != 0) {
 		*bp = getblk(vp, bno, size, 0, 0, gbflag);
 		if (*bp == NULL)
 			panic("LINE %d: null bp for %lu, %lu", __LINE__, bno,
@@ -204,12 +145,6 @@ slsfs_balloc(
 	 * our subsequent calls to getblk are 4kb then it will try to truncate
 	 * our pages resulting in the attempted release of unmanaged pages
 	 */
-	if (vp != slos.slsfs_inodes)
-		size = gbflag & GB_UNMAPPED ? MAXBCACHEBUF : size;
-	else
-		KASSERT(
-		    BLKSIZE(&slos) == size, ("invalid size request %lu", size));
-
 	tempbuf = getblk(vp, lbn, size, 0, 0, gbflag);
 	if (tempbuf == NULL) {
 		*bp = NULL;
@@ -311,15 +246,13 @@ slsfs_bundirty(struct buf *buf)
  * provided.
  */
 int
-slsfs_lookupbln(struct slos_node *svp, uint64_t lbn, struct fnode_iter *iter)
+slsfs_lookupbln(struct slos_node *svp, uint64_t lbn, diskptr_t *ptr)
 {
 	int error;
 	uint64_t key = lbn;
 
-	BTREE_LOCK(&svp->sn_tree, LK_SHARED);
-	error = fbtree_keymin_iter(&svp->sn_tree, &key, iter);
+	error = vtree_find(&svp->sn_vtree, key, ptr);
 	if (error != 0) {
-		BTREE_UNLOCK(&svp->sn_tree, LK_SHARED);
 		return (error);
 	}
 
