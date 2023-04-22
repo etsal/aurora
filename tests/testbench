@@ -1,7 +1,7 @@
 #!/bin/sh
 
 export MNT="/testmnt"
-export DISK="vtbd1"
+export DISK="da1"
 export DISKPATH="/dev/$DISK"
 
 export KTRLOG="ktrdump.log"
