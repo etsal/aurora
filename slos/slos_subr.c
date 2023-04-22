@@ -198,14 +198,39 @@ slos_truncate(struct vnode *vp, size_t size)
 	return (0);
 }
 
-/* Flush a vnode's data to the disk. */
+/* Checkpoint and Flush a vnode's data to the disk. */
 int
-slos_sync_vp(struct vnode *vp, int release)
+slos_checkpoint_vp(struct vnode *vp, int release)
 {
+  struct buf *bp, *nbp;
+  int error;
+  diskptr_t ptr;
+
+  int cur = 0;
 	struct vtree *tree = &SLSVP(vp)->sn_vtree;
+  struct bufobj *bo = &vp->v_bufobj;
+  uint64_t *blknums = (uint64_t *)malloc(sizeof(uint64_t) * 1024, M_SLOS_SB, M_WAITOK);
+
 	ASSERT_VOP_LOCKED(vp, __func__);
 
+  /* Grab all our dirty block numbers to we can update our tree */
+  BO_LOCK(bo);
+  TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, nbp) {
+    blknums[cur++] = bp->b_lblkno;
+  }
+
+  /* Sync the blocks BEFORE marking them COW so they will flush */
 	vn_fsync_buf(vp, 0);
+
+  /* Now mark their tree pointers as COW */
+  for (int i = 0; i < cur; i++) {
+    error = vtree_find(tree, blknums[i], &ptr);
+    MPASS(error == 0);
+    ptr.flags = DPTR_COW;
+    error = vtree_insert(tree, blknums[i], &ptr);
+    MPASS(error == 0);
+  }
+
 	vtree_checkpoint(tree);
 
 	/*
@@ -230,12 +255,7 @@ slos_bufwrite(struct buf *buf)
 int
 slos_bufsync(struct bufobj *bufobj, int waitfor)
 {
-	/* Add a check of whether it's dirty. */
-	struct vnode *vp = bo2vnode(bufobj);
-	if (SLS_ISWAL(vp))
-		return (bufsync(bufobj, waitfor));
-
-	return (slos_sync_vp(bo2vnode(bufobj), 0));
+	return (bufsync(bufobj, waitfor));
 }
 
 /* Mark a buffer as a candidate to be flushed. */

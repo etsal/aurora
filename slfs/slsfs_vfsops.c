@@ -545,7 +545,7 @@ again:
 		if (SLSVP(vp)->sn_status & SLOS_DIRTY) {
 			/* Step 1 and 2 Sync data and mark underlying Btree Copy
 			 * on write*/
-			error = slos_sync_vp(vp, closing);
+			error = slos_checkpoint_vp(vp, closing);
 			if (error) {
 				vput(vp);
 				return;
@@ -581,7 +581,7 @@ again:
 		ino = &svp->sn_ino;
 		DEBUG2(
 		    "Flushing inodes %p %p", slos.slsfs_inodes, svp->sn_fdev);
-		error = slos_sync_vp(slos.slsfs_inodes, closing);
+		error = slos_checkpoint_vp(slos.slsfs_inodes, closing);
 		if (error) {
 			panic("slos_sync_vp failed to checkpoint");
 			return;

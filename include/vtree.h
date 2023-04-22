@@ -152,9 +152,6 @@ vtree_free(vtree *tree);
 void
 vtree_interface_init(void);
 
-
-extern struct buf_ops bufops_vtree;
-
 extern struct vtreeops btreeops;
 extern struct vtreeops *defaultops;
 #endif

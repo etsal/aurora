@@ -939,22 +939,26 @@ slsfs_strategy(struct vop_strategy_args *args)
 	    ("FS bsize %lu not multiple of device bsize %lu", fsbsize,
 		devbsize));
 
-  vtree_find(&svp->sn_vtree, bp->b_lblkno, &ptr);
-  if (bp->b_iocmd == BIO_WRITE) {
-    /* This are on disk is marked as cow */
-    if (ptr.flags & DPTR_COW) {
-      /* Allocate a new block */
-      error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
-      MPASS(error == 0);
-      /* Update the vtree with this value */
-      vtree_insert(&svp->sn_vtree, bp->b_lblkno, &ptr);
-      MPASS(error == 0);
-    }
+  if (vp->v_type != VCHR) {
+    vtree_find(&svp->sn_vtree, bp->b_lblkno, &ptr);
+    if (bp->b_iocmd == BIO_WRITE) {
+      /* This are on disk is marked as cow */
+      if (ptr.flags & DPTR_COW) {
+        /* Allocate a new block */
+        error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
+        MPASS(error == 0);
+        /* Update the vtree with this value */
+        vtree_insert(&svp->sn_vtree, bp->b_lblkno, &ptr);
+        MPASS(error == 0);
+      }
 
-    atomic_add_64(
-        &slos.slos_sb->sb_data_synced, bp->b_bcount);
-    bp->b_blkno = ptr.offset;
-  };
+      atomic_add_64(
+          &slos.slos_sb->sb_data_synced, bp->b_bcount);
+      bp->b_blkno = ptr.offset;
+    };
+  } else {
+    bp->b_blkno = bp->b_lblkno;
+  }
 
 	KASSERT(bp->b_resid <= ptr.size,
 	    ("Filling buffer %p with "

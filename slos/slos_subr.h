@@ -14,7 +14,7 @@ int slos_bufsync(struct bufobj *bufobj, int waitfor);
 void slos_bufbdflush(struct bufobj *bufobj, struct buf *buf);
 void slos_bufstrategy(struct bufobj *bo, struct buf *bp);
 
-int slos_sync_vp(struct vnode *vp, int release);
+int slos_checkpoint_vp(struct vnode *vp, int release);
 
 /* Identifier allocator */
 extern struct unrhdr *slsid_unr;

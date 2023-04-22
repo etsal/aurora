@@ -8,6 +8,7 @@
 #include "vtree.h"
 #include "slos_vbtree.h"
 #include "slos.h"
+#include "slsfs.h"
 
 #define BINARY_SEARCH_CUTOFF (64)
 
@@ -82,7 +83,7 @@ vtree_create(struct vtree *vtree, struct vtreeops* ops,
   vtree->v_flags = v_flags;
 
 	error = getnewvnode("SLSFS Fake VNode", slos.slsfs_mount,
-	    &dead_vnodeops, &vp);
+	    &slsfs_vnodeops, &vp);
 
 	if (error) {
 		panic("Problem getting fake vnode for device\n");
@@ -90,7 +91,7 @@ vtree_create(struct vtree *vtree, struct vtreeops* ops,
 
 	/* Set up the necessary backend state to be able to do IOs to the
 	 * device. */
-	vp->v_bufobj.bo_ops = &bufops_vtree;
+	vp->v_bufobj.bo_ops = &bufops_slsfs;
 	vp->v_bufobj.bo_bsize = slos.slos_sb->sb_bsize;
 	vp->v_type = VCHR;
 	vp->v_data = vp;
