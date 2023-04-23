@@ -943,11 +943,11 @@ slsfs_strategy(struct vop_strategy_args *args)
     vtree_find(&svp->sn_vtree, bp->b_lblkno, &ptr);
     if (bp->b_iocmd == BIO_WRITE) {
       printf("WRITE\n");
-      /* This are on disk is marked as cow */
-      if (ptr.flags & DPTR_COW) {
+      /* This are on disk is marked as cow, or have not been allocated a block */
+      if ((ptr.flags & DPTR_COW) || (ptr.offset == 0)) {
         printf("COW WRITE\n");
         /* Allocate a new block */
-        error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
+        error = slos_blkalloc(&slos, ptr.size, &ptr);
         MPASS(error == 0);
         /* Update the vtree with this value */
         vtree_insert(&svp->sn_vtree, bp->b_lblkno, &ptr);
@@ -959,6 +959,7 @@ slsfs_strategy(struct vop_strategy_args *args)
       bp->b_blkno = ptr.offset;
     };
   } else {
+    printf("WRITE VCHR\n");
     bp->b_blkno = bp->b_lblkno;
   }
 
@@ -966,6 +967,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 	    ("Filling buffer %p with "
 	     "%lu bytes from region with %lu bytes",
 		bp, bp->b_resid, ptr.size));
+
 	KASSERT(bp->b_blkno != 0,
 	    ("Vnode %p has buffer %p without a disk address", bp, vp));
 

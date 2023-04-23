@@ -83,18 +83,22 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 	KASSERT(
 	    vp->v_type != VCHR, ("Retrieving buffer for btree backing vnode"));
 
+  /* Round up to our minimum size so we dont read less the a sector size */
+  size = roundup(size, IOSIZE(svp));
+
 	error = slsfs_lookupbln(svp, bno, &ptr);
 	if (error) {
 		return slsfs_buf_insert(vp, &ptr, bno, size, rw, gbflag, bp);
 	}
 
-  if (ptr.offset != 0) {
+  /* This has not been written yet so the blk must be in our cache */
+  if (ptr.offset == 0) {
 		*bp = getblk(vp, bno, size, 0, 0, gbflag);
 		if (*bp == NULL)
 			panic("LINE %d: null bp for %lu, %lu", __LINE__, bno,
 			    size);
 	} else {
-		/* Otherwise do an actual IO. */
+		/* Otherwise do an actual IO to retrieve the buf */
 		error = slsfs_bread(vp, bno, size, NULL, gbflag, bp);
 		if (*bp == NULL)
 			panic("LINE %d: null bp for %lu, %lu", __LINE__, bno,
