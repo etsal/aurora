@@ -944,7 +944,6 @@ slsfs_strategy(struct vop_strategy_args *args)
       printf("Could not find the block!\n");
     }
     MPASS(error == 0);
-    KASSERT(ptr.offset < 100000, ("WHY IS THIS SO LARGE\n"));
     if (bp->b_iocmd == BIO_WRITE) {
       printf("WRITE\n");
       /* This are on disk is marked as cow, or have not been allocated a block */
@@ -952,7 +951,6 @@ slsfs_strategy(struct vop_strategy_args *args)
         printf("COW WRITE\n");
         /* Allocate a new block */
         error = slos_blkalloc(&slos, ptr.size, &ptr);
-        KASSERT(ptr.offset < 100000, ("WHY IS THIS SO LARGE 2\n"));
         MPASS(error == 0);
         /* Update the vtree with this value */
         vtree_insert(&svp->sn_vtree, bp->b_lblkno, &ptr);
