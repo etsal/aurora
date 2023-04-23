@@ -125,7 +125,7 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 	int error;
 
 	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
-		DEBUG("Initializing root inode");
+		printf("Initializing root inode\n");
 		error = initialize_inode(
 		    slos, SLOS_INODES_ROOT, &slos->slos_sb->sb_root);
 		MPASS(error == 0);
@@ -230,7 +230,7 @@ slsfs_startupfs(struct mount *mp)
 	 * bookkeeping.
 	 */
 
-	slsfs_checksumtree_init(&slos);
+	//slsfs_checksumtree_init(&slos);
 	slos_allocator_init(&slos);
 	slsfs_inodes_init(mp, &slos);
 

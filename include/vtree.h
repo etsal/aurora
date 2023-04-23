@@ -8,6 +8,8 @@
 #include <sys/bufobj.h>
 #include <sys/vnode.h>
 
+#define VTREE_BLKSZ (MAXBCACHEBUF)
+
 #define DPTR_COW (1)
 
 /* Physical extent on-disk pointer */
@@ -120,16 +122,22 @@ typedef struct vtree
 int
 vtree_create(struct vtree *vtree, struct vtreeops* ops, 
     diskptr_t root, size_t ks, uint32_t v_flags);
+
 int
 vtree_insert(vtree* tree, uint64_t key, void* value);
+
 int
 vtree_bulkinsert(vtree* tree, kvp* keyvalues, size_t len);
+
 int
 vtree_delete(vtree* tree, uint64_t key, void* value);
+
 int
 vtree_find(vtree* tree, uint64_t key, void* value);
+
 int
 vtree_ge(vtree* tree, uint64_t* key, void* value);
+
 int
 vtree_rangequery(vtree* tree,
                  uint64_t key_low,

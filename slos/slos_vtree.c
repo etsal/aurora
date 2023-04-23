@@ -80,6 +80,8 @@ vtree_create(struct vtree *vtree, struct vtreeops* ops,
   struct vnode *vp;
   int error;
 
+  KASSERT(root.size == VTREE_BLKSZ, ("Wrong size node for tree"));
+
   vtree->v_flags = v_flags;
 
 	error = getnewvnode("SLSFS Fake VNode", slos.slsfs_mount,
@@ -105,6 +107,8 @@ vtree_create(struct vtree *vtree, struct vtreeops* ops,
   vtree->v_cur_wal_idx = 0;
   vtree->v_vp = vp;
   VTREE_INIT(vtree, root, ks);
+  KASSERT(((btree_t)vtree->v_tree)->tr_ptr.size == VTREE_BLKSZ, ("Wrong size node for tree"));
+  
 	lockinit(&vtree->bt_lock, PVFS, "Vtree Lock", 0, LK_CANRECURSE);
 
   return error;

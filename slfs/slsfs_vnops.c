@@ -942,8 +942,10 @@ slsfs_strategy(struct vop_strategy_args *args)
   if (vp->v_type != VCHR) {
     vtree_find(&svp->sn_vtree, bp->b_lblkno, &ptr);
     if (bp->b_iocmd == BIO_WRITE) {
+      printf("WRITE\n");
       /* This are on disk is marked as cow */
       if (ptr.flags & DPTR_COW) {
+        printf("COW WRITE\n");
         /* Allocate a new block */
         error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
         MPASS(error == 0);

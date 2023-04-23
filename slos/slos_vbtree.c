@@ -9,8 +9,10 @@
 
 #include "slos.h"
 #include "slos_alloc.h"
+#include "vtree.h"
 
 #define INDEX_NULL ((uint16_t)-1)
+#define DEBUG (1)
 
 typedef struct bpath
 {
@@ -101,7 +103,7 @@ btnode_wrap_bp(btnode_t node, btree_t tree, struct buf* bp)
 {
   diskptr_t ptr;
 
-  ptr.size = BLKSZ;
+  ptr.size = VTREE_BLKSZ;
   ptr.offset = bp->b_lblkno;
 
   node->n_bp = bp;
@@ -113,14 +115,20 @@ btnode_wrap_bp(btnode_t node, btree_t tree, struct buf* bp)
 static void
 btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 {
-  
   struct buf* bp;
+  int error;
+  printf("Initing node %lu\n", ptr.size);
+  KASSERT(ptr.size == VTREE_BLKSZ, ("Incorrect size for init"));
 
   VOP_LOCK(tree->tr_vp, lk_flags);
-  bread(tree->tr_vp, ptr.offset, ptr.size * BLKSIZE(&slos), curthread->td_ucred, &bp);
+  error = bread(tree->tr_vp, ptr.offset, ptr.size, curthread->td_ucred, &bp);
+  if (error) {
+    printf("ERROR IN BREAD %d\n", error);
+  }
+  MPASS(error == 0);
+  printf("BTnode init %lu %lu\n", ptr.offset, ptr.size);
   VOP_UNLOCK(tree->tr_vp, 0);
-
-  
+  MPASS(bp->b_bcount == ptr.size);
 
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
@@ -133,11 +141,24 @@ static void
 btnode_create(btnode_t node, btree_t tree, uint8_t type)
 {
   diskptr_t ptr;
+  struct buf *bp;
   int error;
 
-  error = slos_blkalloc_wal(&slos, BLKSZ, &ptr);
+  error = slos_blkalloc_wal(&slos, VTREE_BLKSZ, &ptr);
   MPASS(error == 0);
-  btnode_init(node, tree, ptr, LK_EXCLUSIVE);
+  VOP_LOCK(tree->tr_vp, LK_EXCLUSIVE);
+  printf("BTnode create %lu %lu\n", ptr.offset, ptr.size);
+  bp = getblk(node->n_tree->tr_vp, ptr.offset, VTREE_BLKSZ, 0, 0, 0);
+  MPASS(bp != NULL);
+  VOP_UNLOCK(tree->tr_vp, LK_EXCLUSIVE);
+  MPASS(bp->b_bcount == ptr.size);
+
+  vfs_bio_clrbuf(bp);
+
+  node->n_bp = bp;
+  node->n_data = (btdata_t)bp->b_data;
+  node->n_tree = tree;
+  node->n_ptr = ptr;
   node->n_type = type;
   node->n_len = 0;
 }
@@ -218,7 +239,7 @@ static inline void
 path_unacquire(bpath_t path, int acquire_as)
 {
   for (int i = 0; i < path->p_len; i++) {
-    BUF_UNLOCK(path->p_nodes[i].n_bp);
+    bqrelse(path->p_nodes[i].n_bp);
   }
 }
 
@@ -306,6 +327,7 @@ btnode_find_ge(btree_t tree, uint64_t* key, void* value, int acquire_as)
   path_add(&path, tree, tree->tr_ptr, INDEX_NULL, acquire_as);
 
   node = btnode_find_child(&path, *key, acquire_as);
+  btnode_print(node);
 
   idx = binary_search(node->n_keys, node->n_len, *key);
   /* Is there no key here */
@@ -420,7 +442,7 @@ btnode_split(bpath_t path)
   btnode_dirty(&right_child);
   btnode_dirty(node);
 
-  BUF_UNLOCK(right_child.n_bp);
+  bqrelse(right_child.n_bp);
 
   if (parent.n_len == BT_MAX_KEYS) {
     printf("DOUBLE SPLIT\n");
@@ -750,6 +772,7 @@ btree_init(void* tree_ptr, struct vnode *vp, diskptr_t ptr, size_t value_size)
   btree_t tree = (btree_t)tree_ptr;
 
   KASSERT(value_size <= BT_MAX_VALUE_SIZE, ("Value size too large"));
+  printf("Btree init %lu\n", ptr.size);
 
   tree->tr_ptr = ptr;
   tree->tr_vs = value_size;

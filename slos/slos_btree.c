@@ -2304,15 +2304,16 @@ int
 fbtree_sysinit(struct slos *slos, size_t offset, diskptr_t *ptr)
 {
 	struct buf *bp;
-	struct dnode *dn;
 	struct slos_inode ino = {};
 	ino.ino_magic = SLOS_IMAGIC;
 	ptr->offset = offset;
 	ptr->size = BLKSIZE(slos);
+  ptr->flags = 0;
 	ino.ino_pid = -1;
 	ino.ino_blk = offset;
 	ino.ino_btree.offset = offset + 1;
-	ino.ino_btree.size = BLKSIZE(slos);
+	ino.ino_btree.size = VTREE_BLKSZ;
+  ino.ino_btree.flags = 0;
 
 	slsfs_devbread(slos, offset, BLKSIZE(slos), &bp);
 	MPASS(bp);
@@ -2320,12 +2321,9 @@ fbtree_sysinit(struct slos *slos, size_t offset, diskptr_t *ptr)
 	memcpy(bp->b_data, &ino, sizeof(ino));
 	bwrite(bp);
 
-	slsfs_devbread(slos, offset + 1, BLKSIZE(slos), &bp);
+	slsfs_devbread(slos, offset + 1, VTREE_BLKSZ, &bp);
 	MPASS(bp);
-
 	bzero(bp->b_data, bp->b_bcount);
-	dn = (struct dnode *)bp->b_data;
-	dn->dn_magic = DN_MAGIC;
 	bwrite(bp);
 
 	VOP_FSYNC(slos->slos_vp, MNT_WAIT, curthread);

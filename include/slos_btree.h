@@ -27,7 +27,7 @@ LIST_HEAD(btreeq, belem);
 	     key = key + 1, err##btree = btree_keymin(btree, &key, &val))
 
 /* An in-memory structure for a btree. */
-struct btree {
+struct bbtree {
 	uint64_t root;	      /* The root of the tree */
 	struct btreeq btreeq; /* Queue of elements to be freed
 				 if transaction succeeds */

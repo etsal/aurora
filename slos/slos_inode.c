@@ -233,7 +233,7 @@ slos_svpimport(
 	svp = uma_zalloc(slos_node_zone, M_WAITOK);
 	ino = &svp->sn_ino;
 
-	DEBUG2("Importing inode for %s %lu", system ? "block" : "OID", svpid);
+	printf("Importing inode for %s %lu\n", system ? "block" : "OID", svpid);
 	/*
 	 * System inodes are read from set locations in the SLOS.
 	 * The rest are retrieved from the inode btree.
@@ -259,6 +259,7 @@ slos_svpimport(
 		goto error;
 	}
 
+  KASSERT(ino->ino_btree.size == VTREE_BLKSZ, ("Block size for tree is incorrect"));
   error = vtree_create(&svp->sn_vtree, defaultops,
       ino->ino_btree, sizeof(diskptr_t), 0);
 
@@ -317,15 +318,17 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	struct slos_node *svp = SLSVP(root_vp);
 	size_t blksize = IOSIZE(svp);
 
+  printf("Creating Inode %lu\n", svpid);
 	// For now we will use the blkno for our svpids
 	VOP_LOCK(root_vp, LK_EXCLUSIVE);
 	error = vtree_find(&svp->sn_vtree, svpid, &ptr);
-
-	if (error) {
+	if (!error) {
+    printf("Creating inode %lu\n", svpid);
+	  VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
 		return (EEXIST);
 	}
 	error = vtree_insert(&svp->sn_vtree, svpid, &ptr);
-  MPASS(error != 0);
+  MPASS(error == 0);
 	VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
 
 	iov.iov_base = &ino;
@@ -350,12 +353,13 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	ino.ino_wal_segment.size = 0;
 	ino.ino_wal_segment.offset = 0;
 	ino.ino_wal_segment.epoch = 0;
-	error = slos_blkalloc(slos, BLKSIZE(slos), &ptr);
+
+	error = slos_blkalloc(slos, VTREE_BLKSZ, &ptr);
 	if (error) {
 		return (error);
 	}
 
-	slsfs_devbread(slos, ptr.offset, BLKSIZE(slos), &bp);
+	slsfs_devbread(slos, ptr.offset, VTREE_BLKSZ, &bp);
 	MPASS(bp);
 	bzero(bp->b_data, bp->b_bcount);
 	bwrite(bp);
@@ -404,6 +408,7 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 	 * we wait for the buffer, current fix is to allow sleeping on this lock
 	 */
 	if (oid == SLOS_INODES_ROOT) {
+    printf("OPEN SLOS INODES_ROOT\n");
 		error = slos_svpimport(
 		    slos, slos->slos_sb->sb_root.offset, true, &svp);
 		if (error != 0) {
@@ -411,6 +416,7 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 			return (error);
 		}
 	} else {
+    printf("OPEN REGULAR INODE\n");
 		/* Create a vnode for the inode. */
 		error = slos_svpimport(slos, oid, false, &svp);
 		if (error)
@@ -515,7 +521,7 @@ initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 
 	struct slos_inode ino = {};
 	// We can use the fake device from the allocators they should be inited
-	struct vnode *fdev = slos->slos_alloc.a_offset->sn_fdev;
+	struct vnode *fdev = slos->slos_alloc.a_offset->sn_vtree.v_vp;
 
 	error = slos_blkalloc(slos, BLKSIZE(slos), p);
 	MPASS(error == 0);
@@ -531,12 +537,12 @@ initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 	bp = getblk(fdev, ino.ino_blk, BLKSIZE(slos), 0, 0, 0);
 	MPASS(bp);
 
-	error = slos_blkalloc(slos, BLKSIZE(slos), &ino.ino_btree);
+	error = slos_blkalloc(slos, VTREE_BLKSZ, &ino.ino_btree);
 	MPASS(error == 0);
 	memcpy(bp->b_data, &ino, sizeof(struct slos_inode));
 	bwrite(bp);
 
-	bp = getblk(fdev, ino.ino_btree.offset, BLKSIZE(slos), 0, 0, 0);
+	bp = getblk(fdev, ino.ino_btree.offset, VTREE_BLKSZ, 0, 0, 0);
 	MPASS(bp);
 
 	vfs_bio_clrbuf(bp);

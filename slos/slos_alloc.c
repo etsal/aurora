@@ -7,15 +7,18 @@
 
 #include <slos.h>
 #include <slos_alloc.h>
-#include <slos_btree.h>
 #include <slos_inode.h>
 #include <slsfs.h>
+#include <vtree.h>
 
 #include "debug.h"
 #include "slos_subr.h"
 #include "slsfs_buf.h"
 
+#include "slos_vbtree.h"
+
 #define NEWOSDSIZE (30)
+
 
 // Blocks are always allocated where offset is the block offset (not byte
 // addressable) and size is the size in bytes
@@ -100,9 +103,11 @@ slos_blkalloc_large_unlocked(struct slos *slos, size_t size, diskptr_t *ptr)
 
 	uint64_t blksize = BLKSIZE(slos);
 	uint64_t asked = roundup(size, blksize);
+  fullsize = asked;
 	int error;
 
 	error = vtree_ge(STREE(slos), &fullsize, &off);
+  printf("Alloc unlocked %lu\n", fullsize);
 	if (error != 0) {
 		return (ENOSPC);
 	}
@@ -171,7 +176,7 @@ slos_blkalloc(struct slos *slos, size_t bytes, diskptr_t *ptr)
 	BTREE_LOCK(STREE(slos), LK_EXCLUSIVE);
 	while (true) {
 		if (!fast_path(slos, bytes, ptr)) {
-	    BTREE_UNLOCK(STREE(slos), LK_EXCLUSIVE);
+	    BTREE_UNLOCK(STREE(slos), 0);
 			return (0);
 		}
 
@@ -239,7 +244,8 @@ slos_allocator_init(struct slos *slos)
 			    slos->slos_sb->sb_bsize) +
 	    1;
 	// Checksum tree is allocated first.
-	offset += 2;
+  uint64_t blks_per_tree = VTREE_BLKSZ / BLKSIZE(slos);
+	offset += 1 + blks_per_tree;
 	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
 		DEBUG1(
 		    "Bootstrapping Allocator for first time startup starting at offset %lu",
@@ -250,24 +256,27 @@ slos_allocator_init(struct slos *slos)
 		 * each tree by two, one for the inode itself, and the second
 		 * for the root of the tree.
 		 */
+    printf("OFFSET %lu\n", offset);
 		fbtree_sysinit(slos, offset, &slos->slos_sb->sb_allocoffset);
-		offset += 2;
+		offset += 1 + blks_per_tree;
+    printf("OFFSET %lu\n", offset);
 		fbtree_sysinit(slos, offset, &slos->slos_sb->sb_allocsize);
-		offset += 2;
+		offset += 1 + blks_per_tree;
+    printf("OFFSET %lu\n", offset);
 	}
 
 	uint64_t offbl = slos->slos_sb->sb_allocoffset.offset;
 	uint64_t sizebl = slos->slos_sb->sb_allocsize.offset;
 
-	DEBUG("Initing Allocator");
+	printf("Initing Allocator\n");
 	/* Create the in-memory vnodes from the on-disk state. */
 	error = slos_svpimport(slos, offbl, true, &offt);
   /* Have to readjust the trees to use uint64_t as values */
-  VTREE_INIT(&offt->sn_vtree, slos->slos_sb->sb_allocoffset, sizeof(uint64_t));
+  VTREE_INIT(&offt->sn_vtree, offt->sn_ino.ino_btree, sizeof(uint64_t));
 	KASSERT(error == 0,
 	    ("importing allocator offset tree failed with %d", error));
 	error = slos_svpimport(slos, sizebl, true, &sizet);
-  VTREE_INIT(&sizet->sn_vtree, slos->slos_sb->sb_allocsize, sizeof(uint64_t));
+  VTREE_INIT(&sizet->sn_vtree, sizet->sn_ino.ino_btree, sizeof(uint64_t));
 	KASSERT(error == 0,
 	    ("importing allocator size tree failed with %d", error));
 
