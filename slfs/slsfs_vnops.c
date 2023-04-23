@@ -119,7 +119,7 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 		cache_purge(vp);
 		if (vp != slos.slsfs_inodes)
 			vfs_hash_remove(vp);
-    printf("RECLAIM %lu\n", svp->sn_ino.ino_pid);
+    printf("RECLAIM %lu %p\n", svp->sn_ino.ino_pid, &svp->sn_vtree);
 		slos_vpfree(svp->sn_slos, svp);
 	}
 

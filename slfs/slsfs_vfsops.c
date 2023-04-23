@@ -1106,10 +1106,6 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	slsfs_free_system_vnode(slos->slsfs_inodes);
 	slos->slsfs_inodes = NULL;
 
-	// Free the checksum tree
-	slos_vpfree(slos, slos->slos_cktree);
-	slos->slos_cktree = NULL;
-
 	DEBUG("Flushed all active vnodes");
 	/* Remove the mounted device. */
 	error = slsfs_unmount_device(sdev);
