@@ -203,7 +203,6 @@ vtree_dirty_cnt(vtree *tree)
 void
 vtree_free(vtree *tree)
 {
-  printf("VTree free [%p]\n", tree);
 	tree->v_vp->v_data = NULL;
 	vnode_destroy_vobject(tree->v_vp);
 	tree->v_vp->v_op = &dead_vnodeops;

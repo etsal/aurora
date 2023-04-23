@@ -233,7 +233,7 @@ slos_svpimport(
 	svp = uma_zalloc(slos_node_zone, M_WAITOK);
 	ino = &svp->sn_ino;
 
-	printf("Importing inode for %s %lu\n", system ? "block" : "OID", svpid);
+	DEBUG2("Importing inode for %s %lu\n", system ? "block" : "OID", svpid);
 	/*
 	 * System inodes are read from set locations in the SLOS.
 	 * The rest are retrieved from the inode btree.
@@ -316,12 +316,11 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	struct slos_node *svp = SLSVP(root_vp);
 	size_t blksize = IOSIZE(svp);
 
-  printf("Creating Inode %lu\n", svpid);
+  DEBUG1("Creating Inode %lu\n", svpid);
 	// For now we will use the blkno for our svpids
 	VOP_LOCK(root_vp, LK_EXCLUSIVE);
 	error = vtree_find(&svp->sn_vtree, svpid, &ptr);
 	if (error == 0) {
-    printf("Creating inode %lu\n", svpid);
 	  VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
 		return (EEXIST);
 	}
@@ -404,7 +403,6 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 	 * we wait for the buffer, current fix is to allow sleeping on this lock
 	 */
 	if (oid == SLOS_INODES_ROOT) {
-    printf("OPEN SLOS INODES_ROOT\n");
 		error = slos_svpimport(
 		    slos, slos->slos_sb->sb_root.offset, true, &svp);
 		if (error != 0) {
@@ -412,14 +410,12 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 			return (error);
 		}
 	} else {
-    printf("OPEN REGULAR INODE %lu\n", oid);
 		/* Create a vnode for the inode. */
 		error = slos_svpimport(slos, oid, false, &svp);
 		if (error)
 			return (error);
 	}
 
-	printf("Opened Inode %lx\n", oid);
 
 	*svpp = svp;
 

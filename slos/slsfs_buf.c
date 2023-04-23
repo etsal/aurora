@@ -43,7 +43,6 @@ slsfs_buf_insert(struct vnode *vp, diskptr_t *ptr, uint64_t bno,
 	ptr->offset = 0;
 	ptr->size = size;
 	ptr->epoch = EPOCH_INVAL;
-  printf("Inserting buffer %lu %lu\n", ptr->offset, ptr->size);
 	error = vtree_insert(tree, bno, ptr);
 	if (error) {
 		panic("Problem inserting into tree");

@@ -12,7 +12,7 @@
 #include "vtree.h"
 
 #define INDEX_NULL ((uint16_t)-1)
-#define DEBUG (1)
+//#define DEBUG (1)
 
 typedef struct bpath
 {
@@ -118,16 +118,11 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 {
   struct buf* bp;
   int error;
-  printf("Initing node %lu\n", ptr.size);
   KASSERT(ptr.size == VTREE_BLKSZ, ("Incorrect size for init"));
 
   VOP_LOCK(tree->tr_vp, lk_flags);
   error = bread(tree->tr_vp, ptr.offset, ptr.size, curthread->td_ucred, &bp);
-  if (error) {
-    printf("ERROR IN BREAD %d\n", error);
-  }
   MPASS(error == 0);
-  printf("BTnode init %lu %lu\n", ptr.offset, ptr.size);
   VOP_UNLOCK(tree->tr_vp, 0);
   MPASS(bp->b_bcount == ptr.size);
 
@@ -149,7 +144,9 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
   error = slos_blkalloc_wal(&slos, VTREE_BLKSZ, &ptr);
   MPASS(error == 0);
   VOP_LOCK(tree->tr_vp, LK_EXCLUSIVE);
+#if DEBUG
   printf("BTnode create %lu %lu\n", ptr.offset, ptr.size);
+#endif
   bp = getblk(node->n_tree->tr_vp, ptr.offset, VTREE_BLKSZ, 0, 0, 0);
   MPASS(bp != NULL);
   VOP_UNLOCK(tree->tr_vp, LK_EXCLUSIVE);
@@ -187,7 +184,6 @@ path_cow(bpath_t path)
     /* Check if node is not already COWed */
     tmp = path->p_nodes[i];
     if (!BT_ALREADY_COW(&tmp)) {
-      printf("COWING\n");
 
       /* Grab our index in our parent */
       if (i > 0) {
@@ -451,7 +447,6 @@ btnode_split(bpath_t path)
   bqrelse(right_child.n_bp);
 
   if (parent.n_len == BT_MAX_KEYS) {
-    printf("DOUBLE SPLIT\n");
     path_backtrack(path);
     btnode_split(path);
   }
@@ -789,7 +784,9 @@ btree_init(void* tree_ptr, struct vnode *vp, diskptr_t ptr, size_t value_size)
   btree_t tree = (btree_t)tree_ptr;
 
   KASSERT(value_size <= BT_MAX_VALUE_SIZE, ("Value size too large"));
-  printf("Btree init %lu\n", ptr.size);
+#ifdef DEBUG
+  printf("[Btree Init] %lu\n", ptr.size);
+#endif
 
   tree->tr_ptr = ptr;
   tree->tr_vs = value_size;
