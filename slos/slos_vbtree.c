@@ -144,7 +144,7 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
   error = slos_blkalloc_wal(&slos, VTREE_BLKSZ, &ptr);
   MPASS(error == 0);
   VOP_LOCK(tree->tr_vp, LK_EXCLUSIVE);
-#if DEBUG
+#ifdef DEBUG
   printf("BTnode create %lu %lu\n", ptr.offset, ptr.size);
 #endif
   bp = getblk(node->n_tree->tr_vp, ptr.offset, VTREE_BLKSZ, 0, 0, 0);
@@ -329,7 +329,6 @@ btnode_find_ge(btree_t tree, uint64_t* key, void* value, int acquire_as)
   path_add(&path, tree, tree->tr_ptr, INDEX_NULL, acquire_as);
 
   node = btnode_find_child(&path, *key, acquire_as);
-  btnode_print(node);
 
   idx = binary_search(node->n_keys, node->n_len, *key);
   /* Is there no key here */
@@ -523,9 +522,6 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
   if (node->n_len == BT_MAX_KEYS) {
     btnode_split(path);
   }
-
-
-  btnode_print(node);
 
   return 0;
 }

@@ -119,7 +119,6 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 		cache_purge(vp);
 		if (vp != slos.slsfs_inodes)
 			vfs_hash_remove(vp);
-    printf("RECLAIM %lu %p\n", svp->sn_ino.ino_pid, &svp->sn_vtree);
 		slos_vpfree(svp->sn_slos, svp);
 	}
 
@@ -945,10 +944,8 @@ slsfs_strategy(struct vop_strategy_args *args)
     }
     MPASS(error == 0);
     if (bp->b_iocmd == BIO_WRITE) {
-      printf("WRITE\n");
       /* This are on disk is marked as cow, or have not been allocated a block */
       if ((ptr.flags & DPTR_COW) || (ptr.offset == 0)) {
-        printf("COW WRITE\n");
         /* Allocate a new block */
         error = slos_blkalloc(&slos, ptr.size, &ptr);
         MPASS(error == 0);
@@ -962,7 +959,6 @@ slsfs_strategy(struct vop_strategy_args *args)
       bp->b_blkno = ptr.offset;
     };
   } else {
-    printf("WRITE VCHR\n");
     bp->b_blkno = bp->b_lblkno;
   }
 
