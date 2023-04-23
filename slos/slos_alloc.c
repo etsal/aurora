@@ -107,7 +107,6 @@ slos_blkalloc_large_unlocked(struct slos *slos, size_t size, diskptr_t *ptr)
 	int error;
 
 	error = vtree_ge(STREE(slos), &fullsize, &off);
-  printf("Alloc unlocked %lu\n", fullsize);
 	if (error != 0) {
 		return (ENOSPC);
 	}
@@ -256,19 +255,16 @@ slos_allocator_init(struct slos *slos)
 		 * each tree by two, one for the inode itself, and the second
 		 * for the root of the tree.
 		 */
-    printf("OFFSET %lu\n", offset);
 		fbtree_sysinit(slos, offset, &slos->slos_sb->sb_allocoffset);
 		offset += 1 + blks_per_tree;
-    printf("OFFSET %lu\n", offset);
 		fbtree_sysinit(slos, offset, &slos->slos_sb->sb_allocsize);
 		offset += 1 + blks_per_tree;
-    printf("OFFSET %lu\n", offset);
 	}
 
 	uint64_t offbl = slos->slos_sb->sb_allocoffset.offset;
 	uint64_t sizebl = slos->slos_sb->sb_allocsize.offset;
 
-	printf("Initing Allocator\n");
+	DEBUG("Initing Allocator");
 	/* Create the in-memory vnodes from the on-disk state. */
 	error = slos_svpimport(slos, offbl, true, &offt);
   /* Have to readjust the trees to use uint64_t as values */
