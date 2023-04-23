@@ -111,21 +111,20 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 	 * reclaimed
 	 */
 
-	vp->v_data = NULL;
-
-	vinvalbuf(vp, 0, 0, 0);
-
 	/*
 	 * TODO:
 	 * While rerunning seqwrite-4t-64k twice vfs_hash_remove blew up
 	 */
-	vnode_destroy_vobject(vp);
 	if (vp->v_type != VCHR) {
 		cache_purge(vp);
 		if (vp != slos.slsfs_inodes)
 			vfs_hash_remove(vp);
+    printf("RECLAIM %lu\n", svp->sn_ino.ino_pid);
 		slos_vpfree(svp->sn_slos, svp);
 	}
+
+	vp->v_data = NULL;
+	vnode_destroy_vobject(vp);
 
 	return (0);
 }
@@ -940,14 +939,20 @@ slsfs_strategy(struct vop_strategy_args *args)
 		devbsize));
 
   if (vp->v_type != VCHR) {
-    vtree_find(&svp->sn_vtree, bp->b_lblkno, &ptr);
+    error = slsfs_lookupbln(svp, bp->b_lblkno, &ptr);
+    if (error) {
+      printf("Could not find the block!\n");
+    }
+    MPASS(error == 0);
+    KASSERT(ptr.offset < 100000, ("WHY IS THIS SO LARGE\n"));
     if (bp->b_iocmd == BIO_WRITE) {
       printf("WRITE\n");
-      /* This are on disk is marked as cow */
-      if (ptr.flags & DPTR_COW) {
+      /* This are on disk is marked as cow, or have not been allocated a block */
+      if ((ptr.flags & DPTR_COW) || (ptr.offset == 0)) {
         printf("COW WRITE\n");
         /* Allocate a new block */
-        error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
+        error = slos_blkalloc(&slos, ptr.size, &ptr);
+        KASSERT(ptr.offset < 100000, ("WHY IS THIS SO LARGE 2\n"));
         MPASS(error == 0);
         /* Update the vtree with this value */
         vtree_insert(&svp->sn_vtree, bp->b_lblkno, &ptr);
@@ -959,6 +964,7 @@ slsfs_strategy(struct vop_strategy_args *args)
       bp->b_blkno = ptr.offset;
     };
   } else {
+    printf("WRITE VCHR\n");
     bp->b_blkno = bp->b_lblkno;
   }
 
@@ -966,6 +972,7 @@ slsfs_strategy(struct vop_strategy_args *args)
 	    ("Filling buffer %p with "
 	     "%lu bytes from region with %lu bytes",
 		bp, bp->b_resid, ptr.size));
+
 	KASSERT(bp->b_blkno != 0,
 	    ("Vnode %p has buffer %p without a disk address", bp, vp));
 

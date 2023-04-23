@@ -131,7 +131,7 @@ slsfs_inodes_init(struct mount *mp, struct slos *slos)
 		MPASS(error == 0);
 	}
 	/* Create the vnode for the inode root. */
-	DEBUG1("Initing the root inode %lu", slos->slos_sb->sb_root.offset);
+	printf("Initing the root inode %lu", slos->slos_sb->sb_root.offset);
 	error = slsfs_vget(mp, SLOS_INODES_ROOT, 0, &slos->slsfs_inodes);
 	if (error) {
 		panic("Issue trying to find root node on init");
@@ -579,8 +579,8 @@ again:
 		}
 		svp = SLSVP(slos.slsfs_inodes);
 		ino = &svp->sn_ino;
-		DEBUG2(
-		    "Flushing inodes %p %p", slos.slsfs_inodes, svp->sn_fdev);
+		printf(
+		    "Flushing inodes %p\n", slos.slsfs_inodes);
 		error = slos_checkpoint_vp(slos.slsfs_inodes, closing);
 		if (error) {
 			panic("slos_sync_vp failed to checkpoint");
@@ -597,7 +597,7 @@ again:
 
 		slos.slos_sb->sb_root.offset = ino->ino_blk;
 
-		bp = getblk(svp->sn_fdev, ptr.offset, BLKSIZE(&slos), 0, 0, 0);
+		bp = getblk(svp->sn_vtree.v_vp, ptr.offset, BLKSIZE(&slos), 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
 		bawrite(bp);
@@ -730,6 +730,7 @@ slsfs_init_fs(struct mount *mp)
 	 */
 	VFS_ROOT(mp, LK_EXCLUSIVE, &vp);
 	if (vp == NULL) {
+    printf("WHY IS THIS NULL\n");
 		return (EIO);
 	}
 
@@ -1212,6 +1213,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	/* Bring the inode in memory. */
 	error = slos_iopen(&slos, ino, &svnode);
 	if (error) {
+    printf("Could not find inode on disk %lu\n" , ino);
 		*vpp = NULL;
 		return (error);
 	}

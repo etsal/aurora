@@ -102,6 +102,8 @@ vtree_create(struct vtree *vtree, struct vtreeops* ops,
 
   if (v_flags & VTREE_WITHWAL) {
     vtree->v_wal = (kvp*)malloc(VTREE_WALSIZE, M_SLOS_VTREE, M_WAITOK | M_ZERO);
+  } else {
+    vtree->v_wal = NULL;
   }
   vtree->v_ops = ops;
   vtree->v_cur_wal_idx = 0;
@@ -201,6 +203,11 @@ vtree_dirty_cnt(vtree *tree)
 void
 vtree_free(vtree *tree)
 {
+  printf("VTree free [%p]\n", tree);
+	tree->v_vp->v_data = NULL;
+	vnode_destroy_vobject(tree->v_vp);
+	tree->v_vp->v_op = &dead_vnodeops;
+
   if (tree->v_flags & VTREE_WITHWAL) {
     free(tree->v_wal, M_SLOS_VTREE);
   }

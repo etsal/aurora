@@ -97,8 +97,6 @@ struct slos_node {
 	struct mtx sn_mtx;		  /* vnode mutex */
 	struct slos *sn_slos;		  /* Slos the node belong to */
 
-	struct vnode *sn_fdev; /* Fake vnode for btree back */
-
   struct vtree sn_vtree;
 };
 

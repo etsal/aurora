@@ -43,19 +43,13 @@ slsfs_buf_insert(struct vnode *vp, diskptr_t *ptr, uint64_t bno,
 	ptr->offset = 0;
 	ptr->size = size;
 	ptr->epoch = EPOCH_INVAL;
+  printf("Inserting buffer %lu %lu\n", ptr->offset, ptr->size);
 	error = vtree_insert(tree, bno, ptr);
 	if (error) {
 		panic("Problem inserting into tree");
 		return (error);
 	}
-	/*
-	 * We must release the BTree here, as any getblk allocation could
-	 * trigguer a buf domain flush would cause dirty buffers to flush
-	 * and bstrategies to be done which are done by the current thread,
-	 * so we end up getting an issue where since we are holding this lock
-	 * in exclusive, we get a panic as we try to acquire the lock in shared
-	 * when doing the lookup within slsfs_strategy
-	 */
+
 	error = slsfs_balloc(vp, bno, blksize, gbflag, bp);
 	if (error != 0)
 		panic("Balloc failed\n");
@@ -83,18 +77,22 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 	KASSERT(
 	    vp->v_type != VCHR, ("Retrieving buffer for btree backing vnode"));
 
+  /* Round up to our minimum size so we dont read less the a sector size */
+  size = roundup(size, IOSIZE(svp));
+
 	error = slsfs_lookupbln(svp, bno, &ptr);
 	if (error) {
 		return slsfs_buf_insert(vp, &ptr, bno, size, rw, gbflag, bp);
 	}
 
-  if (ptr.offset != 0) {
+  /* This has not been written yet so the blk must be in our cache */
+  if (ptr.offset == 0) {
 		*bp = getblk(vp, bno, size, 0, 0, gbflag);
 		if (*bp == NULL)
 			panic("LINE %d: null bp for %lu, %lu", __LINE__, bno,
 			    size);
 	} else {
-		/* Otherwise do an actual IO. */
+		/* Otherwise do an actual IO to retrieve the buf */
 		error = slsfs_bread(vp, bno, size, NULL, gbflag, bp);
 		if (*bp == NULL)
 			panic("LINE %d: null bp for %lu, %lu", __LINE__, bno,
@@ -248,13 +246,5 @@ slsfs_bundirty(struct buf *buf)
 int
 slsfs_lookupbln(struct slos_node *svp, uint64_t lbn, diskptr_t *ptr)
 {
-	int error;
-	uint64_t key = lbn;
-
-	error = vtree_find(&svp->sn_vtree, key, ptr);
-	if (error != 0) {
-		return (error);
-	}
-
-	return (0);
+	return vtree_find(&svp->sn_vtree, lbn, ptr);
 }

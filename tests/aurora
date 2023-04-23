@@ -36,7 +36,7 @@ aursetup()
     kldload slos
     slsnewfs
     slsmount
-    kldload sls
+    #kldload sls
 }
 
 aurteardown()

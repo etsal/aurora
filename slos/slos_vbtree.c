@@ -88,6 +88,7 @@ static inline void
 btnode_dirty(btnode_t node)
 {
   bdirty(node->n_bp);
+  node->n_bp->b_flags |= B_CACHE;
 }
 
 static void
@@ -130,6 +131,7 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
   VOP_UNLOCK(tree->tr_vp, 0);
   MPASS(bp->b_bcount == ptr.size);
 
+  bp->b_flags |= B_MANAGED;
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
@@ -154,7 +156,7 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
   MPASS(bp->b_bcount == ptr.size);
 
   vfs_bio_clrbuf(bp);
-
+  bp->b_flags |= B_MANAGED;
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
@@ -185,6 +187,7 @@ path_cow(bpath_t path)
     /* Check if node is not already COWed */
     tmp = path->p_nodes[i];
     if (!BT_ALREADY_COW(&tmp)) {
+      printf("COWING\n");
 
       /* Grab our index in our parent */
       if (i > 0) {
@@ -198,8 +201,9 @@ path_cow(bpath_t path)
       }
 
       btnode_create(&path->p_nodes[i], tmp.n_tree, tmp.n_type);
+
       /* Perform the copy of data or however we choose to transfer it over */
-      memcpy(path->p_nodes[i].n_data, tmp.n_data, BLKSZ);
+      memcpy(path->p_nodes[i].n_data, tmp.n_data, VTREE_BLKSZ);
 
       /* Update our parent to know of the change */
       if (i > 0) {
@@ -238,8 +242,10 @@ path_getcur(bpath_t path)
 static inline void
 path_unacquire(bpath_t path, int acquire_as)
 {
+  struct buf *bp;
   for (int i = 0; i < path->p_len; i++) {
-    bqrelse(path->p_nodes[i].n_bp);
+    bp = path->p_nodes[i].n_bp;
+    bqrelse(bp);
   }
 }
 
@@ -476,7 +482,7 @@ btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
   memcpy(&node->n_ch[idx + 1], value, BT_VALSZ(node));
   node->n_len += 1;
 
-  bdirty(node->n_bp);
+  btnode_dirty(node);
 }
 
 static void
@@ -485,7 +491,14 @@ btnode_leaf_update(btnode_t node, int idx, void* value)
   KASSERT(BT_ISLEAF(node), ("Node should be a leaf"));
   KASSERT(!BT_ISCOW(node), ("Node should not be COW"));
   memcpy(&node->n_ch[idx + 1], value, BT_VALSZ(node));
-  bdirty(node->n_bp);
+  btnode_dirty(node);
+
+  /* False update - key value is actually a new key
+   * This captures the case where the key is 0 for example
+   */
+  if (idx == node->n_len) {
+    node->n_len += 1;
+  }
 }
 
 static int
@@ -510,10 +523,14 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
     btnode_leaf_update(node, idx, value);
   } else {
     btnode_leaf_insert(node, idx, key, value);
-    if (node->n_len == BT_MAX_KEYS) {
-      btnode_split(path);
-    }
   }
+
+  if (node->n_len == BT_MAX_KEYS) {
+    btnode_split(path);
+  }
+
+
+  btnode_print(node);
 
   return 0;
 }
@@ -858,6 +875,9 @@ btree_checkpoint(void* treep)
 	BO_LOCK(bo);
 
   TAILQ_FOREACH_SAFE (bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
+    BUF_LOCK(bp, LK_EXCLUSIVE, NULL);
+	  BO_UNLOCK(bo);
+
     btnode_wrap_bp(&node, tree, bp);
     /* Node is dead - clean up */
     if (node.n_len == 0) {
@@ -866,10 +886,14 @@ btree_checkpoint(void* treep)
     }
 
     btnode_mark_cow(&node);
+		bp->b_flags &= ~(B_MANAGED);
     bawrite(bp);
+    BO_LOCK(bo);
 	}
 
-	BO_UNLOCK(bo);
+  bufobj_wwait(bo, 0, 0);
+  BO_UNLOCK(bo);
+
 
   return (ptr);
 }

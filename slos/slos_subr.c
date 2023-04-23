@@ -120,23 +120,24 @@ retry_create:
 int
 slos_setupfakedev(struct slos *slos, struct slos_node *vp)
 {
-	struct vnode *devvp;
-	int error;
+  panic("Dont call this \n");
+	/* struct vnode *devvp; */
+	/* int error; */
 
-	error = getnewvnode("SLSFS Fake VNode", slos->slsfs_mount,
-	    &slsfs_vnodeops, &vp->sn_fdev);
-	if (error) {
-		panic("Problem getting fake vnode for device\n");
-	}
-	devvp = vp->sn_fdev;
-	/* Set up the necessary backend state to be able to do IOs to the
-	 * device. */
-	devvp->v_bufobj.bo_ops = &bufops_slsfs;
-	devvp->v_bufobj.bo_bsize = slos->slos_sb->sb_bsize;
-	devvp->v_type = VCHR;
-	devvp->v_data = vp;
-	devvp->v_vflag |= VV_SYSTEM;
-	DEBUG("Setup fake device");
+	/* error = getnewvnode("SLSFS Fake VNode", slos->slsfs_mount, */
+	/*     &slsfs_vnodeops, &vp->sn_fdev); */
+	/* if (error) { */
+	/* 	panic("Problem getting fake vnode for device\n"); */
+	/* } */
+	/* devvp = vp->sn_fdev; */
+	/* /1* Set up the necessary backend state to be able to do IOs to the */
+	/*  * device. *1/ */
+	/* devvp->v_bufobj.bo_ops = &bufops_slsfs; */
+	/* devvp->v_bufobj.bo_bsize = slos->slos_sb->sb_bsize; */
+	/* devvp->v_type = VCHR; */
+	/* devvp->v_data = vp; */
+	/* devvp->v_vflag |= VV_SYSTEM; */
+	/* DEBUG("Setup fake device"); */
 
 	return (0);
 }
@@ -218,6 +219,7 @@ slos_checkpoint_vp(struct vnode *vp, int release)
   TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, nbp) {
     blknums[cur++] = bp->b_lblkno;
   }
+  BO_UNLOCK(bo);
 
   /* Sync the blocks BEFORE marking them COW so they will flush */
 	vn_fsync_buf(vp, 0);
@@ -230,6 +232,8 @@ slos_checkpoint_vp(struct vnode *vp, int release)
     error = vtree_insert(tree, blknums[i], &ptr);
     MPASS(error == 0);
   }
+
+  free(blknums, M_SLOS_SB);
 
 	vtree_checkpoint(tree);
 
