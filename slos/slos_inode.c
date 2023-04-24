@@ -214,6 +214,14 @@ slos_svpsize(struct slos_node *svp)
 	return (0);
 }
 
+static int
+inode_btree_rootchange(void *ctx, diskptr_t ptr) {
+  struct slos_node *svp = (struct slos_node *)ctx;
+  printf("Inode %lu ROOT CHANGE TO %lu\n", svp->sn_pid, ptr.offset);
+  svp->sn_ino.ino_btree = ptr;
+  return 0;
+}
+
 /*
  * Create the in-memory inode from the on-disk inode.
  * The inode needs to have no existing vnode in memory.
@@ -261,7 +269,7 @@ slos_svpimport(
 
   KASSERT(ino->ino_btree.size == VTREE_BLKSZ, ("Block size for tree is incorrect"));
   error = vtree_create(&svp->sn_vtree, defaultops,
-      ino->ino_btree, sizeof(diskptr_t), 0);
+      ino->ino_btree, sizeof(diskptr_t), 0, &inode_btree_rootchange, svp);
 
 	/*
 	 * Move each field separately, translating between the two.
@@ -481,7 +489,8 @@ slos_update(struct slos_node *svp)
 	KASSERT(!SLS_ISWAL(slos.slsfs_inodes),
 	    ("slsfs_inodes should not be marked as a WAL object"));
 	memcpy(bp->b_data, &svp->sn_ino, sizeof(svp->sn_ino));
-	slsfs_bdirty(bp);
+  printf("Updating VP %lu\n", svp->sn_pid);
+	bawrite(bp);
 	SLSVP(slos.slsfs_inodes)->sn_status |= SLOS_DIRTY;
 
 	VOP_UNLOCK(slos.slsfs_inodes, 0);

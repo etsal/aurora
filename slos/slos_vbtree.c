@@ -141,7 +141,7 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
   struct buf *bp;
   int error;
 
-  error = slos_blkalloc_wal(&slos, VTREE_BLKSZ, &ptr);
+  error = slos_blkalloc(&slos, VTREE_BLKSZ, &ptr);
   MPASS(error == 0);
   VOP_LOCK(tree->tr_vp, LK_EXCLUSIVE);
 #ifdef DEBUG
@@ -169,6 +169,12 @@ path_getindex(bpath_t path)
   return path->p_indexes[path->p_cur];
 }
 
+static inline btnode_t
+path_getcur(bpath_t path)
+{
+  return &path->p_nodes[path->p_cur];
+}
+
 /*
  * Will iterater through the path and perform COW on all entries within the path
  */
@@ -178,6 +184,7 @@ path_cow(bpath_t path)
   btnode tmp;
   btnode_t parent = NULL;
   int idx;
+  btree_t tree = path_getcur(path)->n_tree;
   /* We hold all the locks of the path exclusively so we can change the parent
    */
   for (int i = 0; i < path->p_len; i++) {
@@ -206,7 +213,7 @@ path_cow(bpath_t path)
         memcpy(&parent->n_ch[idx], &path->p_nodes[i].n_ptr, sizeof(diskptr_t));
       } else {
         /* Make sure we update our root ptr in our main tree datastructure */
-        path->p_nodes[i].n_tree->tr_ptr = path->p_nodes[i].n_ptr;
+        tree->tr_ptr = path->p_nodes[i].n_ptr;
       }
 
       /* We must invalidate the buffer to insure it never writes */
@@ -227,12 +234,6 @@ path_add(bpath_t path, btree_t tree, diskptr_t ptr, uint16_t cidx, int lk_flags)
   path->p_indexes[path->p_len] = cidx;
   path->p_cur = path->p_len;
   path->p_len += 1;
-}
-
-static inline btnode_t
-path_getcur(bpath_t path)
-{
-  return &path->p_nodes[path->p_cur];
 }
 
 static inline void
@@ -896,11 +897,8 @@ btree_checkpoint(void* treep)
 		BO_LOCK(bo);
 	}
 
-
-
   bufobj_wwait(bo, 0, 0);
   BO_UNLOCK(bo);
-
 
   return (ptr);
 }
@@ -974,3 +972,12 @@ btree_getkeysize(void* treep)
   btree_t tree = (btree_t)treep;
   return tree->tr_vs;
 }
+
+diskptr_t
+btree_getroot(void* treep)
+{
+  btree_t tree = (btree_t)treep;
+  return tree->tr_ptr;
+}
+
+

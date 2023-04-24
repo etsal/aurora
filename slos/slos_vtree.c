@@ -75,7 +75,7 @@ vtree_empty_wal(vtree* tree)
 
 int
 vtree_create(struct vtree *vtree, struct vtreeops* ops, 
-    diskptr_t root, size_t ks, uint32_t v_flags)
+    diskptr_t root, size_t ks, uint32_t v_flags, vtree_rc_t rc, void *ctx)
 {
   struct vnode *vp;
   int error;
@@ -108,6 +108,8 @@ vtree_create(struct vtree *vtree, struct vtreeops* ops,
   vtree->v_ops = ops;
   vtree->v_cur_wal_idx = 0;
   vtree->v_vp = vp;
+  vtree->v_callback = rc;
+  vtree->v_ctx = ctx;
   VTREE_INIT(vtree, root, ks);
   KASSERT(((btree_t)vtree->v_tree)->tr_ptr.size == VTREE_BLKSZ, ("Wrong size node for tree"));
   
@@ -141,6 +143,11 @@ wal_insert(vtree* tree, size_t keysize, uint64_t key, void* data)
 int
 vtree_insert(vtree* tree, uint64_t key, void* value)
 {
+  int error = 0;
+
+  diskptr_t oldroot = VTREE_GETROOT(tree);
+  diskptr_t newroot;
+
   size_t ks = VTREE_GETKEYSIZE(tree);
   if (tree->v_flags & VTREE_WITHWAL) {
     /* Checkpoint should also clear out the wal hopefully before this point */
@@ -149,12 +156,19 @@ vtree_insert(vtree* tree, uint64_t key, void* value)
     }
 
     wal_insert(tree, ks, key, value);
-    return 0;
+  } else {
+    error = VTREE_INSERT(tree, key, value);
   }
 
-  return VTREE_INSERT(tree, key, value);
+  newroot = VTREE_GETROOT(tree);
+  if (newroot.offset != oldroot.offset) {
+    tree->v_callback(tree->v_ctx, newroot);
+  }
+
+  return error;
 }
 
+/* TODO operationgs below need to use the WAL if specified */
 int
 vtree_bulkinsert(vtree* tree, kvp* keyvalues, size_t len)
 {
@@ -227,6 +241,7 @@ vtree_interface_init()
 
   btreeops.vtree_checkpoint = &btree_checkpoint;
   btreeops.vtree_getkeysize = &btree_getkeysize;
+  btreeops.vtree_getroot = &btree_getroot;
 
   /* Set the default */
   defaultops = &btreeops;

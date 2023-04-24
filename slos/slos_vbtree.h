@@ -136,5 +136,8 @@ btree_checkpoint(void* tree);
 size_t
 btree_getkeysize(void* treep);
 
+diskptr_t
+btree_getroot(void* treep);
+
 
 #endif

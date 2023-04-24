@@ -210,7 +210,7 @@ slos_checkpoint_vp(struct vnode *vp, int waitfor)
   int cur = 0;
 	struct vtree *tree = &SLSVP(vp)->sn_vtree;
   struct bufobj *bo = &vp->v_bufobj;
-  uint64_t *blknums = (uint64_t *)malloc(sizeof(uint64_t) * 1024, M_SLOS_SB, M_WAITOK);
+  uint64_t *blknums = (uint64_t *)malloc(sizeof(uint64_t) * bo->bo_dirty.bv_cnt, M_SLOS_SB, M_WAITOK);
 
 	ASSERT_VOP_LOCKED(vp, __func__);
 

@@ -364,7 +364,6 @@ slos_allocator_sync(struct slos *slos, struct slos_sb *newsb)
 	 * has been marked you can just stop that iteration. As you know all the
 	 * parents have been marked
 	 */
-
   vtree_checkpoint(OTREE(slos));
   vtree_checkpoint(STREE(slos));
 	/* int total_allocations = (vtree_dirty_cnt(OTREE(slos)) * 5) + */

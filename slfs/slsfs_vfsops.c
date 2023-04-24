@@ -506,11 +506,22 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	struct slos_node *svp;
 	struct slos_inode *ino;
 	struct timespec te;
+  uint64_t dirtycnt = 0;
+  uint64_t *dirtynodes = NULL;
 	diskptr_t ptr;
 	int error;
   if (closing)
     closing = MNT_WAIT;
 
+	MNT_VNODE_FOREACH_ACTIVE (vp, mp, mvp) {
+    if (vp->v_type != VCHR) {
+		  if (SLSVP(vp)->sn_status & SLOS_DIRTY)
+        dirtycnt++;
+    }
+    VI_UNLOCK(vp);
+  }
+
+  dirtynodes = (uint64_t *)malloc(sizeof(uint64_t) * dirtycnt, M_SLOS_SB, M_WAITOK);
 again:
 	/* Go through the list of vnodes attached to the filesystem. */
 	MNT_VNODE_FOREACH_ACTIVE (vp, mp, mvp) {
@@ -583,11 +594,19 @@ again:
 		ino = &svp->sn_ino;
 		DEBUG1(
 		    "Flushing inodes %p\n", slos.slsfs_inodes);
-		error = slos_checkpoint_vp(slos.slsfs_inodes, closing);
-		if (error) {
-			panic("slos_sync_vp failed to checkpoint");
-			return;
-		}
+    /* Sync the blocks BEFORE marking them COW so they will flush */
+    vn_fsync_buf(vp, closing);
+
+    /* Now mark their tree pointers as COW */
+    for (int i = 0; i < dirtycnt; i++) {
+      error = vtree_find(&svp->sn_vtree, dirtynodes[i], &ptr);
+      MPASS(error == 0);
+      ptr.flags = DPTR_COW;
+      error = vtree_insert(&svp->sn_vtree, dirtynodes[i], &ptr);
+      MPASS(error == 0);
+    }
+
+    free(dirtynodes, M_SLOS_SB);
 
 		/*
 		 * Allocate a new blk for the root inode write it and give it
