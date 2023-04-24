@@ -83,7 +83,7 @@ fbtree_execrc(struct fbtree *tree)
 }
 
 /*
- * Registers a callback for when the fbtree changes its root
+ * Registers a callback for when the fbtree changes its rootbtree.c
  */
 void
 fbtree_reg_rootchange(struct fbtree *tree, rootchange_t fn, void *ctx)

@@ -147,7 +147,7 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
 #ifdef DEBUG
   printf("BTnode create %lu %lu\n", ptr.offset, ptr.size);
 #endif
-  bp = getblk(node->n_tree->tr_vp, ptr.offset, VTREE_BLKSZ, 0, 0, 0);
+  bp = getblk(tree->tr_vp, ptr.offset, VTREE_BLKSZ, 0, 0, 0);
   MPASS(bp != NULL);
   VOP_UNLOCK(tree->tr_vp, LK_EXCLUSIVE);
   MPASS(bp->b_bcount == ptr.size);
@@ -875,6 +875,7 @@ btree_checkpoint(void* treep)
     /* Node is dead - clean up */
     if (node.n_len == 0) {
       bp->b_flags |= B_INVAL;
+		  bp->b_flags &= ~(B_MANAGED);
       brelse(bp);
     }
 

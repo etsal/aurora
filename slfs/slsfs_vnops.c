@@ -110,6 +110,8 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 	 * TODO: Need to figure out why some vnodes have 1 dirty btree node when
 	 * reclaimed
 	 */
+  error = vinvalbuf(vp, V_SAVE, 0, 0);
+  MPASS(error != 0);
 
 	/*
 	 * TODO:
@@ -117,8 +119,7 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 	 */
 	if (vp->v_type != VCHR) {
 		cache_purge(vp);
-		if (vp != slos.slsfs_inodes)
-			vfs_hash_remove(vp);
+		vfs_hash_remove(vp);
 		slos_vpfree(svp->sn_slos, svp);
 	}
 

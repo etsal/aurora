@@ -1195,16 +1195,37 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	ino = OIDTOSLSID(ino);
 
 	/* Make sure the inode does not already have a vnode. */
-	error = vfs_hash_get(mp, ino, LK_EXCLUSIVE, td, &vp, NULL, NULL);
-	if (error) {
+	error = vfs_hash_get(mp, ino, LK_EXCLUSIVE, td, vpp, NULL, NULL);
+	if (error || *vpp != NULL) {
 		return (error);
 	}
 
-	/* If we do have a vnode already, return it. */
-	if (vp != NULL) {
-		*vpp = vp;
-		return (0);
+
+	/* Get a new blank vnode. */
+	error = getnewvnode("slsfs", mp, &slsfs_vnodeops, &vp);
+	if (error) {
+		DEBUG("Problem getting new inode");
+		*vpp = NULL;
+		return (error);
 	}
+	/*
+	 * If the vnode is not the root, which is managed directly
+	 * by the SLOS, add it to the mountpoint.
+	 */
+	vn_lock(vp, LK_EXCLUSIVE);
+  error = insmntque(vp, mp);
+  if (error) {
+    DEBUG("Problem queing root into mount point");
+    *vpp = NULL;
+    return (error);
+  }
+
+  error = vfs_hash_insert(
+      vp, ino, LK_EXCLUSIVE, td, vpp, NULL, NULL);
+
+  if (error != 0 || *vpp != NULL) {
+    return (error);
+  }
 
 	/* Bring the inode in memory. */
 	error = slos_iopen(&slos, ino, &svnode);
@@ -1214,57 +1235,15 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 		return (error);
 	}
 
-	/* Get a new blank vnode. */
-	error = getnewvnode("slsfs", mp, &slsfs_vnodeops, &vp);
-	if (error) {
-		DEBUG("Problem getting new inode");
-		*vpp = NULL;
-		return (error);
-	}
-
-	/*
-	 * If the vnode is not the root, which is managed directly
-	 * by the SLOS, add it to the mountpoint.
-	 */
-	vn_lock(vp, LK_EXCLUSIVE);
-	if (ino != SLOS_INODES_ROOT) {
-		error = insmntque(vp, mp);
-		if (error) {
-			DEBUG("Problem queing root into mount point");
-			*vpp = NULL;
-			return (error);
-		}
-	}
-
 	svnode->sn_slos = &slos;
 	vp->v_data = svnode;
 	vp->v_bufobj.bo_ops = &bufops_slsfs;
 	vp->v_bufobj.bo_bsize = IOSIZE(svnode);
 	slsfs_init_vnode(vp, ino);
 
-	/* Again, if we're not the inode metanode, add bookkeeping. */
-	/*
-	 * XXX Why? This means we would get a different vnode every time
-	 * we try to open the metanode.
-	 */
-	*vpp = NULL;
-	if (ino != SLOS_INODES_ROOT) {
-		/*
-		 * Try to insert the new node into the table. We might have been
-		 * beaten to it by another process, in which case we reuse their
-		 * fresh vnode for the inode.
-		 */
-		error = vfs_hash_insert(
-		    vp, ino, LK_EXCLUSIVE, td, vpp, NULL, NULL);
-		if (error != 0) {
-			*vpp = NULL;
-			return (error);
-		}
-	}
 	DEBUG2("vget(%p) ino = %ld", vp, ino);
 	/* If we weren't beaten to it, propagate the new node to the caller. */
-	if (*vpp == NULL)
-		*vpp = vp;
+	*vpp = vp;
 
 	return (0);
 }
@@ -1281,7 +1260,7 @@ static struct vfsops slsfs_vfsops = { .vfs_init = slsfs_init,
 	.vfs_statfs = slsfs_statfs,
 	.vfs_mount = slsfs_mount,
 	.vfs_unmount = slsfs_unmount,
-	.vfs_vget = slsfs_vget,
+  .vfs_vget = slsfs_vget,
 	.vfs_sync = slsfs_sync };
 
 VFS_SET(slsfs_vfsops, slsfs, 0);

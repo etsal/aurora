@@ -111,7 +111,9 @@ vtree_create(struct vtree *vtree, struct vtreeops* ops,
   VTREE_INIT(vtree, root, ks);
   KASSERT(((btree_t)vtree->v_tree)->tr_ptr.size == VTREE_BLKSZ, ("Wrong size node for tree"));
   
-	lockinit(&vtree->bt_lock, PVFS, "Vtree Lock", 0, LK_CANRECURSE);
+	if (!lock_initialized(&vtree->bt_lock.lock_object)) {
+	  lockinit(&vtree->bt_lock, PVFS, "Vtree Lock", 0, LK_CANRECURSE);
+  }
 
   return error;
 }
@@ -204,7 +206,6 @@ void
 vtree_free(vtree *tree)
 {
 	tree->v_vp->v_data = NULL;
-	vnode_destroy_vobject(tree->v_vp);
 	tree->v_vp->v_op = &dead_vnodeops;
 
   if (tree->v_flags & VTREE_WITHWAL) {

@@ -299,6 +299,7 @@ error:
 void
 slos_vpfree(struct slos *slos, struct slos_node *vp)
 {
+  vtree_checkpoint(&vp->sn_vtree);
 	vtree_free(&vp->sn_vtree);
 	uma_zfree(slos_node_zone, vp);
 }
