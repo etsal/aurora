@@ -508,6 +508,8 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	struct timespec te;
 	diskptr_t ptr;
 	int error;
+  if (closing)
+    closing = MNT_WAIT
 
 again:
 	/* Go through the list of vnodes attached to the filesystem. */

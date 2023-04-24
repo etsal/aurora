@@ -201,7 +201,7 @@ slos_truncate(struct vnode *vp, size_t size)
 
 /* Checkpoint and Flush a vnode's data to the disk. */
 int
-slos_checkpoint_vp(struct vnode *vp, int release)
+slos_checkpoint_vp(struct vnode *vp, int waitfor)
 {
   struct buf *bp, *nbp;
   int error;
@@ -222,7 +222,7 @@ slos_checkpoint_vp(struct vnode *vp, int release)
   BO_UNLOCK(bo);
 
   /* Sync the blocks BEFORE marking them COW so they will flush */
-	vn_fsync_buf(vp, 0);
+	vn_fsync_buf(vp, waitfor);
 
   /* Now mark their tree pointers as COW */
   for (int i = 0; i < cur; i++) {

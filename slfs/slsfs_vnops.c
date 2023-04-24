@@ -101,6 +101,7 @@ slsfs_getattr(struct vop_getattr_args *args)
 static int
 slsfs_reclaim(struct vop_reclaim_args *args)
 {
+  int error;
 	struct vnode *vp = args->a_vp;
 	struct slos_node *svp = SLSVP(vp);
 	if (vp == slos.slsfs_inodes) {
