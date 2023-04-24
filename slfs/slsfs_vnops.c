@@ -101,31 +101,25 @@ slsfs_getattr(struct vop_getattr_args *args)
 static int
 slsfs_reclaim(struct vop_reclaim_args *args)
 {
-  int error;
+	struct slos_node *svp;
 	struct vnode *vp = args->a_vp;
-	struct slos_node *svp = SLSVP(vp);
+
 	if (vp == slos.slsfs_inodes) {
 		DEBUG("Special vnode trying to be reclaimed");
 	}
-	/* Keeping this here for now
-	 * TODO: Need to figure out why some vnodes have 1 dirty btree node when
-	 * reclaimed
-	 */
-  error = vinvalbuf(vp, V_SAVE, 0, 0);
-  MPASS(error != 0);
 
-	/*
-	 * TODO:
-	 * While rerunning seqwrite-4t-64k twice vfs_hash_remove blew up
-	 */
 	if (vp->v_type != VCHR) {
+	  svp = SLSVP(vp);
 		cache_purge(vp);
-		vfs_hash_remove(vp);
-		slos_vpfree(svp->sn_slos, svp);
+    if (vp != slos.slsfs_inodes)
+		  vfs_hash_remove(vp);
+
+    if (svp != NULL)
+		  slos_vpfree(svp->sn_slos, svp);
 	}
 
 	vp->v_data = NULL;
-	vnode_destroy_vobject(vp);
+  vnode_destroy_vobject(vp);
 
 	return (0);
 }

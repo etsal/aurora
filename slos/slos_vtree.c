@@ -205,9 +205,9 @@ vtree_dirty_cnt(vtree *tree)
 void
 vtree_free(vtree *tree)
 {
-	tree->v_vp->v_data = NULL;
-	tree->v_vp->v_op = &dead_vnodeops;
-
+  KASSERT(tree->v_vp->v_usecount == 1, ("FREE THIS TREE"));
+  vgone(tree->v_vp);
+  
   if (tree->v_flags & VTREE_WITHWAL) {
     free(tree->v_wal, M_SLOS_VTREE);
   }

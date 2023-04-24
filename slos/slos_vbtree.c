@@ -880,10 +880,23 @@ btree_checkpoint(void* treep)
     }
 
     btnode_mark_cow(&node);
-		bp->b_flags &= ~(B_MANAGED);
     bawrite(bp);
     BO_LOCK(bo);
 	}
+
+	TAILQ_FOREACH_SAFE (bp, &bo->bo_clean.bv_hd, b_bobufs, tbd) {
+		BUF_LOCK(bp, LK_EXCLUSIVE, NULL);
+    BO_UNLOCK(bo);
+		if (bp->b_flags & B_MANAGED) {
+			bp->b_flags &= ~(B_MANAGED);
+			brelse(bp);
+		} else {
+			BUF_UNLOCK(bp);
+		}
+		BO_LOCK(bo);
+	}
+
+
 
   bufobj_wwait(bo, 0, 0);
   BO_UNLOCK(bo);

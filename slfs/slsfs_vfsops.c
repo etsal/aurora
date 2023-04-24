@@ -509,7 +509,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	diskptr_t ptr;
 	int error;
   if (closing)
-    closing = MNT_WAIT
+    closing = MNT_WAIT;
 
 again:
 	/* Go through the list of vnodes attached to the filesystem. */
@@ -803,11 +803,7 @@ slsfs_free_system_vnode(struct vnode *vp)
 {
 	struct slos_node *svp;
 	svp = SLSVP(vp);
-	vrele(vp);
-
-	VOP_LOCK(vp, LK_EXCLUSIVE);
-	VOP_RECLAIM(vp, curthread);
-	VOP_UNLOCK(vp, 0);
+  vgone(vp);
 
 	return 0;
 }
@@ -1095,7 +1091,7 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	 */
 	slsfs_wakeup_syncer(1);
 
-	error = vflush(mp, 0, flags, curthread);
+	error = vflush(mp, 0, SKIPSYSTEM | flags, curthread);
 	if (error) {
 		printf("vflush failed with %d\n", error);
 		goto error;
@@ -1107,6 +1103,12 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	 */
 	slsfs_free_system_vnode(slos->slsfs_inodes);
 	slos->slsfs_inodes = NULL;
+
+	error = vflush(mp, 0, flags, curthread);
+  if (error) {
+		printf("vflush failed with %d, forcing closed\n", error);
+	  error = vflush(mp, 0, FORCECLOSE | flags, curthread);
+  }
 
 	DEBUG("Flushed all active vnodes");
 	/* Remove the mounted device. */
