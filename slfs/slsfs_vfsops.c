@@ -515,14 +515,20 @@ slsfs_checkpoint(struct mount *mp, int closing)
     closing = MNT_WAIT;
 
 	MNT_VNODE_FOREACH_ACTIVE (vp, mp, mvp) {
-    if (vp->v_type != VCHR) {
-		  if (SLSVP(vp)->sn_status & SLOS_DIRTY)
-        dirtycnt++;
-    }
+ 		if ((vp->v_vflag & VV_SYSTEM) ||
+		    ((vp->v_type != VDIR) && (vp->v_type != VREG) &&
+			(vp->v_type != VLNK)) ||
+		    (vp->v_data == NULL)) {
+      VI_UNLOCK(vp);
+			continue;
+		}
+		if (SLSVP(vp)->sn_status & SLOS_DIRTY)
+      dirtycnt += 1;
     VI_UNLOCK(vp);
   }
 
-  dirtynodes = (uint64_t *)malloc(sizeof(uint64_t) * dirtycnt, M_SLOS_SB, M_WAITOK);
+  if (dirtycnt)
+    dirtynodes = (uint64_t *)malloc(sizeof(uint64_t) * dirtycnt, M_SLOS_SB, M_WAITOK);
 again:
 	/* Go through the list of vnodes attached to the filesystem. */
 	MNT_VNODE_FOREACH_ACTIVE (vp, mp, mvp) {
@@ -574,6 +580,7 @@ again:
 			}
 
       dirtynodes[cur++] = SLSVP(vp)->sn_pid;
+      printf("Dirty VNODE %lu\n", SLSVP(vp)->sn_pid);
 		}
 
 		vput(vp);
@@ -584,9 +591,6 @@ again:
 	// Just a hack for now to get this thing working XXX Why is it a hack?
 	/* Sync the inode root itself. */
 	if (slos.slos_sb->sb_data_synced) {
-		error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
-		MPASS(error == 0);
-
 		DEBUG("Checkpointing the inodes btree");
 		/* 3 Sync Root Inodes and btree */
 		error = vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
@@ -601,7 +605,8 @@ again:
     vn_fsync_buf(slos.slsfs_inodes, closing);
 
     /* Now mark their tree pointers as COW */
-    for (int i = 0; i < dirtycnt; i++) {
+    for (uint64_t i = 0; i < dirtycnt; i++) {
+      printf("DIRTY INODES ARE %lu\n", dirtynodes[i]);
       error = vtree_find(&svp->sn_vtree, dirtynodes[i], &ptr);
       MPASS(error == 0);
       ptr.flags = DPTR_COW;
@@ -609,7 +614,9 @@ again:
       MPASS(error == 0);
     }
 
-    free(dirtynodes, M_SLOS_SB);
+    vtree_checkpoint(&svp->sn_vtree);
+
+
 
 		/*
 		 * Allocate a new blk for the root inode write it and give it
@@ -617,21 +624,12 @@ again:
 		 */
 		// Write out the root inode
 		DEBUG("Creating the new superblock");
-		ino->ino_blk = ptr.offset;
-
 		slos.slos_sb->sb_root.offset = ino->ino_blk;
 
 		bp = getblk(svp->sn_vtree.v_vp, ptr.offset, BLKSIZE(&slos), 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
 		bawrite(bp);
-
-		DEBUG("Checkpointing the checksum tree");
-		// Write out the checksum tree;
-		error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
-		if (error) {
-			panic("Problem with allocation");
-		}
 
 		DEBUG1("Root Dir at %lu",
 		    SLSVP(slos.slsfs_inodes)->sn_ino.ino_blk);
@@ -672,6 +670,9 @@ again:
 	} else {
 		slos.slos_sb->sb_attempted_checkpoints++;
 	}
+
+  if (dirtycnt)
+    free(dirtynodes, M_SLOS_SB);
 }
 
 uint64_t checkpointtime = 100;
