@@ -14,6 +14,8 @@
 #define INDEX_NULL ((uint16_t)-1)
 //#define DEBUG (1)
 
+#define BT_ISCOW(node) ((node)->n_epoch < slos.slos_sb->sb_epoch)
+
 typedef struct bpath
 {
   uint64_t p_len;
@@ -87,8 +89,7 @@ btnode_print(btnode_t node)
 static inline void
 btnode_dirty(btnode_t node)
 {
-  bdirty(node->n_bp);
-  node->n_bp->b_flags |= B_CACHE;
+  bdwrite(node->n_bp);
 }
 
 static void
@@ -126,7 +127,6 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
   VOP_UNLOCK(tree->tr_vp, 0);
   MPASS(bp->b_bcount == ptr.size);
 
-  bp->b_flags |= B_MANAGED;
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
@@ -153,7 +153,7 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
   MPASS(bp->b_bcount == ptr.size);
 
   vfs_bio_clrbuf(bp);
-  bp->b_flags |= B_MANAGED;
+  node->n_epoch = slos.slos_sb->sb_epoch;
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
@@ -616,12 +616,6 @@ btnode_delete(bpath_t path, uint64_t key, void* value)
   return 0;
 }
 
-static inline void
-btnode_mark_cow(btnode_t node)
-{
-  node->n_hdr.hdr_flags = BT_COW;
-}
-
 static int
 btnode_leaf_bulkinsert(btnode_t node,
                        kvp* keyvalues,
@@ -871,33 +865,20 @@ btree_checkpoint(void* treep)
   TAILQ_FOREACH_SAFE (bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
     BUF_LOCK(bp, LK_EXCLUSIVE, NULL);
 	  BO_UNLOCK(bo);
-
     btnode_wrap_bp(&node, tree, bp);
-    /* Node is dead - clean up */
-    if (node.n_len == 0) {
-      bp->b_flags |= B_INVAL;
-		  bp->b_flags &= ~(B_MANAGED);
-      brelse(bp);
-    } else {
-      btnode_mark_cow(&node);
-      bawrite(bp);
-    }
+    bawrite(bp);
     BO_LOCK(bo);
 	}
+
+  bufobj_wwait(bo, 0, 0);
 
 	TAILQ_FOREACH_SAFE (bp, &bo->bo_clean.bv_hd, b_bobufs, tbd) {
 		BUF_LOCK(bp, LK_EXCLUSIVE, NULL);
     BO_UNLOCK(bo);
-		if (bp->b_flags & B_MANAGED) {
-			bp->b_flags &= ~(B_MANAGED);
-		} else {
-      bremfree(bp);
-		}
 		brelse(bp);
 		BO_LOCK(bo);
 	}
 
-  bufobj_wwait(bo, 0, 0);
   BO_UNLOCK(bo);
 
   return (ptr);
