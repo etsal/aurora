@@ -237,7 +237,7 @@ slsfs_startupfs(struct mount *mp)
     slos.slos_sb->sb_epoch = 0;
   }
 
-	slos_allocator_init(&slos);
+	slos_allocator_init(&slos, new_start);
 	slsfs_inodes_init(mp, &slos, new_start);
 
 	/*

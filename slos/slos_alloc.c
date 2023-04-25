@@ -222,7 +222,7 @@ int slos_freebytes(SYSCTL_HANDLER_ARGS)
  * Initialize the in-memory allocator state at mount time.
  */
 int
-slos_allocator_init(struct slos *slos)
+slos_allocator_init(struct slos *slos, int new_start)
 {
 	struct slos_node *offt;
 	struct slos_node *sizet;
@@ -245,7 +245,7 @@ slos_allocator_init(struct slos *slos)
 	// Checksum tree is allocated first.
   uint64_t blks_per_tree = VTREE_BLKSZ / BLKSIZE(slos);
 	offset += 1 + blks_per_tree;
-	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
+	if (new_start) {
 		DEBUG1(
 		    "Bootstrapping Allocator for first time startup starting at offset %lu",
 		    offset);
@@ -301,7 +301,7 @@ slos_allocator_init(struct slos *slos)
 	 * initial values.
 	 * TODO Error handling for fbtree_insert().
 	 */
-	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
+	if (new_start) {
 		DEBUG("First time start up for allocator");
 		off = offset;
 		total = slos->slos_sb->sb_size - (offset * BLKSIZE(slos));

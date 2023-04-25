@@ -7,7 +7,7 @@
 #define OTREE(slos) (&((slos)->slos_alloc.a_offset->sn_vtree))
 #define STREE(slos) (&((slos)->slos_alloc.a_size->sn_vtree))
 
-int slos_allocator_init(struct slos *slos);
+int slos_allocator_init(struct slos *slos, int new_start);
 int uint64_t_comp(const void *k1, const void *k2);
 int slos_allocator_uninit(struct slos *slos);
 int slos_allocator_sync(struct slos *slos, struct slos_sb *newsb);
