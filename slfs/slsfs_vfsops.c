@@ -120,11 +120,11 @@ slsfs_uninit(struct vfsconf *vfsp)
  * filesystem and are fine if it fails (means it already exists).
  */
 static int
-slsfs_inodes_init(struct mount *mp, struct slos *slos)
+slsfs_inodes_init(struct mount *mp, struct slos *slos, int new_start)
 {
 	int error;
 
-	if (slos->slos_sb->sb_epoch == EPOCH_INVAL) {
+	if (new_start) {
 		DEBUG("Initializing root inode\n");
 		error = initialize_inode(
 		    slos, SLOS_INODES_ROOT, &slos->slos_sb->sb_root);
@@ -230,9 +230,15 @@ slsfs_startupfs(struct mount *mp)
 	 * bookkeeping.
 	 */
 
-	//slsfs_checksumtree_init(&slos);
+  int new_start = false;
+  /* We have to set our epoch so the allocator doesnt cause a copy on write fault */
+  if (slos.slos_sb->sb_epoch == EPOCH_INVAL) {
+    new_start = true;
+    slos.slos_sb->sb_epoch = 0;
+  }
+
 	slos_allocator_init(&slos);
-	slsfs_inodes_init(mp, &slos);
+	slsfs_inodes_init(mp, &slos, new_start);
 
 	/*
 	 * Start the threads, probably should have a sysctl to define number of
