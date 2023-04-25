@@ -77,7 +77,7 @@ int
 vtree_create(struct vtree *vtree, struct vtreeops* ops, 
     diskptr_t root, size_t ks, uint32_t v_flags, vtree_rc_t rc, void *ctx)
 {
-  struct vnode *vp;
+  struct vnode *vp = NULL;
   int error;
 
   KASSERT(root.size == VTREE_BLKSZ, ("Wrong size node for tree"));

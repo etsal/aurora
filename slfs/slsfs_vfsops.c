@@ -578,7 +578,7 @@ again:
 	// Just a hack for now to get this thing working XXX Why is it a hack?
 	/* Sync the inode root itself. */
 	if (slos.slos_sb->sb_data_synced) {
-		DEBUG("Checkpointing the inodes btree");
+		printf("Checkpointing the inodes vnode\n");
 		/* 3 Sync Root Inodes and btree */
 		error = vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 		if (error) {
@@ -597,10 +597,10 @@ again:
 		 * to the superblock
 		 */
 		// Write out the root inode
-		DEBUG("Creating the new superblock");
+		printf("Creating the new superblock\n");
 		slos.slos_sb->sb_root.offset = ino->ino_blk;
 
-		bp = getblk(svp->sn_vtree.v_vp, ptr.offset, BLKSIZE(&slos), 0, 0, 0);
+		bp = getblk(svp->sn_vtree.v_vp, ino->ino_blk, BLKSIZE(&slos), 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
 		bawrite(bp);
@@ -613,7 +613,7 @@ again:
 		slos.slos_sb->sb_index = (slos.slos_sb->sb_epoch) % 100;
 
 		/* 4 Sync the allocator */
-		DEBUG("Syncing the allocator");
+		printf("Syncing the allocator\n");
 		slos_allocator_sync(&slos, slos.slos_sb);
 		DEBUG2("Epoch %lu done at superblock index %u",
 		    slos.slos_sb->sb_epoch, slos.slos_sb->sb_index);

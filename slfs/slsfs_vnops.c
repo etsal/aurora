@@ -959,7 +959,7 @@ slsfs_strategy(struct vop_strategy_args *args)
       bp->b_blkno = ptr.offset;
     };
   } else {
-    printf("Write for btree at %lu\n", bp->b_lblkno);
+    printf("Write for btree at %p %lu\n", bp, bp->b_lblkno);
     bp->b_blkno = bp->b_lblkno;
   }
 

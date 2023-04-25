@@ -208,8 +208,9 @@ slos_checkpoint_vp(struct vnode *vp, int waitfor)
 
 	ASSERT_VOP_LOCKED(vp, __func__);
 
-  printf("Checkpoint 2\n");
+  printf("Checkpoint 2 %d\n", vp->v_type == VCHR);
 	vn_fsync_buf(vp, waitfor);
+  printf("Checkpoint 3 %d\n", vp->v_type == VCHR);
 	vtree_checkpoint(tree);
 
 	/*
