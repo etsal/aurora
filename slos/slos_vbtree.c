@@ -878,10 +878,10 @@ btree_checkpoint(void* treep)
       bp->b_flags |= B_INVAL;
 		  bp->b_flags &= ~(B_MANAGED);
       brelse(bp);
+    } else {
+      btnode_mark_cow(&node);
+      bawrite(bp);
     }
-
-    btnode_mark_cow(&node);
-    bawrite(bp);
     BO_LOCK(bo);
 	}
 
@@ -890,10 +890,10 @@ btree_checkpoint(void* treep)
     BO_UNLOCK(bo);
 		if (bp->b_flags & B_MANAGED) {
 			bp->b_flags &= ~(B_MANAGED);
-			brelse(bp);
 		} else {
-			BUF_UNLOCK(bp);
+      bremfree(bp);
 		}
+		brelse(bp);
 		BO_LOCK(bo);
 	}
 
