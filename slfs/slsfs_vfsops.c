@@ -507,6 +507,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	struct slos_inode *ino;
 	struct timespec te;
   uint64_t dirtycnt = 0;
+  uint64_t cur = 0;
   uint64_t *dirtynodes = NULL;
 	diskptr_t ptr;
 	int error;
@@ -571,6 +572,8 @@ again:
 				vput(vp);
 				return;
 			}
+
+      dirtynodes[cur++] = SLSVP(vp)->sn_pid;
 		}
 
 		vput(vp);
@@ -595,7 +598,7 @@ again:
 		DEBUG1(
 		    "Flushing inodes %p\n", slos.slsfs_inodes);
     /* Sync the blocks BEFORE marking them COW so they will flush */
-    vn_fsync_buf(vp, closing);
+    vn_fsync_buf(slos.slsfs_inodes, closing);
 
     /* Now mark their tree pointers as COW */
     for (int i = 0; i < dirtycnt; i++) {
