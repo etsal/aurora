@@ -96,7 +96,7 @@ vtree_create(struct vtree *vtree, struct vtreeops* ops,
 	vp->v_bufobj.bo_ops = &bufops_slsfs;
 	vp->v_bufobj.bo_bsize = slos.slos_sb->sb_bsize;
 	vp->v_type = VCHR;
-	vp->v_data = vp;
+	vp->v_data = vtree;
 	vp->v_vflag |= VV_SYSTEM;
 
 

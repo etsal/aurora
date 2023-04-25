@@ -941,7 +941,7 @@ slsfs_strategy(struct vop_strategy_args *args)
     MPASS(error == 0);
     if (bp->b_iocmd == BIO_WRITE) {
       /* This are on disk is marked as cow, or have not been allocated a block */
-      if ((ptr.flags & DPTR_COW) || (ptr.offset == 0)) {
+      if ((ptr.epoch < slos.slos_sb->sb_epoch) || (ptr.offset == 0)) {
         /* Allocate a new block */
         error = slos_blkalloc(&slos, ptr.size, &ptr);
         MPASS(error == 0);

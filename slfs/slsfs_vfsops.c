@@ -512,29 +512,11 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	struct slos_node *svp;
 	struct slos_inode *ino;
 	struct timespec te;
-  uint64_t dirtycnt = 0;
-  uint64_t cur = 0;
-  uint64_t *dirtynodes = NULL;
 	diskptr_t ptr;
 	int error;
   if (closing)
     closing = MNT_WAIT;
 
-	MNT_VNODE_FOREACH_ACTIVE (vp, mp, mvp) {
- 		if ((vp->v_vflag & VV_SYSTEM) ||
-		    ((vp->v_type != VDIR) && (vp->v_type != VREG) &&
-			(vp->v_type != VLNK)) ||
-		    (vp->v_data == NULL)) {
-      VI_UNLOCK(vp);
-			continue;
-		}
-		if (SLSVP(vp)->sn_status & SLOS_DIRTY)
-      dirtycnt += 1;
-    VI_UNLOCK(vp);
-  }
-
-  if (dirtycnt)
-    dirtynodes = (uint64_t *)malloc(sizeof(uint64_t) * dirtycnt, M_SLOS_SB, M_WAITOK);
 again:
 	/* Go through the list of vnodes attached to the filesystem. */
 	MNT_VNODE_FOREACH_ACTIVE (vp, mp, mvp) {
@@ -569,6 +551,7 @@ again:
 		}
 
 		if (SLSVP(vp)->sn_status & SLOS_DIRTY) {
+      printf("Dirty VNODE %lu\n", SLSVP(vp)->sn_pid);
 			/* Step 1 and 2 Sync data and mark underlying Btree Copy
 			 * on write*/
 			error = slos_checkpoint_vp(vp, closing);
@@ -585,8 +568,6 @@ again:
 				return;
 			}
 
-      dirtynodes[cur++] = SLSVP(vp)->sn_pid;
-      printf("Dirty VNODE %lu\n", SLSVP(vp)->sn_pid);
 		}
 
 		vput(vp);
@@ -608,21 +589,8 @@ again:
 		DEBUG1(
 		    "Flushing inodes %p\n", slos.slsfs_inodes);
     /* Sync the blocks BEFORE marking them COW so they will flush */
-    vn_fsync_buf(slos.slsfs_inodes, closing);
-
-    /* Now mark their tree pointers as COW */
-    for (uint64_t i = 0; i < dirtycnt; i++) {
-      printf("DIRTY INODES ARE %lu\n", dirtynodes[i]);
-      error = vtree_find(&svp->sn_vtree, dirtynodes[i], &ptr);
-      MPASS(error == 0);
-      ptr.flags = DPTR_COW;
-      error = vtree_insert(&svp->sn_vtree, dirtynodes[i], &ptr);
-      MPASS(error == 0);
-    }
-
-    vtree_checkpoint(&svp->sn_vtree);
-
-
+		error = slos_checkpoint_vp(slos.slsfs_inodes, closing);
+    MPASS(error == 0);
 
 		/*
 		 * Allocate a new blk for the root inode write it and give it
@@ -676,9 +644,6 @@ again:
 	} else {
 		slos.slos_sb->sb_attempted_checkpoints++;
 	}
-
-  if (dirtycnt)
-    free(dirtynodes, M_SLOS_SB);
 }
 
 uint64_t checkpointtime = 100;

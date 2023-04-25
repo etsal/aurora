@@ -127,6 +127,7 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
   VOP_UNLOCK(tree->tr_vp, 0);
   MPASS(bp->b_bcount == ptr.size);
 
+  bp->b_flags |= B_CLUSTEROK;
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
@@ -149,6 +150,8 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
 #endif
   bp = getblk(tree->tr_vp, ptr.offset, VTREE_BLKSZ, 0, 0, 0);
   MPASS(bp != NULL);
+  bp->b_flags |= B_CLUSTEROK;
+
   VOP_UNLOCK(tree->tr_vp, LK_EXCLUSIVE);
   MPASS(bp->b_bcount == ptr.size);
 
@@ -849,7 +852,6 @@ btree_find(void* treep, uint64_t key, void* value)
 diskptr_t
 btree_checkpoint(void* treep)
 {
-  btnode node;
   struct buf *bp, *tbd;
 
   btree_t tree = (btree_t)treep;
@@ -862,22 +864,14 @@ btree_checkpoint(void* treep)
 
 	BO_LOCK(bo);
 
-  TAILQ_FOREACH_SAFE (bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
+  TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
     BUF_LOCK(bp, LK_EXCLUSIVE, NULL);
 	  BO_UNLOCK(bo);
-    btnode_wrap_bp(&node, tree, bp);
-    bawrite(bp);
+    vfs_bio_awrite(bp);
     BO_LOCK(bo);
 	}
 
   bufobj_wwait(bo, 0, 0);
-
-	TAILQ_FOREACH_SAFE (bp, &bo->bo_clean.bv_hd, b_bobufs, tbd) {
-		BUF_LOCK(bp, LK_EXCLUSIVE, NULL);
-    BO_UNLOCK(bo);
-		brelse(bp);
-		BO_LOCK(bo);
-	}
 
   BO_UNLOCK(bo);
 
