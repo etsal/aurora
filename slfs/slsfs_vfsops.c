@@ -374,6 +374,9 @@ slsfs_valloc(
 		return (error);
 	}
 
+  printf("VALLOC FOR %lu\n", SLSVP(vp)->sn_pid);
+	SLSVP(vp)->sn_status |= SLOS_DIRTY;
+
 	/* Inherit group id from parent directory */
 	SLSVP(vp)->sn_ino.ino_gid = SLSVP(dvp)->sn_ino.ino_gid;
 	if (creds != NULL) {
@@ -511,7 +514,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 {
 	struct vnode *vp, *mvp = NULL;
 	struct buf *bp;
-	struct slos_node *svp;
+	struct slos_node *svp = NULL;
 	struct slos_inode *ino;
 	struct timespec te;
 	diskptr_t ptr;
@@ -522,7 +525,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 
 again:
 	/* Go through the list of vnodes attached to the filesystem. */
-	MNT_VNODE_FOREACH_ACTIVE (vp, mp, mvp) {
+	MNT_VNODE_FOREACH_ALL (vp, mp, mvp) {
 		/* If we can't get a reference, the vnode is probably dead. */
 		if (vp->v_type == VNON) {
 			VI_UNLOCK(vp);
@@ -554,7 +557,6 @@ again:
 		}
 
 		if (SLSVP(vp)->sn_status & SLOS_DIRTY) {
-      printf("Dirty VNODE %lu\n", SLSVP(vp)->sn_pid);
 			/* Step 1 and 2 Sync data and mark underlying Btree Copy
 			 * on write*/
 			error = slos_checkpoint_vp(vp, closing);
@@ -563,13 +565,17 @@ again:
 				return;
 			}
 
-			/* Sync of data and btree complete - unmark them and
-			 * update the root and dirty the root*/
-			error = slos_update(SLSVP(vp));
-			if (error) {
-				vput(vp);
-				return;
-			}
+      vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
+
+      error = slsfs_retrieve_buf(slos.slsfs_inodes, SLSVP(vp)->sn_pid * BLKSIZE(&slos), 
+          BLKSIZE(&slos), UIO_READ, 0, &bp);
+      MPASS(error == 0);
+
+      KASSERT(!SLS_ISWAL(slos.slsfs_inodes),
+          ("slsfs_inodes should not be marked as a WAL object"));
+      memcpy(bp->b_data, &SLSVP(vp)->sn_ino, sizeof(SLSVP(vp)->sn_ino));
+      bdwrite(bp);
+	    VOP_UNLOCK(slos.slsfs_inodes, 0);
       isdirty += 1;
 		}
 
@@ -1243,7 +1249,6 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	slsfs_init_vnode(vp, ino);
 
 	printf("vget(%p) ino = %ld\n", vp, ino);
-	/* If we weren't beaten to it, propagate the new node to the caller. */
 	*vpp = vp;
 
 	return (0);

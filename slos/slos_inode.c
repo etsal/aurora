@@ -455,29 +455,7 @@ slos_updatetime(struct slos_inode *ino)
 int
 slos_update(struct slos_node *svp)
 {
-	int error;
-	struct buf *bp;
-
 	slos_updatetime(&svp->sn_ino);
-
-	vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
-
-  error = slsfs_retrieve_buf(slos.slsfs_inodes, svp->sn_pid * IOSIZE(svp), 
-      IOSIZE(svp), UIO_READ, 0, &bp);
-	if (error) {
-		VOP_UNLOCK(slos.slsfs_inodes, 0);
-		return (error);
-	}
-
-	KASSERT(!SLS_ISWAL(slos.slsfs_inodes),
-	    ("slsfs_inodes should not be marked as a WAL object"));
-	memcpy(bp->b_data, &svp->sn_ino, sizeof(svp->sn_ino));
-  printf("Updating VP %lu\n", svp->sn_pid);
-	bawrite(bp);
-	SLSVP(slos.slsfs_inodes)->sn_status |= SLOS_DIRTY;
-
-	VOP_UNLOCK(slos.slsfs_inodes, 0);
-
 	return (0);
 }
 
