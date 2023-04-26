@@ -2298,7 +2298,10 @@ fnode_init(struct fbtree *tree, bnode_ptr ptr, struct fnode **fn)
 }
 
 /*
- * Initialize a global SLOS btree. Used by the allocator and checksum btrees.
+ * Initialize a global SLOS btree. Used by the allocator.
+ * We only use this for our allocator.
+ *
+ * TODO: Remake allocator to re-enable COW
  */
 int
 fbtree_sysinit(struct slos *slos, size_t offset, diskptr_t *ptr)

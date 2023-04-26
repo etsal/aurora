@@ -130,7 +130,7 @@ int slos_svpimport(
 int slos_vpexport(struct slos *slos, struct slos_node *vp);
 void slos_vpfree(struct slos *slos, struct slos_node *vp);
 int slos_test_inode(void);
-void slsfs_root_rc(void *ctx, bnode_ptr p);
+int inode_btree_rootchange(void *ctx, diskptr_t ptr);
 
 int slos_svpalloc(struct slos *slos, mode_t mode, uint64_t *slsidp);
 

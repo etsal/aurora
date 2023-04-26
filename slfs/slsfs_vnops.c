@@ -952,12 +952,11 @@ slsfs_strategy(struct vop_strategy_args *args)
       } else {
         printf("Not COW for %p at %lu\n", vp, bp->b_lblkno);
       }
-
-
       atomic_add_64(
           &slos.slos_sb->sb_data_synced, bp->b_bcount);
-      bp->b_blkno = ptr.offset;
-    };
+    }
+
+    bp->b_blkno = ptr.offset;
   } else {
     printf("Write for btree at %p %lu\n", bp, bp->b_lblkno);
     bp->b_blkno = bp->b_lblkno;

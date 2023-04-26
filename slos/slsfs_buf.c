@@ -79,7 +79,7 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
   /* Round up to our minimum size so we dont read less the a sector size */
   size = roundup(size, IOSIZE(svp));
 
-  /* Error = 0 on finding the entry */
+  /* If we error that means no entry was found */
 	error = slsfs_lookupbln(svp, bno, &ptr);
 	if (error != 0) {
 		return slsfs_buf_insert(vp, &ptr, bno, size, rw, gbflag, bp);
@@ -97,6 +97,7 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 		if (*bp == NULL)
 			panic("LINE %d: null bp for %lu, %lu", __LINE__, bno,
 			    size);
+    printf("POSSIBLE ERROR SLSFS BREAD %d\n", error);
 	}
 
 	return (error);

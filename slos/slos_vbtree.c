@@ -16,6 +16,7 @@
 
 #define BT_ISCOW(node) ((node)->n_epoch != slos.slos_sb->sb_epoch)
 #define BT_DONT_COW(node) ((node)->n_epoch == slos.slos_sb->sb_epoch)
+#define BT_COW_DISABLED(node) ((node)->n_tree->tr_flags & VTREE_NOCOW))
 
 typedef struct bpath
 {
@@ -203,9 +204,6 @@ path_cow(bpath_t path)
         idx = path->p_indexes[i];
         /* We are the root so lets update our own parent ptr as well as save the
          * old tree */
-      } else {
-        /* Init the old tree to be passed back to the user */
-        /* TODO: Update any consumer that this root has changed */
       }
 
       printf("OLD %lu\n", path->p_nodes[i].n_ptr.offset);
@@ -463,7 +461,7 @@ static void
 btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
 {
   KASSERT(BT_ISLEAF(node), ("Node should be a leaf"));
-  KASSERT(!BT_ISCOW(node), ("Node should not be COW"));
+  KASSERT(!BT_ISCOW(node) || BT_COW_DISABLED(node), ("Node should not be COW"));
   int num_to_move = node->n_len - idx;
   if (num_to_move > 0) {
     memmove(
@@ -491,7 +489,7 @@ static void
 btnode_leaf_update(btnode_t node, int idx, void* value)
 {
   KASSERT(BT_ISLEAF(node), ("Node should be a leaf"));
-  KASSERT(!BT_ISCOW(node), ("Node should not be COW"));
+  KASSERT(!BT_ISCOW(node) || BT_COW_DISABLED(node), ("Node should not be COW"));
   memcpy(&node->n_ch[idx + 1], value, BT_VALSZ(node));
   btnode_dirty(node);
 
@@ -516,7 +514,7 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
    * If node is COW'd this means the entire path leading
    * to this node must be COW'd
    * */
-  if (BT_ISCOW(node)) {
+  if (BT_ISCOW(node) && !BT_COW_DISABLED(node)) {
     path_cow(path);
     KASSERT(!BT_ISCOW(node), ("Should not longer be COW"));
   }
@@ -631,7 +629,7 @@ btnode_leaf_bulkinsert(btnode_t node,
                        int64_t max_key)
 {
   KASSERT(BT_ISLEAF(node), ("Node should be a leaf"));
-  KASSERT(!BT_ISCOW(node), ("Node should not be COW"));
+  KASSERT(!BT_ISCOW(node) || BT_COW_DISABLED(node), ("Node should not be COW"));
   int keys_i = 0;
   int node_i = 0;
   int inserted = 0;
@@ -722,7 +720,7 @@ btnode_bulkinsert(bpath_t path, kvp** keyvalues, size_t* len, uint64_t max_key)
 
     /* Function will update len for us and tell us by how much
      * through the returned inserted variable */
-    if (BT_ISCOW(cur)) {
+    if (BT_ISCOW(cur) && !BT_COW_DISABLED(node)) {
       path_cow(path);
     }
 
@@ -778,7 +776,7 @@ btree_bulkinsert(void* treep, kvp* keyvalues, size_t len)
 }
 
 int
-btree_init(void* tree_ptr, struct vnode *vp, diskptr_t ptr, size_t value_size)
+btree_init(void* tree_ptr, struct vnode *vp, diskptr_t ptr, size_t value_size, uint32_t flags)
 {
   btree_t tree = (btree_t)tree_ptr;
 
@@ -786,10 +784,10 @@ btree_init(void* tree_ptr, struct vnode *vp, diskptr_t ptr, size_t value_size)
 #ifdef DEBUG
   printf("[Btree Init] %lu\n", ptr.size);
 #endif
-
   tree->tr_ptr = ptr;
   tree->tr_vs = value_size;
   tree->tr_vp = vp;
+  tree->tr_flags = flags;
 
   return 0;
 }

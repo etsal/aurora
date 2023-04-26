@@ -110,7 +110,7 @@ vtree_create(struct vtree *vtree, struct vtreeops* ops,
   vtree->v_vp = vp;
   vtree->v_callback = rc;
   vtree->v_ctx = ctx;
-  VTREE_INIT(vtree, root, ks);
+  VTREE_INIT(vtree, root, ks, v_flags);
   KASSERT(((btree_t)vtree->v_tree)->tr_ptr.size == VTREE_BLKSZ, ("Wrong size node for tree"));
   
 	if (!lock_initialized(&vtree->bt_lock.lock_object)) {

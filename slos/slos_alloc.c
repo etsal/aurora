@@ -267,14 +267,21 @@ slos_allocator_init(struct slos *slos, int new_start)
 	DEBUG("Initing Allocator");
 	/* Create the in-memory vnodes from the on-disk state. */
 	error = slos_svpimport(slos, offbl, true, &offt);
-  /* Have to readjust the trees to use uint64_t as values */
-  VTREE_INIT(&offt->sn_vtree, offt->sn_ino.ino_btree, sizeof(uint64_t));
-	KASSERT(error == 0,
-	    ("importing allocator offset tree failed with %d", error));
+  MPASS(error == 0);
+
+  /* DISABLING COW FOR NOW
+   * TODO: Remake allocator to allow for COW allocations
+   * Have to readjust the trees to use uint64_t as values 
+   */
+  vtree_create(&offt->sn_vtree, defaultops, offt->sn_ino.ino_btree, 
+      sizeof(uint64_t), VTREE_NOCOW, &inode_btree_rootchange, offt);
+
+
 	error = slos_svpimport(slos, sizebl, true, &sizet);
-  VTREE_INIT(&sizet->sn_vtree, sizet->sn_ino.ino_btree, sizeof(uint64_t));
-	KASSERT(error == 0,
-	    ("importing allocator size tree failed with %d", error));
+  MPASS(error == 0);
+  /* Have to readjust the trees to use uint64_t as values */
+  vtree_create(&sizet->sn_vtree, defaultops, sizet->sn_ino.ino_btree, 
+      sizeof(uint64_t), VTREE_NOCOW, &inode_btree_rootchange, sizet);
 
 	MPASS(offt && sizet);
 	// This is a remount so we must free the allocator slos_nodes as they

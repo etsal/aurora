@@ -36,7 +36,7 @@ typedef struct kvp
   unsigned char data[BT_MAX_VALUE_SIZE];
 } kvp;
 
-typedef int (*vtree_init_t)(void* tree, struct vnode *vp, diskptr_t key, size_t value_size);
+typedef int (*vtree_init_t)(void* tree, struct vnode *vp, diskptr_t key, size_t value_size, uint32_t flags);
 
 /* Write ops */
 typedef int (*vtree_insert_t)(void* tree, uint64_t key, void* value);
@@ -79,6 +79,7 @@ struct vtreeops
 
 #define VTREE_WITHWAL (0x1)
 #define VTREE_WALBULK (0x2)
+#define VTREE_NOCOW (0x4)
 
 #define VTREE_BASETREE (128)
 #define VTREE_LOCK(tree, flags) (lockmgr(&(tree)->bt_lock, flags, 0))
@@ -102,8 +103,8 @@ typedef struct vtree
 	struct lock bt_lock;
 } vtree;
 
-#define VTREE_INIT(tree, ptr, keysize)                                         \
-  ((tree)->v_ops->vtree_init((void *)(tree)->v_tree, (tree)->v_vp, ptr, keysize))
+#define VTREE_INIT(tree, ptr, keysize, flags)                                         \
+  ((tree)->v_ops->vtree_init((void *)(tree)->v_tree, (tree)->v_vp, ptr, keysize, flags))
 
 #define VTREE_INSERT(tree, key, value)                                         \
   ((tree)->v_ops->vtree_insert((void *)(tree)->v_tree, key, value))

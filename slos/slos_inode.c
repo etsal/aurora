@@ -166,25 +166,6 @@ compare_vnode_t(const void *k1, const void *k2)
 }
 
 /*
- * Have the in-memory root inode point to its new position in the btree.
- * This callback does not update the on-disk metadata for the root inode
- * to avoid recursion. Doing so would prevent us from marking the whole
- * FS as clean, e.g., during unmount.
- *
- * The problem: We call this function when we create a COW snapshot, which
- * is our only way to actually flush data. The whole file system, _including_
- * the root inode, must be clean after COW . If we call slos_update here like
- * for regular inodes, we are dirtying the root inode immediately after marking
- * it as COW.
- */
-void
-slsfs_root_rc(void *ctx, bnode_ptr p)
-{
-	struct slos_node *svp = (struct slos_node *)ctx;
-	svp->sn_ino.ino_btree.offset = p;
-}
-
-/*
  * Measure the bytes of data occupied by an imported file.
  * Ignores the data occupied by the backing btrees.
  */
@@ -214,7 +195,7 @@ slos_svpsize(struct slos_node *svp)
 	return (0);
 }
 
-static int
+int
 inode_btree_rootchange(void *ctx, diskptr_t ptr) {
   struct slos_node *svp = (struct slos_node *)ctx;
   printf("Inode %lu ROOT CHANGE TO %lu\n", svp->sn_pid, ptr.offset);
@@ -480,8 +461,8 @@ slos_update(struct slos_node *svp)
 
 	vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 
-	error = slsfs_bread(
-	    slos.slsfs_inodes, svp->sn_pid, IOSIZE(svp), NULL, 0, &bp);
+  error = slsfs_retrieve_buf(slos.slsfs_inodes, svp->sn_pid, 
+      IOSIZE(svp), UIO_READ, 0, &bp);
 	if (error) {
 		VOP_UNLOCK(slos.slsfs_inodes, 0);
 		return (error);

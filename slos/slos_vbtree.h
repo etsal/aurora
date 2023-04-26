@@ -105,10 +105,11 @@ typedef struct btree
   diskptr_t tr_ptr;
   size_t tr_vs;
   struct vnode *tr_vp;
+  uint32_t tr_flags;
 } btree;
 
 int
-btree_init(void* tree, struct vnode *vp, diskptr_t ptr, size_t value_size);
+btree_init(void* tree, struct vnode *vp, diskptr_t ptr, size_t value_size, uint32_t flags);
 int
 btree_insert(void* tree, uint64_t key, void* value);
 int
