@@ -129,13 +129,11 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
   MPASS(error == 0);
   VOP_UNLOCK(tree->tr_vp, 0);
   MPASS(bp->b_bcount == ptr.size);
-  printf("Initing btnode %lu %lu %p\n", ptr.offset, ptr.size, bp);
 
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
   node->n_ptr = ptr;
-  btnode_print(node);
 }
 
 /* Node is locked exclusively on create */
@@ -206,8 +204,6 @@ path_cow(bpath_t path)
          * old tree */
       }
 
-      printf("OLD %lu\n", path->p_nodes[i].n_ptr.offset);
-      printf("CREATING BTNODE\n");
       btnode_create(&path->p_nodes[i], tmp.n_tree, tmp.n_type);
 
       /* Perform the copy of data or however we choose to transfer it over */
@@ -871,7 +867,6 @@ btree_checkpoint(void* treep)
   TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
     error = BUF_LOCK(bp, LK_EXCLUSIVE | LK_INTERLOCK, BO_LOCKPTR(bo));
     MPASS(error == 0);
-    printf("BP %p %lu \n", bp, bp->b_lblkno);
     bremfree(bp);
     bawrite(bp);
     BO_LOCK(bo);

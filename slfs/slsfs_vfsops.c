@@ -599,9 +599,9 @@ again:
 		 * to the superblock
 		 */
 		// Write out the root inode
-		printf("Creating the new superblock\n");
 		slos.slos_sb->sb_root.offset = ino->ino_blk;
 
+		DEBUG("Syncing Inodes Tree\n");
 		bp = getblk(svp->sn_vtree.v_vp, ino->ino_blk, BLKSIZE(&slos), 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
@@ -612,10 +612,9 @@ again:
 		DEBUG1("Inodes File at %lu", slos.slos_sb->sb_root.offset);
 		MPASS(ptr.offset != slos.slos_sb->sb_root.offset);
 
-		slos.slos_sb->sb_index = (slos.slos_sb->sb_epoch) % 100;
-
+		
 		/* 4 Sync the allocator */
-		printf("Syncing the allocator\n");
+		DEBUG("Syncing the allocator\n");
 		slos_allocator_sync(&slos, slos.slos_sb);
 		DEBUG2("Epoch %lu done at superblock index %u",
 		    slos.slos_sb->sb_epoch, slos.slos_sb->sb_index);
@@ -627,6 +626,9 @@ again:
 		    slos.slos_sb->sb_ssize, 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, slos.slos_sb, sizeof(struct slos_sb));
+
+    printf("Creating the new superblock\n");
+		slos.slos_sb->sb_index = (slos.slos_sb->sb_epoch) % 100;
 
 		nanotime(&te);
 		slos.slos_sb->sb_time = te.tv_sec;

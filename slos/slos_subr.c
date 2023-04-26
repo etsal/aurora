@@ -203,14 +203,11 @@ slos_truncate(struct vnode *vp, size_t size)
 int
 slos_checkpoint_vp(struct vnode *vp, int waitfor)
 {
-  printf("Checkpoint 1 %p\n", vp);
 	struct vtree *tree = &SLSVP(vp)->sn_vtree;
 
 	ASSERT_VOP_LOCKED(vp, __func__);
 
-  printf("Checkpoint 2 %d\n", vp->v_type == VCHR);
 	vn_fsync_buf(vp, waitfor);
-  printf("Checkpoint 3 %d\n", vp->v_type == VCHR);
 	vtree_checkpoint(tree);
 
 	/*
@@ -219,7 +216,6 @@ slos_checkpoint_vp(struct vnode *vp, int waitfor)
 	 * which means we need to update the time again. Avoid this
 	 * infinite loop by breaking out.
 	 */
-  printf("Checkpoint 4\n");
 	SLSVP(vp)->sn_status &= ~(SLOS_DIRTY);
 
 	return (0);

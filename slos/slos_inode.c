@@ -235,7 +235,6 @@ slos_svpimport(
 	} else {
 		VOP_LOCK(slos->slsfs_inodes, LK_EXCLUSIVE);
     error = slsfs_retrieve_buf(slos->slsfs_inodes, svpid, BLKSIZE(slos), UIO_READ, 0, &bp);
-    printf("Error retrieving buf for inode %lu\n", svpid);
 		VOP_UNLOCK(slos->slsfs_inodes, 0);
 		if (error != 0)
 			goto error;
@@ -307,7 +306,7 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	struct slos_node *svp = SLSVP(root_vp);
 	size_t blksize = IOSIZE(svp);
 
-  DEBUG1("Creating Inode %lu\n", svpid);
+  printf("Creating Inode %lu\n", svpid);
 	// For now we will use the blkno for our svpids
 	VOP_LOCK(root_vp, LK_EXCLUSIVE);
 	error = vtree_find(&svp->sn_vtree, svpid, &ptr);

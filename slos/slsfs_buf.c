@@ -97,7 +97,6 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 		if (*bp == NULL)
 			panic("LINE %d: null bp for %lu, %lu", __LINE__, bno,
 			    size);
-    printf("POSSIBLE ERROR SLSFS BREAD %d\n", error);
 	}
 
 	return (error);
