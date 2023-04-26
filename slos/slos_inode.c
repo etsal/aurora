@@ -314,7 +314,7 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 		return (EEXIST);
 	}
 
-  printf("Creating Inode %lu\n", svpid);
+  DEBUG1("Creating Inode %lu\n", svpid);
 
   ptr.size = blksize;
   ptr.offset = 0;

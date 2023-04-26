@@ -237,7 +237,7 @@ slsfs_startupfs(struct mount *mp)
     slos.slos_sb->sb_epoch = 0;
   }
 
-  printf("Starting up FS with super block %u\n", slos.slos_sb->sb_index);
+  DEBUG1("Starting up FS with super block %u\n", slos.slos_sb->sb_index);
 
 	slos_allocator_init(&slos, new_start);
 	slsfs_inodes_init(mp, &slos, new_start);
@@ -374,7 +374,6 @@ slsfs_valloc(
 		return (error);
 	}
 
-  printf("VALLOC FOR %lu\n", SLSVP(vp)->sn_pid);
 	SLSVP(vp)->sn_status |= SLOS_DIRTY;
 
 	/* Inherit group id from parent directory */
@@ -587,7 +586,7 @@ again:
 	// Just a hack for now to get this thing working XXX Why is it a hack?
 	/* Sync the inode root itself. */
 	if (isdirty) {
-		printf("Checkpointing the inodes vnode\n");
+		DEBUG("Checkpointing the inodes vnode\n");
 		/* 3 Sync Root Inodes and btree */
 		error = vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 		if (error) {
@@ -627,14 +626,14 @@ again:
 		    slos.slos_sb->sb_epoch, slos.slos_sb->sb_index);
 		SLSVP(slos.slsfs_inodes)->sn_status &= ~(SLOS_DIRTY);
 
-    printf("Checkpointing super block at %u\n", slos.slos_sb->sb_index);
+    DEBUG1("Checkpointing super block at %u\n", slos.slos_sb->sb_index);
 		/* Flush the current superblock itself. */
 		bp = getblk(slos.slos_vp, slos.slos_sb->sb_index,
 		    slos.slos_sb->sb_ssize, 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, slos.slos_sb, sizeof(struct slos_sb));
 
-    printf("Creating the new superblock\n");
+    DEBUG("Creating the new superblock\n");
 		slos.slos_sb->sb_index = (slos.slos_sb->sb_epoch) % 100;
 
 		nanotime(&te);
@@ -1248,7 +1247,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	vp->v_bufobj.bo_bsize = IOSIZE(svnode);
 	slsfs_init_vnode(vp, ino);
 
-	printf("vget(%p) ino = %ld\n", vp, ino);
+	DEBUG2("vget(%p) ino = %ld\n", vp, ino);
 	*vpp = vp;
 
 	return (0);
