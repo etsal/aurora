@@ -14,7 +14,8 @@
 #define INDEX_NULL ((uint16_t)-1)
 //#define DEBUG (1)
 
-#define BT_ISCOW(node) ((node)->n_epoch < slos.slos_sb->sb_epoch)
+#define BT_ISCOW(node) ((node)->n_epoch != slos.slos_sb->sb_epoch)
+#define BT_DONT_COW(node) ((node)->n_epoch == slos.slos_sb->sb_epoch)
 
 typedef struct bpath
 {
@@ -193,7 +194,7 @@ path_cow(bpath_t path)
   for (int i = 0; i < path->p_len; i++) {
     /* Check if node is not already COWed */
     tmp = path->p_nodes[i];
-    if (!BT_ALREADY_COW(&tmp)) {
+    if (!BT_DONT_COW(&tmp)) {
 
       /* Grab our index in our parent */
       if (i > 0) {
@@ -206,6 +207,8 @@ path_cow(bpath_t path)
         /* TODO: Update any consumer that this root has changed */
       }
 
+      printf("OLD %lu\n", path->p_nodes[i].n_ptr.offset);
+      printf("CREATING BTNODE\n");
       btnode_create(&path->p_nodes[i], tmp.n_tree, tmp.n_type);
 
       /* Perform the copy of data or however we choose to transfer it over */
@@ -218,13 +221,13 @@ path_cow(bpath_t path)
         /* Make sure we update our root ptr in our main tree datastructure */
         tree->tr_ptr = path->p_nodes[i].n_ptr;
       }
+      printf("NEW %lu\n", path->p_nodes[i].n_ptr.offset);
 
       /* We must invalidate the buffer to insure it never writes */
       tmp.n_bp->b_flags |= B_INVAL;
       brelse(tmp.n_bp);
 
       /* Turn of cow on the node and dirty the node */
-      BT_FRESH_COW(&path->p_nodes[i]);
       btnode_dirty(&path->p_nodes[i]);
     }
   }
@@ -514,6 +517,7 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
    * */
   if (BT_ISCOW(node)) {
     path_cow(path);
+    KASSERT(!BT_ISCOW(node), ("Should not longer be COW"));
   }
 
   /* Update over insert */

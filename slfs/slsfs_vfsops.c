@@ -237,6 +237,8 @@ slsfs_startupfs(struct mount *mp)
     slos.slos_sb->sb_epoch = 0;
   }
 
+  printf("Starting up FS with super block %lu\n", slos.slos_sb->sp_index);
+
 	slos_allocator_init(&slos, new_start);
 	slsfs_inodes_init(mp, &slos, new_start);
 
@@ -619,6 +621,7 @@ again:
 		    slos.slos_sb->sb_epoch, slos.slos_sb->sb_index);
 		SLSVP(slos.slsfs_inodes)->sn_status &= ~(SLOS_DIRTY);
 
+    printf("Checkpointing super block at %lu\n", slos.slos_sb->sp_index);
 		/* Flush the current superblock itself. */
 		bp = getblk(slos.slos_vp, slos.slos_sb->sb_index,
 		    slos.slos_sb->sb_ssize, 0, 0, 0);
@@ -725,10 +728,7 @@ slsfs_init_fs(struct mount *mp)
 	/* Get the filesystem root and initialize it if this is the first mount.
 	 */
 	VFS_ROOT(mp, LK_EXCLUSIVE, &vp);
-	if (vp == NULL) {
-    printf("WHY IS THIS NULL\n");
-		return (EIO);
-	}
+  MPASS(vp != NULL);
 
 	/* Set up the syncer. */
 	slos.slsfs_mount = mp;
