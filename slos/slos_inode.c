@@ -254,6 +254,7 @@ slos_svpimport(
 	} else {
 		VOP_LOCK(slos->slsfs_inodes, LK_EXCLUSIVE);
     error = slsfs_retrieve_buf(slos->slsfs_inodes, svpid, BLKSIZE(slos), UIO_READ, 0, &bp);
+    printf("Error retrieving buf for inode %lu\n", svpid);
 		VOP_UNLOCK(slos->slsfs_inodes, 0);
 		if (error != 0)
 			goto error;

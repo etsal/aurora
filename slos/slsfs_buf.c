@@ -64,7 +64,7 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
     enum uio_rw rw, int gbflag, struct buf **bp)
 {
 	diskptr_t ptr;
-	int error;
+	int error = 0;
 	struct slos_node *svp = SLSVP(vp);
 
 	size_t blksize = IOSIZE(svp);
@@ -79,7 +79,9 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
   /* Round up to our minimum size so we dont read less the a sector size */
   size = roundup(size, IOSIZE(svp));
 
+  printf("Looking of %lu\n", offset);
 	error = slsfs_lookupbln(svp, bno, &ptr);
+  printf("Looking of %lu output %d\n", offset, error);
 	if (error) {
 		return slsfs_buf_insert(vp, &ptr, bno, size, rw, gbflag, bp);
 	}
