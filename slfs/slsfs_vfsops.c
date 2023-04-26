@@ -518,6 +518,7 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	int error;
   if (closing)
     closing = MNT_WAIT;
+  int isdirty = 0;
 
 again:
 	/* Go through the list of vnodes attached to the filesystem. */
@@ -569,7 +570,7 @@ again:
 				vput(vp);
 				return;
 			}
-
+      isdirty += 1;
 		}
 
 		vput(vp);
@@ -579,7 +580,7 @@ again:
 	// should be a way to make it the same TODO
 	// Just a hack for now to get this thing working XXX Why is it a hack?
 	/* Sync the inode root itself. */
-	if (slos.slos_sb->sb_data_synced) {
+	if (isdirty) {
 		printf("Checkpointing the inodes vnode\n");
 		/* 3 Sync Root Inodes and btree */
 		error = vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
@@ -1241,7 +1242,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	vp->v_bufobj.bo_bsize = IOSIZE(svnode);
 	slsfs_init_vnode(vp, ino);
 
-	DEBUG2("vget(%p) ino = %ld", vp, ino);
+	printf("vget(%p) ino = %ld\n", vp, ino);
 	/* If we weren't beaten to it, propagate the new node to the caller. */
 	*vpp = vp;
 

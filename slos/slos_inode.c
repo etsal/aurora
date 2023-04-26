@@ -234,7 +234,7 @@ slos_svpimport(
 			goto error;
 	} else {
 		VOP_LOCK(slos->slsfs_inodes, LK_EXCLUSIVE);
-    error = slsfs_retrieve_buf(slos->slsfs_inodes, svpid, BLKSIZE(slos), UIO_READ, 0, &bp);
+    error = slsfs_retrieve_buf(slos->slsfs_inodes, svpid * BLKSIZE(slos), BLKSIZE(slos), UIO_READ, 0, &bp);
 		VOP_UNLOCK(slos->slsfs_inodes, 0);
 		if (error != 0)
 			goto error;
@@ -306,7 +306,6 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	struct slos_node *svp = SLSVP(root_vp);
 	size_t blksize = IOSIZE(svp);
 
-  printf("Creating Inode %lu\n", svpid);
 	// For now we will use the blkno for our svpids
 	VOP_LOCK(root_vp, LK_EXCLUSIVE);
 	error = vtree_find(&svp->sn_vtree, svpid, &ptr);
@@ -314,6 +313,8 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	  VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
 		return (EEXIST);
 	}
+
+  printf("Creating Inode %lu\n", svpid);
 
   ptr.size = blksize;
   ptr.offset = 0;
@@ -346,6 +347,7 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 		return (error);
 	}
 
+  /* TODO Delay this allocation */
 	slsfs_devbread(slos, ptr.offset, VTREE_BLKSZ, &bp);
 	MPASS(bp);
 	bzero(bp->b_data, bp->b_bcount);
@@ -354,7 +356,7 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 
    
   VOP_LOCK(root_vp, LK_EXCLUSIVE);
-  slsfs_retrieve_buf(root_vp, svpid, blksize, UIO_WRITE, 0, &bp);
+  slsfs_retrieve_buf(root_vp, svpid * blksize, blksize, UIO_WRITE, 0, &bp);
   VOP_UNLOCK(root_vp, 0);
   memcpy(bp->b_data, &ino, sizeof(struct slos_inode));
   slsfs_bdirty(bp);
@@ -460,7 +462,7 @@ slos_update(struct slos_node *svp)
 
 	vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 
-  error = slsfs_retrieve_buf(slos.slsfs_inodes, svp->sn_pid, 
+  error = slsfs_retrieve_buf(slos.slsfs_inodes, svp->sn_pid * IOSIZE(svp), 
       IOSIZE(svp), UIO_READ, 0, &bp);
 	if (error) {
 		VOP_UNLOCK(slos.slsfs_inodes, 0);
