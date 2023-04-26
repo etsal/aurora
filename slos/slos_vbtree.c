@@ -16,7 +16,7 @@
 
 #define BT_ISCOW(node) ((node)->n_epoch != slos.slos_sb->sb_epoch)
 #define BT_DONT_COW(node) ((node)->n_epoch == slos.slos_sb->sb_epoch)
-#define BT_COW_DISABLED(node) ((node)->n_tree->tr_flags & VTREE_NOCOW))
+#define BT_COW_DISABLED(node) ((node)->n_tree->tr_flags & VTREE_NOCOW)
 
 typedef struct bpath
 {
@@ -720,7 +720,7 @@ btnode_bulkinsert(bpath_t path, kvp** keyvalues, size_t* len, uint64_t max_key)
 
     /* Function will update len for us and tell us by how much
      * through the returned inserted variable */
-    if (BT_ISCOW(cur) && !BT_COW_DISABLED(node)) {
+    if (BT_ISCOW(cur) && !BT_COW_DISABLED(cur)) {
       path_cow(path);
     }
 
