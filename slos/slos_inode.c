@@ -222,7 +222,7 @@ slos_svpimport(
 	svp = uma_zalloc(slos_node_zone, M_WAITOK);
 	ino = &svp->sn_ino;
 
-	printf("Importing inode for %s %lu\n", system ? "block" : "OID", svpid);
+	DEBUG2("Importing inode for %s %lu\n", system ? "block" : "OID", svpid);
 	/*
 	 * System inodes are read from set locations in the SLOS.
 	 * The rest are retrieved from the inode btree.
@@ -235,18 +235,14 @@ slos_svpimport(
 	} else {
 		VOP_LOCK(slos->slsfs_inodes, LK_EXCLUSIVE);
     /* Check to make sure we dont have the buffer */
-    printf("LOOKUP %lu\n", svpid);
     error = slsfs_lookupbln(SLSVP(slos->slsfs_inodes), svpid, &ptr);
     if (error) {
-      printf("LOOKUP FAILED %lu\n", svpid);
 		  VOP_UNLOCK(slos->slsfs_inodes, 0);
       error = ENOENT;
       goto error;
     }
 
-    printf("Retrieve BUF %lu\n", svpid);
     error = slsfs_retrieve_buf(slos->slsfs_inodes, svpid * BLKSIZE(slos), BLKSIZE(slos), UIO_READ, 0, &bp);
-    printf("Retrieve BUF %lu %d\n", svpid, error);
 		VOP_UNLOCK(slos->slsfs_inodes, 0);
 		if (error != 0)
 			goto error;
@@ -322,15 +318,13 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 
 	// For now we will use the blkno for our svpids
 	VOP_LOCK(root_vp, LK_EXCLUSIVE);
-  printf("FIND ID %lu\n", svpid);
 	error = vtree_find(&svp->sn_vtree, svpid, &ptr);
 	if (error == 0) {
-    printf("FIND ID EXISTS %lu\n", svpid);
 	  VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
 		return (EEXIST);
 	}
 
-  printf("Creating Inode %lu\n", svpid);
+  DEBUG1("Creating Inode %lu\n", svpid);
 
   ptr.size = blksize;
   ptr.offset = 0;
