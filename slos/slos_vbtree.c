@@ -141,9 +141,10 @@ static void
 btnode_create(btnode_t node, btree_t tree, uint8_t type)
 {
   diskptr_t ptr;
-  struct buf *bp;
+  struct buf *bp = NULL;
   int error;
 
+  KASSERT(tree != NULL, ("Tree should never be null\n"));
   error = slos_blkalloc(&slos, VTREE_BLKSZ, &ptr);
   MPASS(error == 0);
   VOP_LOCK(tree->tr_vp, LK_EXCLUSIVE);
@@ -157,9 +158,10 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
   MPASS(bp->b_bcount == ptr.size);
 
   vfs_bio_clrbuf(bp);
-  node->n_epoch = slos.slos_sb->sb_epoch;
   node->n_bp = bp;
+  /* Data and bp always setup first as all other field point into it */
   node->n_data = (btdata_t)bp->b_data;
+  node->n_epoch = slos.slos_sb->sb_epoch;
   node->n_tree = tree;
   node->n_ptr = ptr;
   node->n_type = type;
@@ -187,6 +189,7 @@ path_cow(bpath_t path)
 {
   btnode tmp;
   btnode_t parent = NULL;
+
   int idx;
   btree_t tree = path_getcur(path)->n_tree;
   /* We hold all the locks of the path exclusively so we can change the parent
@@ -200,12 +203,13 @@ path_cow(bpath_t path)
       if (i > 0) {
         parent = &path->p_nodes[i - 1];
         idx = path->p_indexes[i];
-        /* We are the root so lets update our own parent ptr as well as save the
-         * old tree */
       }
 
       btnode_create(&path->p_nodes[i], tmp.n_tree, tmp.n_type);
 
+      // Update to proper epoch etc.
+      tmp.n_ptr = path->p_nodes[i].n_ptr;
+      tmp.n_epoch = tmp.n_ptr.epoch;
       /* Perform the copy of data or however we choose to transfer it over */
       memcpy(path->p_nodes[i].n_data, tmp.n_data, VTREE_BLKSZ);
 
@@ -511,7 +515,7 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
    * */
   if (BT_ISCOW(node) && !BT_COW_DISABLED(node)) {
     path_cow(path);
-    KASSERT(!BT_ISCOW(node), ("Should not longer be COW"));
+    KASSERT(!BT_ISCOW(node) || BT_COW_DISABLED(node), ("Should not longer be COW"));
   }
 
   /* Update over insert */

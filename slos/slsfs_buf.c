@@ -78,6 +78,7 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 
   /* Round up to our minimum size so we dont read less the a sector size */
   size = roundup(size, IOSIZE(svp));
+  size = min(MAXBCACHEBUF, size);
 
   /* If we error that means no entry was found */
 	error = slsfs_lookupbln(svp, bno, &ptr);
