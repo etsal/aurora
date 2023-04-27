@@ -140,6 +140,7 @@ slsio_open_sls(uint64_t oid, bool create, struct file **fpp)
 		/* Try to create the node, if not already there, wrap it in a
 		 * vnode. */
 		error = slos_svpalloc(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
+    DEBUG2("SLS Creating Inode oid %lu %d\n", oid, error);
 		if (error != 0)
 			return (error);
 	}
@@ -163,6 +164,9 @@ slsio_open_sls(uint64_t oid, bool create, struct file **fpp)
 		return (error);
 	}
 
+  if (create) {
+	  SLSVP(vp)->sn_status |= SLOS_DIRTY;
+  }
 	/* Open the record for writing. */
 	error = vn_open_vnode(vp, mode, td->td_ucred, td, fp);
 	if (error != 0) {

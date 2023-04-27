@@ -198,7 +198,6 @@ slos_svpsize(struct slos_node *svp)
 int
 inode_btree_rootchange(void *ctx, diskptr_t ptr) {
   struct slos_node *svp = (struct slos_node *)ctx;
-  printf("Inode %lu ROOT CHANGE TO %lu\n", svp->sn_pid, ptr.offset);
   svp->sn_ino.ino_btree = ptr;
   return 0;
 }

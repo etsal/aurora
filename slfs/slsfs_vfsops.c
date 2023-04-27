@@ -1222,6 +1222,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
   error = insmntque(vp, mp);
   if (error) {
     DEBUG("Problem queing root into mount point");
+    VOP_UNLOCK(vp, 0);
     *vpp = NULL;
     return (error);
   }
@@ -1230,6 +1231,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
       vp, ino, LK_EXCLUSIVE, td, vpp, NULL, NULL);
 
   if (error != 0 || *vpp != NULL) {
+    VOP_UNLOCK(vp, 0);
     return (error);
   }
 
@@ -1237,6 +1239,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	error = slos_iopen(&slos, ino, &svnode);
 	if (error) {
     printf("Could not find inode on disk %lu\n" , ino);
+    VOP_UNLOCK(vp, 0);
 		*vpp = NULL;
 		return (error);
 	}
