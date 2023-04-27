@@ -132,7 +132,7 @@ slsio_open_sls(uint64_t oid, bool create, struct file **fpp)
 {
 	struct thread *td = curthread;
 	int mode = FREAD | FWRITE;
-	struct vnode *vp;
+	struct vnode *vp = NULL;
 	struct file *fp;
 	int error;
 
@@ -140,7 +140,6 @@ slsio_open_sls(uint64_t oid, bool create, struct file **fpp)
 		/* Try to create the node, if not already there, wrap it in a
 		 * vnode. */
 		error = slos_svpalloc(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
-    DEBUG2("SLS Creating Inode oid %lu %d\n", oid, error);
 		if (error != 0)
 			return (error);
 	}
@@ -158,22 +157,28 @@ slsio_open_sls(uint64_t oid, bool create, struct file **fpp)
 	 */
 
 	/* Get the vnode for the record and open it. */
+  printf("VGET NOW %p\n", slos.slsfs_mount);
 	error = VFS_VGET(slos.slsfs_mount, oid, LK_EXCLUSIVE, &vp);
-	if (error != 0) {
+	if (error != 0 || (vp == NULL)) {
+    printf("VGET ERROR\n");
 		fdrop(fp, td);
 		return (error);
 	}
 
-  if (create) {
-	  SLSVP(vp)->sn_status |= SLOS_DIRTY;
-  }
+  /* printf("VGET DONE %p %p\n", vp, vp->v_data); */
+  /* if (create) { */
+  /*   printf("VGET STATUS CHANGE\n"); */
+	  /* SLSVP(vp)->sn_status |= SLOS_DIRTY; */
+  /* } */
 	/* Open the record for writing. */
+  printf("VN_OPEN_VNODE\n");
 	error = vn_open_vnode(vp, mode, td->td_ucred, td, fp);
 	if (error != 0) {
 		vput(vp);
 		fdrop(fp, td);
 		return (error);
 	}
+  printf("AFTER VNODE OPEN\n");
 
 	/*
 	 * Store the vnode, for any f_type. Typically, the vnode use

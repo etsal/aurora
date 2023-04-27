@@ -79,11 +79,12 @@ slos_svpalloc(struct slos *slos, mode_t mode, uint64_t *slsidp)
 	 *
 	 */
 	slsid_requested = OIDTOSLSID(*slsidp);
+  printf("SVP ALLOC REQUESTED %d\n", slsid_requested);
 retry_create:
 	if (slsid_requested == 0) {
 		/* If any ID will do, we need to get one. */
 		slsid = alloc_unr(slsid_unr);
-		if (slsid < 0)
+		if (slsid < 0) 
 			return (EINVAL);
 	} else {
 		/* If we're going for a specific inode, it's fine if it's
@@ -91,6 +92,7 @@ retry_create:
 		slsid = slsid_requested;
 	}
 
+  printf("SVP ALLOC %lu\n", *slsidp);
 	/* Create the inode. */
 	error = slos_icreate(slos, (uint64_t)slsid, mode);
 	if (error != 0) {

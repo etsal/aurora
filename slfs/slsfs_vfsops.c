@@ -1191,12 +1191,13 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	int error;
 	struct vnode *vp;
 	struct vnode *none;
-	struct slos_node *svnode;
+	struct slos_node *svnode = NULL;
 	struct thread *td;
 
 	td = curthread;
 	vp = NULL;
 	none = NULL;
+	printf("vget attempt ino = %ld\n", ino);
 
 	ino = OIDTOSLSID(ino);
 
@@ -1234,7 +1235,6 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
     VOP_UNLOCK(vp, 0);
     return (error);
   }
-
 	/* Bring the inode in memory. */
 	error = slos_iopen(&slos, ino, &svnode);
 	if (error) {
@@ -1244,13 +1244,16 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 		return (error);
 	}
 
+  MPASS(svnode != NULL);
+
 	svnode->sn_slos = &slos;
+  printf("SETTING DATA ON %lu\n", ino);
 	vp->v_data = svnode;
 	vp->v_bufobj.bo_ops = &bufops_slsfs;
 	vp->v_bufobj.bo_bsize = IOSIZE(svnode);
 	slsfs_init_vnode(vp, ino);
 
-	DEBUG2("vget(%p) ino = %ld\n", vp, ino);
+	printf("vget(%p) ino = %ld\n", vp, ino);
 	*vpp = vp;
 
 	return (0);
