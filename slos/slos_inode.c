@@ -394,7 +394,7 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 	int error;
 	struct slos_node *svp = NULL;
 
-	printf("Opening Inode %lu\n", oid);
+	DEBUG1("Opening Inode %lu\n", oid);
 
 	oid = OIDTOSLSID(oid);
 
