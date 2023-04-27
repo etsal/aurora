@@ -128,7 +128,7 @@ struct slos_node *slos_istat(struct slos *slos, uint64_t inoblk);
 int slos_svpimport(
     struct slos *slos, uint64_t svpid, bool system, struct slos_node **svpp);
 int slos_vpexport(struct slos *slos, struct slos_node *vp);
-void slos_vpfree(struct slos *slos, struct slos_node *vp);
+void slos_vpfree(struct slos *slos, struct slos_node *vp, int no_checkpoint);
 int slos_test_inode(void);
 int inode_btree_rootchange(void *ctx, diskptr_t ptr);
 

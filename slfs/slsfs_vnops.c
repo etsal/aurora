@@ -115,7 +115,7 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 		  vfs_hash_remove(vp);
 
     if (svp != NULL)
-		  slos_vpfree(svp->sn_slos, svp);
+		  slos_vpfree(svp->sn_slos, svp, false);
 	}
 
 	vp->v_data = NULL;

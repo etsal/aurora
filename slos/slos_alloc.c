@@ -288,12 +288,12 @@ slos_allocator_init(struct slos *slos, int new_start)
 	// are not cleaned up in the vflush as they have no associated vnode to
 	// them.
 	if (slos->slos_alloc.a_offset != NULL) {
-		slos_vpfree(slos, slos->slos_alloc.a_offset);
+		slos_vpfree(slos, slos->slos_alloc.a_offset, false);
 	}
 	slos->slos_alloc.a_offset = offt;
 
 	if (slos->slos_alloc.a_size != NULL) {
-		slos_vpfree(slos, slos->slos_alloc.a_size);
+		slos_vpfree(slos, slos->slos_alloc.a_size, false);
 	}
 	slos->slos_alloc.a_size = sizet;
 
@@ -341,9 +341,9 @@ slos_allocator_init(struct slos *slos, int new_start)
 int
 slos_allocator_uninit(struct slos *slos)
 {
-	slos_vpfree(slos, slos->slos_alloc.a_offset);
+	slos_vpfree(slos, slos->slos_alloc.a_offset, false);
 	slos->slos_alloc.a_offset = NULL;
-	slos_vpfree(slos, slos->slos_alloc.a_size);
+	slos_vpfree(slos, slos->slos_alloc.a_size, false);
 	slos->slos_alloc.a_size = NULL;
 
 	return (0);

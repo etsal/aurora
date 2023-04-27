@@ -12,7 +12,7 @@
 #include "vtree.h"
 
 #define INDEX_NULL ((uint16_t)-1)
-#define DEBUG (1)
+//#define DEBUG (1)
 
 #define BT_ISCOW(node) ((node)->n_epoch != slos.slos_sb->sb_epoch)
 #define BT_DONT_COW(node) ((node)->n_epoch == slos.slos_sb->sb_epoch)
@@ -134,7 +134,6 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
   node->n_ptr = ptr;
-  btnode_print(node);
 }
 
 /* Node is locked exclusively on create */

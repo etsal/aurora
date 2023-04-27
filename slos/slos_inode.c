@@ -298,10 +298,12 @@ error:
 
 /* Free an in-memory vnode. */
 void
-slos_vpfree(struct slos *slos, struct slos_node *vp)
+slos_vpfree(struct slos *slos, struct slos_node *vp, int no_checkpoint)
 {
-  vtree_checkpoint(&vp->sn_vtree);
-	vtree_free(&vp->sn_vtree);
+  if (!no_checkpoint) {
+    vtree_checkpoint(&vp->sn_vtree);
+    vtree_free(&vp->sn_vtree);
+  }
 	uma_zfree(slos_node_zone, vp);
 }
 
@@ -398,7 +400,7 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 	int error;
 	struct slos_node *svp = NULL;
 
-	printf("Opening Inode %lu", oid);
+	printf("Opening Inode %lu\n", oid);
 
 	oid = OIDTOSLSID(oid);
 

@@ -157,28 +157,23 @@ slsio_open_sls(uint64_t oid, bool create, struct file **fpp)
 	 */
 
 	/* Get the vnode for the record and open it. */
-  printf("VGET NOW %p\n", slos.slsfs_mount);
 	error = VFS_VGET(slos.slsfs_mount, oid, LK_EXCLUSIVE, &vp);
 	if (error != 0 || (vp == NULL)) {
-    printf("VGET ERROR\n");
 		fdrop(fp, td);
 		return (error);
 	}
 
-  /* printf("VGET DONE %p %p\n", vp, vp->v_data); */
-  /* if (create) { */
-  /*   printf("VGET STATUS CHANGE\n"); */
-	  /* SLSVP(vp)->sn_status |= SLOS_DIRTY; */
-  /* } */
+  if (create) {
+	  SLSVP(vp)->sn_status |= SLOS_DIRTY;
+  }
+
 	/* Open the record for writing. */
-  printf("VN_OPEN_VNODE\n");
 	error = vn_open_vnode(vp, mode, td->td_ucred, td, fp);
 	if (error != 0) {
 		vput(vp);
 		fdrop(fp, td);
 		return (error);
 	}
-  printf("AFTER VNODE OPEN\n");
 
 	/*
 	 * Store the vnode, for any f_type. Typically, the vnode use

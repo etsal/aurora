@@ -1196,8 +1196,9 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 
 	td = curthread;
 	vp = NULL;
+  *vpp = NULL;
 	none = NULL;
-	printf("vget attempt ino = %ld\n", ino);
+	DEBUG1("vget attempt ino = %ld\n", ino);
 
 	ino = OIDTOSLSID(ino);
 
@@ -1207,14 +1208,22 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 		return (error);
 	}
 
+	/* Bring the inode in memory. */
+	error = slos_iopen(&slos, ino, &svnode);
+	if (error) {
+		*vpp = NULL;
+		return (error);
+	}
 
 	/* Get a new blank vnode. */
 	error = getnewvnode("slsfs", mp, &slsfs_vnodeops, &vp);
 	if (error) {
+    slos_vpfree(&slos, svnode, true);
 		DEBUG("Problem getting new inode");
 		*vpp = NULL;
 		return (error);
 	}
+
 	/*
 	 * If the vnode is not the root, which is managed directly
 	 * by the SLOS, add it to the mountpoint.
@@ -1222,7 +1231,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	vn_lock(vp, LK_EXCLUSIVE);
   error = insmntque(vp, mp);
   if (error) {
-    DEBUG("Problem queing root into mount point");
+    slos_vpfree(&slos, svnode, true);
     VOP_UNLOCK(vp, 0);
     *vpp = NULL;
     return (error);
@@ -1230,30 +1239,21 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 
   error = vfs_hash_insert(
       vp, ino, LK_EXCLUSIVE, td, vpp, NULL, NULL);
-
   if (error != 0 || *vpp != NULL) {
+    slos_vpfree(&slos, svnode, true);
     VOP_UNLOCK(vp, 0);
     return (error);
   }
-	/* Bring the inode in memory. */
-	error = slos_iopen(&slos, ino, &svnode);
-	if (error) {
-    printf("Could not find inode on disk %lu\n" , ino);
-    VOP_UNLOCK(vp, 0);
-		*vpp = NULL;
-		return (error);
-	}
 
   MPASS(svnode != NULL);
 
 	svnode->sn_slos = &slos;
-  printf("SETTING DATA ON %lu\n", ino);
 	vp->v_data = svnode;
 	vp->v_bufobj.bo_ops = &bufops_slsfs;
 	vp->v_bufobj.bo_bsize = IOSIZE(svnode);
 	slsfs_init_vnode(vp, ino);
 
-	printf("vget(%p) ino = %ld\n", vp, ino);
+	DEBUG2("vget(%p) ino = %ld\n", vp, ino);
 	*vpp = vp;
 
 	return (0);

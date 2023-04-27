@@ -61,6 +61,7 @@ slos_generic_rc(void *ctx, bnode_ptr p)
 
 /*
  * Allocate a new SLOS inode.
+ * TODO: Rename this - it allocates an inode not a vnode
  */
 int
 slos_svpalloc(struct slos *slos, mode_t mode, uint64_t *slsidp)
