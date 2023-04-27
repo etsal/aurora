@@ -453,46 +453,62 @@ slos_iotask_create(struct vnode *vp, struct buf *bp, bool async)
 	return (0);
 }
 
+#define NUM_KVS (4)
+
 boolean_t
 slos_hasblock(struct vnode *vp, uint64_t lblkno_req, int *rbehind, int *rahead)
 {
-	diskptr_t ptr;
-	uint64_t lblkstart;
-	uint64_t lblkno;
-	boolean_t ret;
+	uint64_t lblkstart, lblkend;
+  kvp kvs[NUM_KVS + 1];
+  kvp tmp;
+  int readbehind = 0;
+  int readahead = 0;
+  diskptr_t blocks_ptr, tmpptr;
   struct slos_node *svp = SLSVP(vp);
-	int error;
 
-	if (rbehind != NULL)
-		*rbehind = 0;
-	if (rahead != NULL)
-		*rahead = 0;
-
-  panic("Not implemented");
+  int numresults = 0;
 	/* Get the physical segment from where we will read. */
-	lblkstart = lblkno_req;
-	error = vtree_find(&svp->sn_vtree, lblkstart, &ptr);
-	if (error != 0) {
-		printf("WARNING: Failed to look up swapped out page\n");
-		ret = FALSE;
-		goto out;
-	}
+	lblkstart = lblkno_req - NUM_KVS;
+  lblkend = lblkno_req + NUM_KVS;
+  // Read ahead first to see if we have more blocks
+	numresults = vtree_rangequery(&svp->sn_vtree, lblkno_req, lblkend, kvs, NUM_KVS + 1);
+  if (!numresults) {
+    return FALSE;
+  }
 
+  tmp = kvs[0];
+  /* We found our block */
+  if (tmp.key == lblkno_req) {
+    blocks_ptr = *(diskptr_t *)tmp.data;
+  } else {
+    return FALSE;
+  }
 
-	/* Check if our infimum includes us. */
-	if (lblkno + (ptr.size / PAGE_SIZE) <= lblkno_req) {
-		ret = FALSE;
-		goto out;
-	}
+  if (rahead != NULL) {
+    /* Any entrys ahead of us */
+    for (int i = 1; i < numresults; i++) {
+      tmp = kvs[i];
+      tmpptr = *(diskptr_t *)tmp.data;
+      if ((tmpptr.offset - i) == blocks_ptr.offset) {
+        readahead += 1;
+      }
+    }
 
-	ret = TRUE;
-	if (rbehind != NULL)
-		*rbehind = imax((lblkno_req - lblkno), 0);
-	if (rahead != NULL)
-		*rahead = imax(
-		    (lblkno + (ptr.size / PAGE_SIZE) - 1 - lblkno_req), 0);
+    *rahead = readahead;
+  }
 
-out:
+	if (rbehind != NULL) {
+	  numresults = vtree_rangequery(&svp->sn_vtree, lblkstart, lblkno_req, kvs, NUM_KVS + 1);
+    /* Any entrys ahead of us */
+    for (int i = numresults - 1; i < 0; i--) {
+      tmp = kvs[i];
+      tmpptr = *(diskptr_t *)tmp.data;
+      if ((tmpptr.offset + i) == blocks_ptr.offset) {
+        readbehind += 1;
+      }
+    }
+    *rbehind = readbehind;
+  }
 
-	return (ret);
+  return TRUE;
 }
