@@ -32,10 +32,6 @@ static void
 print_snap(struct slsfs_getsnapinfo *inf)
 {
 	struct slos_sb *sb = &inf->snap_sb;
-	if (sb->sb_epoch == EPOCH_INVAL || sb->sb_root.offset == 0 ||
-	    sb->sb_allocoffset.offset == 0 || sb->sb_allocsize.offset == 0) {
-		return;
-	}
 	printf("Snap %lu - %d/100\n", inf->snap_sb.sb_epoch, sb->sb_index);
 	printf("Locations:\n");
 	printf("\tInodes Root: %lu\n", sb->sb_root.offset);
@@ -142,9 +138,8 @@ listsnaps_main(int argc, char *argv[])
 
 	free(mountdir);
 
-	for (i = 0; (i < NUMSBS);
+	for (i = 0; (i < NUMSBS) && (info.snap_sb.sb_epoch != EPOCH_INVAL);
 	     i++) {
-    printf("Index = %d\n", i);
 		info.index = i;
 		info.snap_sb.sb_epoch = EPOCH_INVAL;
 		ioctl(fd, SLSFS_GET_SNAP, &info);
@@ -157,7 +152,7 @@ listsnaps_main(int argc, char *argv[])
 		 * We must use true modulo here in case we decrement to a
 		 * negative number.
 		 */
-		info.index = modulo(i - 1, NUMSBS);
+		info.index = i - 2;
 		ioctl(fd, SLSFS_GET_SNAP, &info);
 		print_snap(&info);
 		return info.index;
