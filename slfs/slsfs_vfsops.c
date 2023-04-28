@@ -645,7 +645,7 @@ again:
 		VOP_UNLOCK(slos.slsfs_inodes, 0);
 
 		checkpoints++;
-		DEBUG3("Checkpoint: %lu, %lu, %lu", checkpoints,
+		printf("Checkpoint: %lu, %lu, %lu", checkpoints,
 		    slos.slos_sb->sb_data_synced, slos.slos_sb->sb_meta_synced);
 
 		slos.slos_sb->sb_data_synced = 0;

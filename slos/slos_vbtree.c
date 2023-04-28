@@ -14,7 +14,7 @@
 #define INDEX_NULL ((uint16_t)-1)
 //#define DEBUG (1)
 
-#define BT_ISCOW(node) ((node)->n_epoch != slos.slos_sb->sb_epoch)
+#define BT_ISCOW(node) ((node)->n_epoch < slos.slos_sb->sb_epoch)
 #define BT_DONT_COW(node) ((node)->n_epoch == slos.slos_sb->sb_epoch)
 #define BT_COW_DISABLED(node) ((node)->n_tree->tr_flags & VTREE_NOCOW)
 
@@ -33,7 +33,6 @@ typedef bpath* bpath_t;
 static int
 binary_search(uint64_t* arr, size_t size, uint64_t key)
 {
-
   /* In many cases linear search is faster then binary as it
    * can take advantage of streaming prefetching so have a cut
    * off where we switch to linear search */
@@ -92,7 +91,6 @@ static inline void
 btnode_dirty(btnode_t node)
 {
   bdirty(node->n_bp);
-  node->n_bp->b_flags |= B_CACHE;
 }
 
 static void
@@ -104,25 +102,12 @@ path_print(bpath_t path)
 }
 
 static void
-btnode_wrap_bp(btnode_t node, btree_t tree, struct buf* bp)
-{
-  diskptr_t ptr;
-
-  ptr.size = VTREE_BLKSZ;
-  ptr.offset = bp->b_lblkno;
-
-  node->n_bp = bp;
-  node->n_data = (btdata_t)bp->b_data;
-  node->n_tree = tree;
-  node->n_ptr = ptr;
-}
-
-static void
 btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 {
   struct buf* bp;
   int error;
   KASSERT(ptr.size == VTREE_BLKSZ, ("Incorrect size for init"));
+  KASSERT(ptr.offset != 0, ("Should be an offset"));
 
   VOP_LOCK(tree->tr_vp, lk_flags);
   error = bread(tree->tr_vp, ptr.offset, ptr.size, curthread->td_ucred, &bp);
@@ -134,6 +119,7 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
   node->n_ptr = ptr;
+  node->o_flags = 0;
 }
 
 /* Node is locked exclusively on create */
@@ -161,11 +147,12 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
   node->n_bp = bp;
   /* Data and bp always setup first as all other field point into it */
   node->n_data = (btdata_t)bp->b_data;
-  node->n_epoch = slos.slos_sb->sb_epoch;
+  node->n_epoch = ptr.epoch;
   node->n_tree = tree;
   node->n_ptr = ptr;
   node->n_type = type;
   node->n_len = 0;
+  node->o_flags = 0;
 }
 
 /* Caller must check to see if parent */
@@ -189,15 +176,17 @@ path_cow(bpath_t path)
 {
   btnode tmp;
   btnode_t parent = NULL;
+  struct buf *oldbp;
 
   int idx;
   btree_t tree = path_getcur(path)->n_tree;
-  /* We hold all the locks of the path exclusively so we can change the parent
+  /* 
+   * We hold all the locks of the path exclusively so we can change the parent
    */
   for (int i = 0; i < path->p_len; i++) {
     /* Check if node is not already COWed */
     tmp = path->p_nodes[i];
-    if (!BT_DONT_COW(&tmp)) {
+    if (!IS_SCANNED(&tmp) && BT_ISCOW(&tmp)) {
 
       /* Grab our index in our parent */
       if (i > 0) {
@@ -205,16 +194,32 @@ path_cow(bpath_t path)
         idx = path->p_indexes[i];
       }
 
+      oldbp  = tmp.n_bp;
+
       btnode_create(&path->p_nodes[i], tmp.n_tree, tmp.n_type);
 
-      // Update to proper epoch etc.
-      tmp.n_ptr = path->p_nodes[i].n_ptr;
-      tmp.n_epoch = tmp.n_ptr.epoch;
+      /* 
+       * Update to proper epoch etc, stored in the buffer (bp), so we dont clobber it when 
+       * we copy 
+       */
+      tmp.n_epoch = path->p_nodes[i].n_epoch;
+
       /* Perform the copy of data or however we choose to transfer it over */
-      memcpy(path->p_nodes[i].n_data, tmp.n_data, VTREE_BLKSZ);
+      KASSERT(path->p_nodes[i].n_bp->b_data != oldbp->b_data, ("Data buffers should be different"));
+
+      memcpy(path->p_nodes[i].n_bp->b_data, oldbp->b_data, VTREE_BLKSZ);
+
+      KASSERT(tmp.n_len == path->p_nodes[i].n_len, ("Should be the same number of entries!"));
+      if (BT_ISCOW(&path->p_nodes[i])) {
+        printf("Old pointer %lu %lu %lu\n", tmp.n_ptr.offset, tmp.n_ptr.size, tmp.n_epoch);
+        printf("New pointer %lu %lu %lu\n", path->p_nodes[i].n_ptr.offset, path->p_nodes[i].n_ptr.size, path->p_nodes[i].n_epoch);
+        printf("Current Epoch %lu\n", slos.slos_sb->sb_epoch);
+        KASSERT(false, ("SHOULD NOT BE COW\n"));
+      }
 
       /* Update our parent to know of the change */
       if (i > 0) {
+        KASSERT(path->p_nodes[i].n_ptr.offset != 0, ("Do not copy a bad ptr"));
         memcpy(&parent->n_ch[idx], &path->p_nodes[i].n_ptr, sizeof(diskptr_t));
       } else {
         /* Make sure we update our root ptr in our main tree datastructure */
@@ -222,13 +227,18 @@ path_cow(bpath_t path)
       }
 
       /* We must invalidate the buffer to insure it never writes */
-      tmp.n_bp->b_flags |= B_INVAL;
-      brelse(tmp.n_bp);
+      bdwrite(tmp.n_bp);
 
       /* Turn of cow on the node and dirty the node */
       btnode_dirty(&path->p_nodes[i]);
+      MARK_SCANNED(&path->p_nodes[i]);
     }
   }
+
+  for (int i = 0; i < path->p_len; i++) {
+      CLR_SCAN(&path->p_nodes[i]);
+  }
+
 }
 
 static inline void
@@ -246,7 +256,10 @@ path_unacquire(bpath_t path, int acquire_as)
   struct buf *bp;
   for (int i = 0; i < path->p_len; i++) {
     bp = path->p_nodes[i].n_bp;
-    bqrelse(bp);
+    if (bp->b_flags & B_DELWRI)
+      bawrite(bp);
+    else
+      bqrelse(bp);
   }
 }
 
@@ -460,7 +473,6 @@ static void
 btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
 {
   KASSERT(BT_ISLEAF(node), ("Node should be a leaf"));
-  KASSERT(!BT_ISCOW(node) || BT_COW_DISABLED(node), ("Node should not be COW"));
   int num_to_move = node->n_len - idx;
   if (num_to_move > 0) {
     memmove(
@@ -488,7 +500,6 @@ static void
 btnode_leaf_update(btnode_t node, int idx, void* value)
 {
   KASSERT(BT_ISLEAF(node), ("Node should be a leaf"));
-  KASSERT(!BT_ISCOW(node) || BT_COW_DISABLED(node), ("Node should not be COW"));
   memcpy(&node->n_ch[idx + 1], value, BT_VALSZ(node));
   btnode_dirty(node);
 
@@ -515,7 +526,6 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
    * */
   if (BT_ISCOW(node) && !BT_COW_DISABLED(node)) {
     path_cow(path);
-    KASSERT(!BT_ISCOW(node) || BT_COW_DISABLED(node), ("Should not longer be COW"));
   }
 
   /* Update over insert */
@@ -628,7 +638,6 @@ btnode_leaf_bulkinsert(btnode_t node,
                        int64_t max_key)
 {
   KASSERT(BT_ISLEAF(node), ("Node should be a leaf"));
-  KASSERT(!BT_ISCOW(node) || BT_COW_DISABLED(node), ("Node should not be COW"));
   int keys_i = 0;
   int node_i = 0;
   int inserted = 0;
@@ -871,7 +880,7 @@ btree_checkpoint(void* treep)
     error = BUF_LOCK(bp, LK_EXCLUSIVE | LK_INTERLOCK, BO_LOCKPTR(bo));
     MPASS(error == 0);
     bremfree(bp);
-    bawrite(bp);
+    bwrite(bp);
     BO_LOCK(bo);
 	}
 

@@ -100,6 +100,8 @@ _Static_assert(sizeof(struct slos_sb) < DEV_BSIZE, "Block size wrong");
 
 SDT_PROVIDER_DECLARE(slos);
 
+#define SLOS_LOCK_SHARED(slos) (lockmgr(&((slos)->slos_lock), LK_SHARED, NULL))
+
 #define SLOS_LOCK(slos) (lockmgr(&((slos)->slos_lock), LK_EXCLUSIVE, NULL))
 #define SLOS_UNLOCK(slos) (lockmgr(&((slos)->slos_lock), LK_RELEASE, NULL))
 

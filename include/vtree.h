@@ -8,7 +8,7 @@
 #include <sys/bufobj.h>
 #include <sys/vnode.h>
 
-#define VTREE_BLKSZ (MAXBCACHEBUF)
+#define VTREE_BLKSZ (4096)
 
 #define DPTR_COW (1)
 

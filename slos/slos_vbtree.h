@@ -26,7 +26,6 @@
 
 MALLOC_DECLARE(M_SLOS_VTREE);
 
-#define BLKSZ (64 * 1024)
 #define BT_MAX_KEY_SIZE (8)
 #define BT_MAX_HDR_SIZE (64)
 #define BT_MAX_PATH_SIZE (10)
@@ -35,12 +34,22 @@ MALLOC_DECLARE(M_SLOS_VTREE);
 #define BT_INNER (1)
 
 /* The number of keys is
- * (BLKSZ - BT_MAX_HDR_SIZE - BT_MAX_VALUE_SIZE) /
+ * (VTREE_BLKSZ - BT_MAX_HDR_SIZE - BT_MAX_VALUE_SIZE) /
  *  (BT_MAX_KEY_SIZE + BT_MAX_VALUE_SIZE)
  */
 
+#if(VTREE_BLKSZ == MAXBCACHEBUF)
+
 #define BT_MAX_KEYS (1636)
 #define SPLIT_KEYS (818)
+
+#else
+
+#define BT_MAX_KEYS (100)
+#define SPLIT_KEYS (50)
+
+#endif
+
 
 #define BT_FRESHCOPY (2)
 
@@ -81,6 +90,12 @@ typedef btdata* btdata_t;
 struct btree;
 typedef struct btree* btree_t;
 
+#define NODE_SCANNED (1)
+
+#define IS_SCANNED(node) ((node)->o_flags & NODE_SCANNED)
+#define MARK_SCANNED(node) ((node)->o_flags |=  NODE_SCANNED)
+#define CLR_SCAN(node) ((node)->o_flags &= ~NODE_SCANNED)
+
 /* In memory btnode */
 typedef struct btnode
 {
@@ -96,6 +111,7 @@ typedef struct btnode
 #define n_flags n_data->bt_hdr.hdr_flag
 #define n_type n_data->bt_hdr.hdr_type
 #define n_epoch n_data->bt_hdr.hdr_epoch
+  uint32_t   o_flags;
 } btnode;
 
 typedef btnode* btnode_t;
