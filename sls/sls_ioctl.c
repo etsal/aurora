@@ -468,6 +468,9 @@ sls_receive_stopall(void)
 	uint64_t oid;
 	int error;
 
+  if (slsm.slsm_parts == NULL)
+    return 0;
+
 	KV_FOREACH(slsm.slsm_parts, iter, oid, slsp)
 	{
 		if (slsp->slsp_target != SLS_SOCKRCV)

@@ -142,8 +142,9 @@ listsnaps_main(int argc, char *argv[])
 
 	free(mountdir);
 
-	for (i = 0; (i < NUMSBS) && (info.snap_sb.sb_epoch != EPOCH_INVAL);
+	for (i = 0; (i < NUMSBS);
 	     i++) {
+    printf("Index = %d\n", i);
 		info.index = i;
 		info.snap_sb.sb_epoch = EPOCH_INVAL;
 		ioctl(fd, SLSFS_GET_SNAP, &info);

@@ -604,8 +604,10 @@ again:
 		 * Allocate a new blk for the root inode write it and give it
 		 * to the superblock
 		 */
-		// Write out the root inode
-		slos.slos_sb->sb_root.offset = ino->ino_blk;
+    
+    error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
+    ino->ino_blk = ptr.offset;
+		slos.slos_sb->sb_root = ptr;
 
 		DEBUG("Syncing Inodes Tree\n");
 		bp = getblk(svp->sn_vtree.v_vp, ino->ino_blk, BLKSIZE(&slos), 0, 0, 0);
@@ -616,7 +618,6 @@ again:
 		DEBUG1("Root Dir at %lu",
 		    SLSVP(slos.slsfs_inodes)->sn_ino.ino_blk);
 		DEBUG1("Inodes File at %lu", slos.slos_sb->sb_root.offset);
-		MPASS(ptr.offset != slos.slos_sb->sb_root.offset);
 
 		
 		/* 4 Sync the allocator */
@@ -633,25 +634,24 @@ again:
 		MPASS(bp);
 		memcpy(bp->b_data, slos.slos_sb, sizeof(struct slos_sb));
 
-    DEBUG("Creating the new superblock\n");
-		slos.slos_sb->sb_index = (slos.slos_sb->sb_epoch) % 100;
+		bbarrierwrite(bp);
 
+    DEBUG("Creating the new superblock\n");
 		nanotime(&te);
 		slos.slos_sb->sb_time = te.tv_sec;
 		slos.slos_sb->sb_time_nsec = te.tv_nsec;
 
-		bbarrierwrite(bp);
-
 		VOP_UNLOCK(slos.slsfs_inodes, 0);
 
 		checkpoints++;
-		printf("Checkpoint: %lu, %lu, %lu", checkpoints,
+		printf("Checkpoint: %lu, %lu, %lu\n", checkpoints,
 		    slos.slos_sb->sb_data_synced, slos.slos_sb->sb_meta_synced);
 
 		slos.slos_sb->sb_data_synced = 0;
 		slos.slos_sb->sb_meta_synced = 0;
 		slos.slos_sb->sb_attempted_checkpoints = 0;
 		slos.slos_sb->sb_epoch += 1;
+		slos.slos_sb->sb_index = (slos.slos_sb->sb_epoch) % 100;
 	} else {
 		slos.slos_sb->sb_attempted_checkpoints++;
 	}

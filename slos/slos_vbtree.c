@@ -172,7 +172,7 @@ path_getcur(bpath_t path)
  * Will iterater through the path and perform COW on all entries within the path
  */
 static void
-path_cow(bpath_t path)
+path_cow(bpath_t path, uint64_t epoch)
 {
   btnode tmp;
   btnode_t parent = NULL;
@@ -186,7 +186,7 @@ path_cow(bpath_t path)
   for (int i = 0; i < path->p_len; i++) {
     /* Check if node is not already COWed */
     tmp = path->p_nodes[i];
-    if (!IS_SCANNED(&tmp) && BT_ISCOW(&tmp)) {
+    if (!IS_SCANNED(&tmp) && (tmp.n_epoch < epoch)) {
 
       /* Grab our index in our parent */
       if (i > 0) {
@@ -202,18 +202,25 @@ path_cow(bpath_t path)
        * Update to proper epoch etc, stored in the buffer (bp), so we dont clobber it when 
        * we copy 
        */
+
+      KASSERT(tmp.n_epoch < path->p_nodes[i].n_epoch, ("NEW PTR SHOULD BE IN LARGER EPOCH"));
+
       tmp.n_epoch = path->p_nodes[i].n_epoch;
 
+      KASSERT(tmp.n_epoch >= epoch, ("NEW PTR SHOULD BE IN LARGER EPOCH 1"));
       /* Perform the copy of data or however we choose to transfer it over */
       KASSERT(path->p_nodes[i].n_bp->b_data != oldbp->b_data, ("Data buffers should be different"));
 
       memcpy(path->p_nodes[i].n_bp->b_data, oldbp->b_data, VTREE_BLKSZ);
 
+      KASSERT(path->p_nodes[i].n_epoch >= epoch, ("NEW PTR SHOULD BE IN LARGER EPOCH 2"));
       KASSERT(tmp.n_len == path->p_nodes[i].n_len, ("Should be the same number of entries!"));
-      if (BT_ISCOW(&path->p_nodes[i])) {
+      KASSERT(path->p_nodes[i].n_ptr.offset != tmp.n_ptr.offset, ("Different locations!"));
+
+      if (path->p_nodes[i].n_epoch < epoch) {
         printf("Old pointer %lu %lu %lu\n", tmp.n_ptr.offset, tmp.n_ptr.size, tmp.n_epoch);
         printf("New pointer %lu %lu %lu\n", path->p_nodes[i].n_ptr.offset, path->p_nodes[i].n_ptr.size, path->p_nodes[i].n_epoch);
-        printf("Current Epoch %lu\n", slos.slos_sb->sb_epoch);
+        printf("Epoch %lu\n", epoch);
         KASSERT(false, ("SHOULD NOT BE COW\n"));
       }
 
@@ -227,7 +234,7 @@ path_cow(bpath_t path)
       }
 
       /* We must invalidate the buffer to insure it never writes */
-      bdwrite(tmp.n_bp);
+      bawrite(tmp.n_bp);
 
       /* Turn of cow on the node and dirty the node */
       btnode_dirty(&path->p_nodes[i]);
@@ -525,7 +532,7 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
    * to this node must be COW'd
    * */
   if (BT_ISCOW(node) && !BT_COW_DISABLED(node)) {
-    path_cow(path);
+    path_cow(path, slos.slos_sb->sb_epoch);
   }
 
   /* Update over insert */
@@ -729,7 +736,7 @@ btnode_bulkinsert(bpath_t path, kvp** keyvalues, size_t* len, uint64_t max_key)
     /* Function will update len for us and tell us by how much
      * through the returned inserted variable */
     if (BT_ISCOW(cur) && !BT_COW_DISABLED(cur)) {
-      path_cow(path);
+      path_cow(path, slos.slos_sb->sb_epoch);
     }
 
     inserted = btnode_leaf_bulkinsert(cur, kvs, len, max_key);
@@ -879,8 +886,7 @@ btree_checkpoint(void* treep)
   TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
     error = BUF_LOCK(bp, LK_EXCLUSIVE | LK_INTERLOCK, BO_LOCKPTR(bo));
     MPASS(error == 0);
-    bremfree(bp);
-    bwrite(bp);
+    bawrite(bp);
     BO_LOCK(bo);
 	}
 
