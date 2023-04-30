@@ -573,7 +573,7 @@ again:
       KASSERT(!SLS_ISWAL(slos.slsfs_inodes),
           ("slsfs_inodes should not be marked as a WAL object"));
       memcpy(bp->b_data, &SLSVP(vp)->sn_ino, sizeof(SLSVP(vp)->sn_ino));
-      bdwrite(bp);
+      bawrite(bp);
 	    VOP_UNLOCK(slos.slsfs_inodes, 0);
       isdirty += 1;
 		}
@@ -586,6 +586,7 @@ again:
 	// Just a hack for now to get this thing working XXX Why is it a hack?
 	/* Sync the inode root itself. */
 	if (isdirty) {
+
 		DEBUG("Checkpointing the inodes vnode\n");
 		/* 3 Sync Root Inodes and btree */
 		error = vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
@@ -600,6 +601,7 @@ again:
 		error = slos_checkpoint_vp(slos.slsfs_inodes, closing);
     MPASS(error == 0);
 
+
 		/*
 		 * Allocate a new blk for the root inode write it and give it
 		 * to the superblock
@@ -610,15 +612,17 @@ again:
 		slos.slos_sb->sb_root = ptr;
 
 		DEBUG("Syncing Inodes Tree\n");
-		bp = getblk(svp->sn_vtree.v_vp, ino->ino_blk, BLKSIZE(&slos), 0, 0, 0);
+		bp = getblk(slos.slos_vp, ino->ino_blk, BLKSIZE(&slos), 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
 		bawrite(bp);
+
 
 		DEBUG1("Root Dir at %lu",
 		    SLSVP(slos.slsfs_inodes)->sn_ino.ino_blk);
 		DEBUG1("Inodes File at %lu", slos.slos_sb->sb_root.offset);
 
+		VOP_UNLOCK(slos.slsfs_inodes, 0);
 		
 		/* 4 Sync the allocator */
 		DEBUG("Syncing the allocator\n");
@@ -627,7 +631,7 @@ again:
 		    slos.slos_sb->sb_epoch, slos.slos_sb->sb_index);
 		SLSVP(slos.slsfs_inodes)->sn_status &= ~(SLOS_DIRTY);
 
-    DEBUG1("Checkpointing super block at %u\n", slos.slos_sb->sb_index);
+    printf("Checkpointing super block at %u\n", slos.slos_sb->sb_index);
 		/* Flush the current superblock itself. */
 		bp = getblk(slos.slos_vp, slos.slos_sb->sb_index,
 		    slos.slos_sb->sb_ssize, 0, 0, 0);
@@ -641,7 +645,6 @@ again:
 		slos.slos_sb->sb_time = te.tv_sec;
 		slos.slos_sb->sb_time_nsec = te.tv_nsec;
 
-		VOP_UNLOCK(slos.slsfs_inodes, 0);
 
 		checkpoints++;
 		printf("Checkpoint: %lu, %lu, %lu\n", checkpoints,

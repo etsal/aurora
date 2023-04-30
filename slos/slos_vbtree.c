@@ -6,6 +6,7 @@
 #include <sys/rwlock.h>
 #include <sys/bufobj.h>
 #include <sys/vnode.h>
+#include <sys/mount.h>
 
 #include "slos.h"
 #include "slos_alloc.h"
@@ -109,10 +110,8 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
   KASSERT(ptr.size == VTREE_BLKSZ, ("Incorrect size for init"));
   KASSERT(ptr.offset != 0, ("Should be an offset"));
 
-  VOP_LOCK(tree->tr_vp, lk_flags);
   error = bread(tree->tr_vp, ptr.offset, ptr.size, curthread->td_ucred, &bp);
   MPASS(error == 0);
-  VOP_UNLOCK(tree->tr_vp, 0);
   MPASS(bp->b_bcount == ptr.size);
 
   node->n_bp = bp;
@@ -133,14 +132,12 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
   KASSERT(tree != NULL, ("Tree should never be null\n"));
   error = slos_blkalloc(&slos, VTREE_BLKSZ, &ptr);
   MPASS(error == 0);
-  VOP_LOCK(tree->tr_vp, LK_EXCLUSIVE);
 #ifdef DEBUG
   printf("BTnode create %lu %lu\n", ptr.offset, ptr.size);
 #endif
   bp = getblk(tree->tr_vp, ptr.offset, VTREE_BLKSZ, 0, 0, 0);
   MPASS(bp != NULL);
 
-  VOP_UNLOCK(tree->tr_vp, LK_EXCLUSIVE);
   MPASS(bp->b_bcount == ptr.size);
 
   vfs_bio_clrbuf(bp);
@@ -867,32 +864,107 @@ btree_find(void* treep, uint64_t key, void* value)
   return 0;
 }
 
+static int
+btree_sync_buf(struct vnode *vp, int waitfor)
+{
+	struct buf *bp, *nbp;
+	struct bufobj *bo;
+	struct mount *mp;
+	int error, maxretry;
+
+	error = 0;
+	maxretry = 10000;     /* large, arbitrarily chosen */
+	mp = NULL;
+	bo = &vp->v_bufobj;
+	BO_LOCK(bo);
+loop1:
+	/*
+	 * MARK/SCAN initialization to avoid infinite loops.
+	 */
+        TAILQ_FOREACH(bp, &bo->bo_dirty.bv_hd, b_bobufs) {
+		bp->b_vflags &= ~BV_SCANNED;
+		bp->b_error = 0;
+	}
+
+	/*
+	 * Flush all dirty buffers associated with a vnode.
+	 */
+loop2:
+	TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, nbp) {
+		if ((bp->b_vflags & BV_SCANNED) != 0)
+			continue;
+		bp->b_vflags |= BV_SCANNED;
+		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_NOWAIT, NULL)) {
+			if (waitfor != MNT_WAIT)
+				continue;
+			if (BUF_LOCK(bp,
+			    LK_EXCLUSIVE | LK_INTERLOCK | LK_SLEEPFAIL,
+			    BO_LOCKPTR(bo)) != 0) {
+				BO_LOCK(bo);
+				goto loop1;
+			}
+			BO_LOCK(bo);
+		}
+		BO_UNLOCK(bo);
+		KASSERT(bp->b_bufobj == bo,
+		    ("bp %p wrong b_bufobj %p should be %p",
+		    bp, bp->b_bufobj, bo));
+		if ((bp->b_flags & B_DELWRI) == 0)
+			panic("fsync: not dirty");
+		if ((vp->v_object != NULL) && (bp->b_flags & B_CLUSTEROK)) {
+			vfs_bio_awrite(bp);
+		} else {
+			bremfree(bp);
+			bawrite(bp);
+		}
+		if (maxretry < 1000)
+			pause("dirty", hz < 1000 ? 1 : hz / 1000);
+		BO_LOCK(bo);
+		goto loop2;
+	}
+
+	/*
+	 * If synchronous the caller expects us to completely resolve all
+	 * dirty buffers in the system.  Wait for in-progress I/O to
+	 * complete (which could include background bitmap writes), then
+	 * retry if dirty blocks still exist.
+	 */
+	if (waitfor == MNT_WAIT) {
+		bufobj_wwait(bo, 0, 0);
+		if (bo->bo_dirty.bv_cnt > 0) {
+			/*
+			 * If we are unable to write any of these buffers
+			 * then we fail now rather than trying endlessly
+			 * to write them out.
+			 */
+			TAILQ_FOREACH(bp, &bo->bo_dirty.bv_hd, b_bobufs)
+				if ((error = bp->b_error) != 0)
+					break;
+			if ((mp != NULL && mp->mnt_secondary_writes > 0) ||
+			    (error == 0 && --maxretry >= 0))
+				goto loop1;
+			if (error == 0)
+				error = EAGAIN;
+		}
+	}
+	BO_UNLOCK(bo);
+	if (error != 0)
+		vn_printf(vp, "fsync: giving up on dirty (error = %d) ", error);
+
+	return (error);
+}
+
 diskptr_t
 btree_checkpoint(void* treep)
 {
-  int error;
-  struct buf *bp, *tbd;
-
   btree_t tree = (btree_t)treep;
   diskptr_t ptr = tree->tr_ptr;
-	struct bufobj *bo = &tree->tr_vp->v_bufobj;
 
 #ifdef DEBUG
   printf("[Checkpoint]\n");
 #endif
 
-	BO_LOCK(bo);
-
-  TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, tbd) {
-    error = BUF_LOCK(bp, LK_EXCLUSIVE | LK_INTERLOCK, BO_LOCKPTR(bo));
-    MPASS(error == 0);
-    bawrite(bp);
-    BO_LOCK(bo);
-	}
-
-  bufobj_wwait(bo, 0, 0);
-
-  BO_UNLOCK(bo);
+  btree_sync_buf(tree->tr_vp, MNT_WAIT);
 
   return (ptr);
 }

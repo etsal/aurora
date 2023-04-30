@@ -171,6 +171,9 @@ vtree_free(vtree *tree);
 void
 vtree_interface_init(void);
 
+struct vnode *
+vtree_create_fake_device(void);
+
 extern struct vtreeops btreeops;
 extern struct vtreeops *defaultops;
 #endif

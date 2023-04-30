@@ -73,6 +73,22 @@ vtree_empty_wal(vtree* tree)
   }
 }
 
+
+struct vnode *
+vtree_create_fake_device(void)
+{
+  int error;
+  struct vnode *vp = NULL;
+	error = getnewvnode("SLSFS Fake VNode", slos.slsfs_mount,
+	    &slsfs_vnodeops, &vp);
+
+	if (error) {
+		panic("Problem getting fake vnode for device\n");
+	}
+
+  return vp;
+}
+
 int
 vtree_create(struct vtree *vtree, struct vtreeops* ops, 
     diskptr_t root, size_t ks, uint32_t v_flags, vtree_rc_t rc, void *ctx)
@@ -84,13 +100,8 @@ vtree_create(struct vtree *vtree, struct vtreeops* ops,
 
   vtree->v_flags = v_flags;
 
-	error = getnewvnode("SLSFS Fake VNode", slos.slsfs_mount,
-	    &slsfs_vnodeops, &vp);
 
-	if (error) {
-		panic("Problem getting fake vnode for device\n");
-	}
-
+  vp = vtree_create_fake_device();
 	/* Set up the necessary backend state to be able to do IOs to the
 	 * device. */
 	vp->v_bufobj.bo_ops = &bufops_slsfs;
