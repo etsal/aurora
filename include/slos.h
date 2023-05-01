@@ -175,6 +175,7 @@ struct slos {
 	struct taskqueue *slos_tq; /* Slos taskqueue */
 	enum slos_state slos_state; /* State of the SLS */
 	uint64_t slos_bsize;	    /* Block size */
+  struct vnode * slos_fake_dev;
 };
 
 static inline enum slos_state

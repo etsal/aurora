@@ -127,6 +127,7 @@ slos_init(void)
 	/* Get a new unique identifier generator. */
 	slsid_unr = new_unrhdr(SLOS_SYSTEM_MAX, INT_MAX, NULL);
 
+
 	/* The constructor never fails. */
 	KASSERT(slsid_unr != NULL, ("slsid unr creation failed"));
 
@@ -141,6 +142,7 @@ slos_uninit(void)
 	clear_unrhdr(slsid_unr);
 	delete_unrhdr(slsid_unr);
 	slsid_unr = NULL;
+
 
 	/* Destroy the SLOS struct lock. */
 	lockdestroy(&slos.slos_lock);
@@ -408,7 +410,6 @@ slos_iopen(struct slos *slos, uint64_t oid, struct slos_node **svpp)
 		error = slos_svpimport(
 		    slos, slos->slos_sb->sb_root.offset, true, &svp);
 		if (error != 0) {
-			SLOS_UNLOCK(slos);
 			return (error);
 		}
 	} else {

@@ -239,6 +239,7 @@ slsfs_startupfs(struct mount *mp)
 
   DEBUG1("Starting up FS with super block %u\n", slos.slos_sb->sb_index);
 
+  slos.slos_fake_dev = vtree_create_fake_device();
 	slos_allocator_init(&slos, new_start);
 	slsfs_inodes_init(mp, &slos, new_start);
 
@@ -587,7 +588,7 @@ again:
 	/* Sync the inode root itself. */
 	if (isdirty) {
 
-		DEBUG("Checkpointing the inodes vnode\n");
+		printf("Checkpointing the inodes vnode\n");
 		/* 3 Sync Root Inodes and btree */
 		error = vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 		if (error) {
@@ -597,22 +598,16 @@ again:
 		ino = &svp->sn_ino;
 		DEBUG1(
 		    "Flushing inodes %p\n", slos.slsfs_inodes);
-    /* Sync the blocks BEFORE marking them COW so they will flush */
+
+		printf("Syncing Inodes Tree\n");
 		error = slos_checkpoint_vp(slos.slsfs_inodes, closing);
     MPASS(error == 0);
 
-
-		/*
-		 * Allocate a new blk for the root inode write it and give it
-		 * to the superblock
-		 */
-    
     error = slos_blkalloc(&slos, BLKSIZE(&slos), &ptr);
     ino->ino_blk = ptr.offset;
 		slos.slos_sb->sb_root = ptr;
 
-		DEBUG("Syncing Inodes Tree\n");
-		bp = getblk(slos.slos_vp, ino->ino_blk, BLKSIZE(&slos), 0, 0, 0);
+		bp = getblk(slos.slos_fake_dev, ino->ino_blk, BLKSIZE(&slos), 0, 0, 0);
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
 		bawrite(bp);
@@ -1108,6 +1103,9 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	 */
 	slsfs_free_system_vnode(slos->slsfs_inodes);
 	slos->slsfs_inodes = NULL;
+
+  vgone(slos->slos_fake_dev);
+  slos->slos_fake_dev = NULL;
 
 	error = vflush(mp, 0, flags, curthread);
   if (error) {

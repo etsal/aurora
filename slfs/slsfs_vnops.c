@@ -111,7 +111,7 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 	if (vp->v_type != VCHR) {
 	  svp = SLSVP(vp);
 		cache_purge(vp);
-    if (vp != slos.slsfs_inodes)
+    if (vp != slos.slsfs_inodes && vp != slos.slos_fake_dev)
 		  vfs_hash_remove(vp);
 
     if (svp != NULL)
@@ -458,8 +458,11 @@ slsfs_create(struct vop_create_args *args)
 	}
 	mode_t mode = MAKEIMODE(vap->va_type, vap->va_mode);
 	DEBUG1("Creating file %u", mode);
+  printf("Create %p\n", dvp);
 	error = SLS_VALLOC(dvp, mode, name->cn_cred, &vp);
+  printf("Create %p after valloc\n", dvp);
 	if (error) {
+    printf("Create done %p\n", dvp);
 		*vpp = NULL;
 		return (error);
 	}
@@ -467,6 +470,7 @@ slsfs_create(struct vop_create_args *args)
 	error = slsfs_add_dirent(
 	    dvp, VINUM(vp), name->cn_nameptr, name->cn_namelen, IFTODT(mode));
 	if (error == -1) {
+    printf("Create done %p\n", dvp);
 		return (EIO);
 	}
 
@@ -474,6 +478,7 @@ slsfs_create(struct vop_create_args *args)
 	if ((name->cn_flags & MAKEENTRY) != 0) {
 		cache_enter(dvp, *vpp, name);
 	}
+  printf("Create done %p\n", dvp);
 
 	return (0);
 }
@@ -526,15 +531,18 @@ slsfs_write(struct vop_write_args *args)
 	size_t blksize = IOSIZE(svp);
 	struct uio *uio = args->a_uio;
 	int ioflag = args->a_ioflag;
+  printf("Write %p\n", vp);
 
 	filesize = svp->sn_ino.ino_size;
 
 	// Check if full
 	if (uio->uio_offset < 0) {
 		DEBUG1("Offset write at %lx", uio->uio_offset);
+    printf("Write done full %p\n", vp);
 		return (EINVAL);
 	}
 	if (uio->uio_resid == 0) {
+    printf("Write done done %p\n", vp);
 		return (0);
 	}
 
@@ -606,6 +614,7 @@ slsfs_write(struct vop_write_args *args)
 		svp->sn_status |= SLOS_DIRTY;
 	}
 
+  printf("Write done ret %p\n", vp);
 	return (error);
 }
 

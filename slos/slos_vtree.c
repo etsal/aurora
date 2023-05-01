@@ -85,6 +85,10 @@ vtree_create_fake_device(void)
 	if (error) {
 		panic("Problem getting fake vnode for device\n");
 	}
+	vp->v_bufobj.bo_ops = &bufops_slsfs;
+	vp->v_bufobj.bo_bsize = slos.slos_sb->sb_bsize;
+	vp->v_type = VCHR;
+	vp->v_vflag |= VV_SYSTEM;
 
   return vp;
 }
@@ -104,11 +108,7 @@ vtree_create(struct vtree *vtree, struct vtreeops* ops,
   vp = vtree_create_fake_device();
 	/* Set up the necessary backend state to be able to do IOs to the
 	 * device. */
-	vp->v_bufobj.bo_ops = &bufops_slsfs;
-	vp->v_bufobj.bo_bsize = slos.slos_sb->sb_bsize;
-	vp->v_type = VCHR;
 	vp->v_data = vtree;
-	vp->v_vflag |= VV_SYSTEM;
 
 
   if (v_flags & VTREE_WITHWAL) {

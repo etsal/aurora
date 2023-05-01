@@ -214,13 +214,6 @@ path_cow(bpath_t path, uint64_t epoch)
       KASSERT(tmp.n_len == path->p_nodes[i].n_len, ("Should be the same number of entries!"));
       KASSERT(path->p_nodes[i].n_ptr.offset != tmp.n_ptr.offset, ("Different locations!"));
 
-      if (path->p_nodes[i].n_epoch < epoch) {
-        printf("Old pointer %lu %lu %lu\n", tmp.n_ptr.offset, tmp.n_ptr.size, tmp.n_epoch);
-        printf("New pointer %lu %lu %lu\n", path->p_nodes[i].n_ptr.offset, path->p_nodes[i].n_ptr.size, path->p_nodes[i].n_epoch);
-        printf("Epoch %lu\n", epoch);
-        KASSERT(false, ("SHOULD NOT BE COW\n"));
-      }
-
       /* Update our parent to know of the change */
       if (i > 0) {
         KASSERT(path->p_nodes[i].n_ptr.offset != 0, ("Do not copy a bad ptr"));
@@ -230,8 +223,12 @@ path_cow(bpath_t path, uint64_t epoch)
         tree->tr_ptr = path->p_nodes[i].n_ptr;
       }
 
-      /* We must invalidate the buffer to insure it never writes */
-      bawrite(tmp.n_bp);
+      /* Write any pending writes and then release the buffer */
+      if (tmp.n_bp->b_flags & B_DELWRI) {
+        bwrite(tmp.n_bp);
+      } else {
+        brelse(tmp.n_bp);
+      }
 
       /* Turn of cow on the node and dirty the node */
       btnode_dirty(&path->p_nodes[i]);
@@ -303,6 +300,7 @@ btnode_go_deeper(bpath_t path, uint64_t key, int acquire_as)
   btnode_t cur = path_getcur(path);
 
   idx = binary_search(cur->n_keys, cur->n_len, key);
+  /* Larger then every element */
   if (idx == cur->n_len) {
     cidx = cur->n_len;
   } else {
@@ -314,6 +312,7 @@ btnode_go_deeper(bpath_t path, uint64_t key, int acquire_as)
     }
   }
 
+  KASSERT(cidx < (cur->n_len + 1), ("Too large of child index"));
   diskptr_t ptr = *(diskptr_t*)&cur->n_ch[cidx];
   path_add(path, cur->n_tree, ptr, cidx, acquire_as);
 
@@ -964,7 +963,7 @@ btree_checkpoint(void* treep)
   printf("[Checkpoint]\n");
 #endif
 
-  btree_sync_buf(tree->tr_vp, MNT_WAIT);
+  btree_sync_buf(tree->tr_vp, 0);
 
   return (ptr);
 }
