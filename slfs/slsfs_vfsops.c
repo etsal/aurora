@@ -557,6 +557,7 @@ again:
 		}
 
 		if (SLSVP(vp)->sn_status & SLOS_DIRTY) {
+      KASSERT(vp != slos.slsfs_inodes, ("Inodes root should not be in here"));
 			/* Step 1 and 2 Sync data and mark underlying Btree Copy
 			 * on write*/
 			error = slos_checkpoint_vp(vp, closing);
@@ -565,15 +566,15 @@ again:
 				return;
 			}
 
-      vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 
-      error = slsfs_retrieve_buf(slos.slsfs_inodes, SLSVP(vp)->sn_pid * BLKSIZE(&slos), 
-          BLKSIZE(&slos), UIO_READ, 0, &bp);
+      VOP_LOCK(slos.slsfs_inodes, LK_EXCLUSIVE);
+      error = slsfs_bread(slos.slsfs_inodes, SLSVP(vp)->sn_pid, IOSIZE(SLSVP(vp)), NULL, 0, &bp);
       MPASS(error == 0);
 
       KASSERT(!SLS_ISWAL(slos.slsfs_inodes),
           ("slsfs_inodes should not be marked as a WAL object"));
-      memcpy(bp->b_data, &SLSVP(vp)->sn_ino, sizeof(SLSVP(vp)->sn_ino));
+
+      memcpy(bp->b_data, &SLSVP(vp)->sn_ino, sizeof(struct slos_inode));
       bawrite(bp);
 	    VOP_UNLOCK(slos.slsfs_inodes, 0);
       isdirty += 1;
@@ -588,7 +589,7 @@ again:
 	/* Sync the inode root itself. */
 	if (isdirty) {
 
-		printf("Checkpointing the inodes vnode\n");
+		DEBUG("Checkpointing the inodes vnode\n");
 		/* 3 Sync Root Inodes and btree */
 		error = vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 		if (error) {
@@ -599,7 +600,7 @@ again:
 		DEBUG1(
 		    "Flushing inodes %p\n", slos.slsfs_inodes);
 
-		printf("Syncing Inodes Tree\n");
+		DEBUG("Syncing Inodes Tree\n");
 		error = slos_checkpoint_vp(slos.slsfs_inodes, closing);
     MPASS(error == 0);
 
@@ -626,7 +627,7 @@ again:
 		    slos.slos_sb->sb_epoch, slos.slos_sb->sb_index);
 		SLSVP(slos.slsfs_inodes)->sn_status &= ~(SLOS_DIRTY);
 
-    printf("Checkpointing super block at %u\n", slos.slos_sb->sb_index);
+    DEBUG1("Checkpointing super block at %u\n", slos.slos_sb->sb_index);
 		/* Flush the current superblock itself. */
 		bp = getblk(slos.slos_vp, slos.slos_sb->sb_index,
 		    slos.slos_sb->sb_ssize, 0, 0, 0);

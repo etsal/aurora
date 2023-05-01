@@ -244,7 +244,7 @@ slos_svpimport(
       goto error;
     }
 
-    error = slsfs_retrieve_buf(slos->slsfs_inodes, svpid * BLKSIZE(slos), BLKSIZE(slos), UIO_READ, 0, &bp);
+    error = slsfs_bread(slos->slsfs_inodes, svpid, BLKSIZE(slos), NULL, 0, &bp);
 		VOP_UNLOCK(slos->slsfs_inodes, 0);
 		if (error != 0)
 			goto error;
@@ -368,7 +368,7 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 
    
   VOP_LOCK(root_vp, LK_EXCLUSIVE);
-  slsfs_retrieve_buf(root_vp, svpid * blksize, blksize, UIO_WRITE, 0, &bp);
+	bp = getblk(root_vp, svpid, blksize, 0, 0, 0);
   VOP_UNLOCK(root_vp, 0);
   memcpy(bp->b_data, &ino, sizeof(struct slos_inode));
   slsfs_bdirty(bp);

@@ -168,7 +168,9 @@ vtree_insert(vtree* tree, uint64_t key, void* value)
 
     wal_insert(tree, ks, key, value);
   } else {
+    VOP_LOCK(tree->v_vp, LK_EXCLUSIVE);
     error = VTREE_INSERT(tree, key, value);
+    VOP_UNLOCK(tree->v_vp, 0);
   }
 
   newroot = VTREE_GETROOT(tree);
@@ -183,25 +185,43 @@ vtree_insert(vtree* tree, uint64_t key, void* value)
 int
 vtree_bulkinsert(vtree* tree, kvp* keyvalues, size_t len)
 {
-  return VTREE_BULKINSERT(tree, keyvalues, len);
+  int error;
+  VOP_LOCK(tree->v_vp, LK_EXCLUSIVE);
+  error = VTREE_BULKINSERT(tree, keyvalues, len);
+  VOP_UNLOCK(tree->v_vp, 0);
+
+  return error;
 }
 
 int
 vtree_delete(vtree* tree, uint64_t key, void* value)
 {
-  return VTREE_DELETE(tree, key, value);
+  int error;
+  VOP_LOCK(tree->v_vp, LK_EXCLUSIVE);
+  error = VTREE_DELETE(tree, key, value);
+  VOP_UNLOCK(tree->v_vp, 0);
+  return error;
 }
 
 int
 vtree_find(vtree* tree, uint64_t key, void* value)
 {
-  return VTREE_FIND(tree, key, value);
+  int error;
+  VOP_LOCK(tree->v_vp, LK_SHARED);
+  error = VTREE_FIND(tree, key, value);
+  VOP_UNLOCK(tree->v_vp, 0);
+
+  return error;
 }
 
 int
 vtree_ge(vtree* tree, uint64_t* key, void* value)
 {
-  return VTREE_GE(tree, key, value);
+  int error;
+  VOP_LOCK(tree->v_vp, LK_SHARED);
+  error = VTREE_GE(tree, key, value);
+  VOP_UNLOCK(tree->v_vp, 0);
+  return error;
 }
 
 int
@@ -211,14 +231,23 @@ vtree_rangequery(vtree* tree,
                  kvp* results,
                  size_t results_max)
 {
-  return VTREE_RANGEQUERY(tree, key_low, key_max, results, results_max);
+  int error;
+  VOP_LOCK(tree->v_vp, LK_SHARED);
+  error =  VTREE_RANGEQUERY(tree, key_low, key_max, results, results_max);
+  VOP_UNLOCK(tree->v_vp, 0);
+  return error;
 }
 
 diskptr_t
 vtree_checkpoint(vtree* tree)
 {
+  diskptr_t ptr;
   vtree_empty_wal(tree);
-  return VTREE_CHECKPOINT(tree);
+  VOP_LOCK(tree->v_vp, LK_EXCLUSIVE);
+  ptr = VTREE_CHECKPOINT(tree);
+  VOP_UNLOCK(tree->v_vp, 0);
+
+  return ptr;
 }
 
 size_t

@@ -67,6 +67,11 @@ binary_search(uint64_t* arr, size_t size, uint64_t key)
 static void
 btnode_print(btnode_t node)
 {
+  if (node->n_len > BT_MAX_KEYS) {
+    printf("Corrupted node\n");
+    node->n_len = BT_MAX_KEYS;
+  }
+
   printf("\nNode %lx %u\n", node->n_ptr.offset, node->n_len);
   for (int i = 0; i < node->n_len; i += 10) {
     printf("%d: ", i);
@@ -174,6 +179,7 @@ path_cow(bpath_t path, uint64_t epoch)
   btnode tmp;
   btnode_t parent = NULL;
   struct buf *oldbp;
+  int oldlength = 0;
 
   int idx;
   btree_t tree = path_getcur(path)->n_tree;
@@ -192,6 +198,8 @@ path_cow(bpath_t path, uint64_t epoch)
       }
 
       oldbp  = tmp.n_bp;
+      oldlength = tmp.n_len;
+      KASSERT(oldlength < BT_MAX_KEYS, ("Too large!"));
 
       btnode_create(&path->p_nodes[i], tmp.n_tree, tmp.n_type);
 
@@ -211,12 +219,14 @@ path_cow(bpath_t path, uint64_t epoch)
       memcpy(path->p_nodes[i].n_bp->b_data, oldbp->b_data, VTREE_BLKSZ);
 
       KASSERT(path->p_nodes[i].n_epoch >= epoch, ("NEW PTR SHOULD BE IN LARGER EPOCH 2"));
-      KASSERT(tmp.n_len == path->p_nodes[i].n_len, ("Should be the same number of entries!"));
+      KASSERT(oldlength == path->p_nodes[i].n_len, ("Should be the same number of entries!"));
       KASSERT(path->p_nodes[i].n_ptr.offset != tmp.n_ptr.offset, ("Different locations!"));
+      KASSERT(path->p_nodes[i].n_ptr.offset != 0, ("Should not equal zero!"));
 
       /* Update our parent to know of the change */
       if (i > 0) {
         KASSERT(path->p_nodes[i].n_ptr.offset != 0, ("Do not copy a bad ptr"));
+        KASSERT(((diskptr_t *)&parent->n_ch[idx])->offset == oldbp->b_lblkno, ("Replacing the correct one"));
         memcpy(&parent->n_ch[idx], &path->p_nodes[i].n_ptr, sizeof(diskptr_t));
       } else {
         /* Make sure we update our root ptr in our main tree datastructure */
@@ -224,11 +234,8 @@ path_cow(bpath_t path, uint64_t epoch)
       }
 
       /* Write any pending writes and then release the buffer */
-      if (tmp.n_bp->b_flags & B_DELWRI) {
-        bwrite(tmp.n_bp);
-      } else {
-        brelse(tmp.n_bp);
-      }
+      oldbp->b_flags |= B_INVAL;
+      brelse(oldbp);
 
       /* Turn of cow on the node and dirty the node */
       btnode_dirty(&path->p_nodes[i]);
@@ -314,6 +321,12 @@ btnode_go_deeper(bpath_t path, uint64_t key, int acquire_as)
 
   KASSERT(cidx < (cur->n_len + 1), ("Too large of child index"));
   diskptr_t ptr = *(diskptr_t*)&cur->n_ch[cidx];
+  if (ptr.offset == 0) {
+    printf("TRYING TO ACCESS CHILD %d\n", cidx);
+    path_print(path);
+    KASSERT(false, ("Corruption?"));
+  }
+
   path_add(path, cur->n_tree, ptr, cidx, acquire_as);
 
   return path_getcur(path);
@@ -351,6 +364,11 @@ btnode_find_ge(btree_t tree, uint64_t* key, void* value, int acquire_as)
 
   node = btnode_find_child(&path, *key, acquire_as);
 
+  if (node->n_len > BT_MAX_KEYS) {
+    path_print(&path);
+    KASSERT(false, ("Bad node"));
+  }
+
   idx = binary_search(node->n_keys, node->n_len, *key);
   /* Is there no key here */
   if (idx >= node->n_len) {
@@ -385,8 +403,9 @@ static void
 btnode_inner_insert(btnode_t node, int idx, uint64_t key, diskptr_t value)
 {
   KASSERT(BT_ISINNER(node), ("Node should be an inner node"));
+  KASSERT(((diskptr_t *)&node->n_ch[0])->offset != 0, ("BAD OFFSET BEFORE INSERT"));
   if (node->n_len) {
-    int num_to_move = node->n_len - idx + 1;
+    int num_to_move = node->n_len - idx;
     memmove(
       &node->n_keys[idx + 1], &node->n_keys[idx], num_to_move * sizeof(key));
     memmove(&node->n_ch[idx + 2],
@@ -397,6 +416,7 @@ btnode_inner_insert(btnode_t node, int idx, uint64_t key, diskptr_t value)
   node->n_keys[idx] = key;
   memcpy(&node->n_ch[idx + 1], &value, sizeof(value));
   node->n_len += 1;
+  KASSERT(((diskptr_t *)&node->n_ch[0])->offset != 0, ("BAD OFFSET AFTER INSERT"));
 
   btnode_dirty(node);
 }
@@ -413,12 +433,16 @@ btnode_split(bpath_t path)
 #ifdef DEBUG
   printf("[Split]\n");
 #endif
+  if (!BT_ISLEAF(node)) {
+    KASSERT(((diskptr_t *)&node->n_ch[0])->offset != 0, ("BAD OFFSET BEFORE COPY"));
+  }
 
   /* We are the root */
   if (pptr == NULL) {
     btnode_create(&parent, node->n_tree, BT_INNER);
     /* Set our current node to the child of our new parent */
     memcpy(&parent.n_ch[0], &node->n_ptr, sizeof(diskptr_t));
+    KASSERT(((diskptr_t *)&parent.n_ch[0])->offset != 0, ("BAD OFFSET PARENT"));
 
     node = path_fixup_cur_parent(path, &parent);
 
@@ -428,6 +452,7 @@ btnode_split(bpath_t path)
     idx = 0;
   } else {
     parent = *pptr;
+    KASSERT(((diskptr_t *)&parent.n_ch[0])->offset != 0, ("BAD OFFSET GOGO PARENT"));
     idx = path_getindex(path);
   }
 
@@ -450,10 +475,13 @@ btnode_split(bpath_t path)
     memcpy(&right_child.n_ch[0],
            &node->n_ch[SPLIT_KEYS],
            (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
-  else
+  else {
     memcpy(&right_child.n_ch[0],
            &node->n_ch[SPLIT_KEYS],
            (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
+    KASSERT(((diskptr_t *)&node->n_ch[0])->offset != 0, ("BAD OFFSET NODE"));
+    KASSERT(((diskptr_t *)&right_child.n_ch[0])->offset != 0, ("BAD OFFSET RIGHT CHILD"));
+  }
 
   /* Setting the pivot key here, with SPLIT_KEYS - 1, means elements to the
    * right must be strictly greater
@@ -467,6 +495,7 @@ btnode_split(bpath_t path)
   bqrelse(right_child.n_bp);
 
   if (parent.n_len == BT_MAX_KEYS) {
+    KASSERT(((diskptr_t *)&parent.n_ch[0])->offset != 0, ("BAD OFFSET PARENT SPLIT"));
     path_backtrack(path);
     btnode_split(path);
   }
@@ -880,7 +909,7 @@ loop1:
 	/*
 	 * MARK/SCAN initialization to avoid infinite loops.
 	 */
-        TAILQ_FOREACH(bp, &bo->bo_dirty.bv_hd, b_bobufs) {
+  TAILQ_FOREACH(bp, &bo->bo_dirty.bv_hd, b_bobufs) {
 		bp->b_vflags &= ~BV_SCANNED;
 		bp->b_error = 0;
 	}
@@ -908,10 +937,8 @@ loop2:
 		KASSERT(bp->b_bufobj == bo,
 		    ("bp %p wrong b_bufobj %p should be %p",
 		    bp, bp->b_bufobj, bo));
-		if ((bp->b_flags & B_DELWRI) == 0)
+		if ((bp->b_flags & B_DELWRI) == 0) {
 			panic("fsync: not dirty");
-		if ((vp->v_object != NULL) && (bp->b_flags & B_CLUSTEROK)) {
-			vfs_bio_awrite(bp);
 		} else {
 			bremfree(bp);
 			bawrite(bp);

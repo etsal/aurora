@@ -268,7 +268,7 @@ slos_io_setdaddr(struct slos_node *svp, struct buf *bp)
 	struct slos_diskptr ptr;
 	int error;
 
-	error = slos_blkalloc(svp->sn_slos, BLKSIZE(&slos), &ptr);
+	error = slos_blkalloc(svp->sn_slos, bp->b_resid, &ptr);
 	if (error != 0)
 		goto error;
 
