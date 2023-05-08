@@ -234,8 +234,7 @@ path_cow(bpath_t path, uint64_t epoch)
       }
 
       /* Write any pending writes and then release the buffer */
-      oldbp->b_flags |= B_INVAL;
-      brelse(oldbp);
+      bawrite(oldbp);
 
       /* Turn of cow on the node and dirty the node */
       btnode_dirty(&path->p_nodes[i]);
@@ -404,20 +403,26 @@ btnode_inner_insert(btnode_t node, int idx, uint64_t key, diskptr_t value)
 {
   KASSERT(BT_ISINNER(node), ("Node should be an inner node"));
   KASSERT(((diskptr_t *)&node->n_ch[0])->offset != 0, ("BAD OFFSET BEFORE INSERT"));
-  if (node->n_len) {
-    int num_to_move = node->n_len - idx;
-    memmove(
-      &node->n_keys[idx + 1], &node->n_keys[idx], num_to_move * sizeof(key));
-    memmove(&node->n_ch[idx + 2],
-            &node->n_ch[idx + 1],
-            num_to_move * BT_MAX_VALUE_SIZE);
+  int i, j;
+  for (i = 0; i < node->n_len; i++) {
+    if (node->n_keys[i] > key) {
+        break;
+    }
+  }
+  // shift the keys and child pointers to make space for the new key
+  for (j = node->n_len; j > i; j--) {
+      node->n_keys[j] = node->n_keys[j-1];
+      node->n_ch[j+1] = node->n_ch[j];
   }
 
-  node->n_keys[idx] = key;
-  memcpy(&node->n_ch[idx + 1], &value, sizeof(value));
+  if (i != idx) {
+    printf("WTF THIS IS DIFFERENT %d %d\n", i, idx);
+  }
+
+  node->n_keys[i] = key;
+  memcpy(&node->n_ch[i + 1], &value, sizeof(value));
   node->n_len += 1;
   KASSERT(((diskptr_t *)&node->n_ch[0])->offset != 0, ("BAD OFFSET AFTER INSERT"));
-
   btnode_dirty(node);
 }
 
@@ -492,7 +497,7 @@ btnode_split(bpath_t path)
   btnode_dirty(&right_child);
   btnode_dirty(node);
 
-  bqrelse(right_child.n_bp);
+  bawrite(right_child.n_bp);
 
   if (parent.n_len == BT_MAX_KEYS) {
     KASSERT(((diskptr_t *)&parent.n_ch[0])->offset != 0, ("BAD OFFSET PARENT SPLIT"));
@@ -922,18 +927,12 @@ loop2:
 		if ((bp->b_vflags & BV_SCANNED) != 0)
 			continue;
 		bp->b_vflags |= BV_SCANNED;
-		if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_NOWAIT, NULL)) {
-			if (waitfor != MNT_WAIT)
-				continue;
-			if (BUF_LOCK(bp,
-			    LK_EXCLUSIVE | LK_INTERLOCK | LK_SLEEPFAIL,
-			    BO_LOCKPTR(bo)) != 0) {
-				BO_LOCK(bo);
-				goto loop1;
-			}
-			BO_LOCK(bo);
-		}
-		BO_UNLOCK(bo);
+    if (BUF_LOCK(bp,
+        LK_EXCLUSIVE | LK_INTERLOCK | LK_SLEEPFAIL,
+        BO_LOCKPTR(bo)) != 0) {
+      BO_LOCK(bo);
+      goto loop1;
+    }
 		KASSERT(bp->b_bufobj == bo,
 		    ("bp %p wrong b_bufobj %p should be %p",
 		    bp, bp->b_bufobj, bo));
@@ -985,12 +984,15 @@ btree_checkpoint(void* treep)
 {
   btree_t tree = (btree_t)treep;
   diskptr_t ptr = tree->tr_ptr;
+  int error;
 
 #ifdef DEBUG
   printf("[Checkpoint]\n");
 #endif
 
-  btree_sync_buf(tree->tr_vp, 0);
+  do {
+    error = btree_sync_buf(tree->tr_vp, 0);
+  } while (error == EAGAIN);
 
   return (ptr);
 }

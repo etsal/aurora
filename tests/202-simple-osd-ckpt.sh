@@ -10,6 +10,7 @@ fi
 
 dd if=/dev/zero of=/dev/null bs=1m 1>&2 &
 
+echo "CHECKPOINT"
 slsosdcheckpoint `jobid %1`
 if [ $? -ne 0 ];
 then
@@ -20,6 +21,7 @@ fi
 
 killandwait %1
 
+echo "RESTORE"
 slsosdrestore
 if [ $? -ne 0 ] && [ $? -ne 3 ];
 then
@@ -32,6 +34,7 @@ REST=$!
 
 sleep 1
 
+echo "TEARDOWN"
 aurteardown
 if [ $? -ne 0 ]; then
     echo "Failed to tear down Aurora"

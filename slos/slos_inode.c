@@ -196,12 +196,35 @@ slos_svpsize(struct slos_node *svp)
 
 	return (0);
 }
+struct slos_node * 
+slos_node_allocate(void) {
+	return uma_zalloc(slos_node_zone, M_WAITOK);
+}
 
 int
 inode_btree_rootchange(void *ctx, diskptr_t ptr) {
+  struct buf *bp;
   struct slos_node *svp = (struct slos_node *)ctx;
   svp->sn_ino.ino_btree = ptr;
+
+  if (svp != SLSVP(slos.slsfs_inodes)) {
+    VOP_LOCK(slos.slsfs_inodes, LK_EXCLUSIVE);
+    bp = getblk(slos.slsfs_inodes, svp->sn_pid, IOSIZE(svp), 0, 0 ,0);
+    VOP_UNLOCK(slos.slsfs_inodes, 0);
+    memcpy(bp->b_data, &svp->sn_ino, sizeof(struct slos_inode));
+    bawrite(bp);
+  }
+
   return 0;
+}
+
+static int time_us(struct timespec *start, struct timespec *end)
+{
+    int total_s = end->tv_sec - start->tv_sec;
+    int total_ns = end->tv_nsec - start->tv_nsec;
+    total_s = total_s * (int)1e9;
+    total_ns += total_s;
+    return total_ns / (int)1e3;
 }
 
 /*
@@ -235,15 +258,15 @@ slos_svpimport(
 		if (error != 0)
 			goto error;
 	} else {
-		VOP_LOCK(slos->slsfs_inodes, LK_EXCLUSIVE);
     /* Check to make sure we dont have the buffer */
     error = slsfs_lookupbln(SLSVP(slos->slsfs_inodes), svpid, &ptr);
     if (error) {
-		  VOP_UNLOCK(slos->slsfs_inodes, 0);
+      printf("NO FILE\n");
       error = ENOENT;
       goto error;
     }
 
+		VOP_LOCK(slos->slsfs_inodes, LK_SHARED);
     error = slsfs_bread(slos->slsfs_inodes, svpid, BLKSIZE(slos), NULL, 0, &bp);
 		VOP_UNLOCK(slos->slsfs_inodes, 0);
 		if (error != 0)
@@ -322,7 +345,7 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	VOP_LOCK(root_vp, LK_EXCLUSIVE);
 	error = vtree_find(&svp->sn_vtree, svpid, &ptr);
 	if (error == 0) {
-	  VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
+	  VOP_UNLOCK(root_vp, 0);
 		return (EEXIST);
 	}
 
@@ -333,7 +356,6 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
   ptr.flags = 0;
 	error = vtree_insert(&svp->sn_vtree, svpid, &ptr);
   MPASS(error == 0);
-	VOP_UNLOCK(root_vp, LK_EXCLUSIVE);
 
 	ino.ino_flags = IN_UPDATE | IN_ACCESS | IN_CHANGE | IN_CREATE;
 
@@ -355,23 +377,24 @@ slos_icreate(struct slos *slos, uint64_t svpid, mode_t mode)
 	ino.ino_wal_segment.epoch = 0;
 
 	error = slos_blkalloc(slos, VTREE_BLKSZ, &ptr);
+  MPASS(error == 0);
 	if (error) {
 		return (error);
 	}
 
   /* TODO Delay this allocation */
-	slsfs_devbread(slos, ptr.offset, VTREE_BLKSZ, &bp);
-	MPASS(bp);
-	bzero(bp->b_data, bp->b_bcount);
-	slsfs_bdirty(bp);
+
 	ino.ino_btree = ptr;
 
-   
-  VOP_LOCK(root_vp, LK_EXCLUSIVE);
-	bp = getblk(root_vp, svpid, blksize, 0, 0, 0);
+  bp = getblk(root_vp, svpid, BLKSIZE(slos), 0, 0, 0);
   VOP_UNLOCK(root_vp, 0);
   memcpy(bp->b_data, &ino, sizeof(struct slos_inode));
-  slsfs_bdirty(bp);
+  bwrite(bp);
+
+	slsfs_devbread(slos, ptr.offset, VTREE_BLKSZ, &bp);
+	MPASS(bp);
+  bzero(bp->b_data, VTREE_BLKSZ);
+	bwrite(bp);
 
 	// We will use this private pointer as a way to change this ino with
 	// the proper ino blk number when it syncs
@@ -486,6 +509,7 @@ initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 	slos_updatetime(&ino);
 
 	ino.ino_blk = p->offset;
+  ino.ino_blocks = 0;
 	ino.ino_magic = SLOS_IMAGIC;
 	ino.ino_pid = pid;
 	ino.ino_gid = 0;
@@ -501,7 +525,6 @@ initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p)
 
 	bp = getblk(fdev, ino.ino_btree.offset, VTREE_BLKSZ, 0, 0, 0);
 	MPASS(bp);
-
 	vfs_bio_clrbuf(bp);
 	bwrite(bp);
 

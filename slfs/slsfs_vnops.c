@@ -315,7 +315,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 	islastcn = cnp->cn_flags & ISLASTCN;
 
 	/* Self directory - Must just increase reference count of dir */
-	DEBUG1("SLSFS Lookup called %x", cnp->cn_flags);
+	DEBUG2("SLSFS Lookup called %s %lx\n", cnp->cn_nameptr, cnp->cn_flags);
 	if ((namelen == 1) && (name[0] == '.')) {
 		*vpp = dvp;
 		VREF(dvp);
@@ -335,7 +335,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 		}
 	} else {
 		error = slsfs_lookup_name(dvp, cnp, &dir);
-		if (error == EINVAL) {
+		if (error) {
 			error = ENOENT;
 			/*
 			 * Are we creating or renaming the directory
@@ -344,7 +344,7 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 			    islastcn) {
 				/* Normally should check access rights but
 				 * won't for now */
-				DEBUG("Regular name lookup - not found");
+				DEBUG("Regular name lookup - not found\n");
 				cnp->cn_flags |= SAVENAME;
 				error = EJUSTRETURN;
 			}
@@ -457,7 +457,6 @@ slsfs_create(struct vop_create_args *args)
 		return (ENAMETOOLONG);
 	}
 	mode_t mode = MAKEIMODE(vap->va_type, vap->va_mode);
-	DEBUG1("Creating file %u", mode);
 	error = SLS_VALLOC(dvp, mode, name->cn_cred, &vp);
 	if (error) {
 		*vpp = NULL;
@@ -1299,7 +1298,7 @@ slsfs_rename(struct vop_rename_args *args)
 
 	mode_t mode = svp->sn_ino.ino_mode;
 
-	DEBUG("Rename or move");
+	printf("Rename or move\n");
 	// Following nandfs example here -- cross device renaming
 	if ((fvp->v_mount != tdvp->v_mount) ||
 	    (tvp && (fvp->v_mount != tvp->v_mount))) {
@@ -1551,7 +1550,22 @@ bad:
 static int
 slsfs_numextents(struct slos_node *svp, uint64_t *numextentsp)
 {
-  panic("NOT IMPLEMENTED");
+  int numresults;
+  struct kvp kvs[64];
+
+  uint64_t lblkno = *numextentsp;
+  uint64_t numextents = 0;
+  uint64_t keymax = (uint64_t)(-1);
+
+  /* Iterate over all keys */
+  do {
+    numresults = vtree_rangequery(&svp->sn_vtree, lblkno, keymax, kvs, 64);
+    numextents += numresults;
+    lblkno = kvs[63].key;
+  } while (numresults == 64);
+
+  *numextentsp = numextents;
+
 	return (0);
 }
 
@@ -1559,7 +1573,24 @@ slsfs_numextents(struct slos_node *svp, uint64_t *numextentsp)
 static int
 slsfs_getextents(struct slos_node *svp, struct slos_extent *extents)
 {
-  panic("NOT IMPLEMENTED");
+  struct kvp kvs[64];
+  int numresults;
+
+  uint64_t keymax = (uint64_t)(-1);
+  uint64_t lblkno = extents[0].sxt_lblkno;
+  int idx = 0;
+
+  do {
+    numresults = vtree_rangequery(&svp->sn_vtree, lblkno, keymax, kvs, 64);
+    for (int t = 0; t < numresults; t++) {
+      extents[idx].sxt_lblkno = kvs[t].key;
+      extents[idx].sxt_cnt = ((diskptr_t *)kvs[t].data)->size / IOSIZE(svp);
+      idx += 1;
+    }
+
+    lblkno = kvs[63].key;
+  } while (numresults == 64);
+
 	return (0);
 }
 
@@ -1678,6 +1709,7 @@ slsfs_symlink(struct vop_symlink_args *ap)
 		return (error);
 	}
 
+  printf("SYMLINK ADDDIR\n");
 	error = slsfs_add_dirent(dvp, SLSVP(vp)->sn_pid, cnp->cn_nameptr,
 	    cnp->cn_namelen, IFTODT(mode));
 	if (error) {
@@ -1717,7 +1749,7 @@ slsfs_link(struct vop_link_args *ap)
 	struct vnode *vp = ap->a_vp;
 	struct componentname *cnp = ap->a_cnp;
 
-	DEBUG1("Linking file %p", vp);
+	printf("ADD DIRLinking file %p", vp);
 
 	error = slsfs_add_dirent(tdvp, SLSVP(vp)->sn_pid, cnp->cn_nameptr,
 	    cnp->cn_namelen, IFTODT(SLSVP(vp)->sn_ino.ino_mode));
@@ -1763,6 +1795,7 @@ slsfs_mknod(struct vop_mknod_args *args)
 	struct vattr *vap = args->a_vap;
 
 	mode_t mode = MAKEIMODE(vap->va_type, vap->va_mode);
+  printf("MKNOD\n");
 	error = SLS_VALLOC(dvp, mode, name->cn_cred, &vp);
 	if (error) {
 		*vpp = NULL;

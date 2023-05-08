@@ -85,7 +85,7 @@ slsfs_retrieve_buf(struct vnode *vp, uint64_t offset, uint64_t size,
 	if (error != 0) {
 		return slsfs_buf_insert(vp, &ptr, bno, size, rw, gbflag, bp);
 	} else {
-    DEBUG4("Found bno(%lu) for svp(%p), at offset(%lu), size(%lu)\n", bno, svp, ptr.offset, ptr.size);
+    DEBUG5("Found bno(%lu) for svp(%p-%lu), at offset(%lu), size(%lu)\n", bno, svp, svp->sn_pid, ptr.offset, ptr.size);
   }
 
   /* This has not been written yet so the blk must be in our cache */

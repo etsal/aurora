@@ -300,7 +300,6 @@ slsfs_lookup_name(
 		// Went through directory and found no entry so we are empty
 		return 1;
 	}
-
 	return (EINVAL);
 }
 

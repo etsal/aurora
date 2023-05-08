@@ -59,6 +59,15 @@ slos_generic_rc(void *ctx, bnode_ptr p)
 	slos_update(svp);
 }
 
+static int time_us(struct timespec *start, struct timespec *end)
+{
+    int total_s = end->tv_sec - start->tv_sec;
+    int total_ns = end->tv_nsec - start->tv_nsec;
+    total_s = total_s * (int)1e9;
+    total_ns += total_s;
+    return total_ns / (int)1e3;
+}
+
 /*
  * Allocate a new SLOS inode.
  * TODO: Rename this - it allocates an inode not a vnode
@@ -69,6 +78,7 @@ slos_svpalloc(struct slos *slos, mode_t mode, uint64_t *slsidp)
 	int slsid;
 	int slsid_requested;
 	int error;
+  struct timespec t1, t2;
 
 	/*
 	 * Get an inode number if one is not specified.
@@ -93,7 +103,10 @@ retry_create:
 	}
 
 	/* Create the inode. */
+  nanotime(&t1);
 	error = slos_icreate(slos, (uint64_t)slsid, mode);
+  nanotime(&t2);
+  printf("icreate %d\n", time_us(&t1, &t2));
 	if (error != 0) {
 		// If they requested nothing then we should retry
 		if (slsid_requested == 0) {
@@ -114,31 +127,6 @@ retry_create:
 	}
 
 	*slsidp = slsid;
-
-	return (0);
-}
-
-int
-slos_setupfakedev(struct slos *slos, struct slos_node *vp)
-{
-  panic("Dont call this \n");
-	/* struct vnode *devvp; */
-	/* int error; */
-
-	/* error = getnewvnode("SLSFS Fake VNode", slos->slsfs_mount, */
-	/*     &slsfs_vnodeops, &vp->sn_fdev); */
-	/* if (error) { */
-	/* 	panic("Problem getting fake vnode for device\n"); */
-	/* } */
-	/* devvp = vp->sn_fdev; */
-	/* /1* Set up the necessary backend state to be able to do IOs to the */
-	/*  * device. *1/ */
-	/* devvp->v_bufobj.bo_ops = &bufops_slsfs; */
-	/* devvp->v_bufobj.bo_bsize = slos->slos_sb->sb_bsize; */
-	/* devvp->v_type = VCHR; */
-	/* devvp->v_data = vp; */
-	/* devvp->v_vflag |= VV_SYSTEM; */
-	/* DEBUG("Setup fake device"); */
 
 	return (0);
 }

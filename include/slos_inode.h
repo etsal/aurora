@@ -135,6 +135,8 @@ int inode_btree_rootchange(void *ctx, diskptr_t ptr);
 int slos_svpalloc(struct slos *slos, mode_t mode, uint64_t *slsidp);
 
 int initialize_inode(struct slos *slos, uint64_t pid, diskptr_t *p);
+
+struct slos_node * slos_node_allocate(void);
 #endif
 
 #endif /* _SLOS_INODE_H_ */

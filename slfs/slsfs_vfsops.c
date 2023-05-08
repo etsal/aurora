@@ -345,6 +345,41 @@ slsfs_mount_device(
 
 	return (0);
 }
+
+static void
+slsfs_init_vnode(struct vnode *vp, uint64_t ino)
+{
+	struct slos_node *mp = SLSVP(vp);
+
+	switch (ino) {
+	case SLOS_ROOT_INODE:
+		vp->v_vflag |= VV_ROOT;
+		vp->v_type = VDIR;
+		SLSVP(vp)->sn_ino.ino_gid = 0;
+		SLSVP(vp)->sn_ino.ino_uid = 0;
+		break;
+	case SLOS_INODES_ROOT:
+		vp->v_type = VREG;
+		vp->v_vflag |= VV_SYSTEM;
+		break;
+	case SLOS_SLSPART_INODE:
+	case SLOS_SLSPREFAULT_INODE:
+		vp->v_type = VREG;
+		break;
+	default:
+		vp->v_type = IFTOVT(mp->sn_ino.ino_mode);
+	}
+	SLSVP(vp)->sn_ino.ino_wal_segment.size = 0;
+	SLSVP(vp)->sn_ino.ino_wal_segment.offset = 0;
+
+	if (vp->v_type == VFIFO) {
+		vp->v_op = &slsfs_fifoops;
+	}
+
+	vnode_create_vobject(vp, 0, curthread);
+}
+
+
 /*
  * Vnode allocation
  * Will create the underlying inode as well and link the data to a newly
@@ -360,22 +395,113 @@ slsfs_valloc(
     struct vnode *dvp, mode_t mode, struct ucred *creds, struct vnode **vpp)
 {
 	int error;
-	uint64_t pid = 0;
 	struct vnode *vp;
+	struct vnode *root_vp = slos.slsfs_inodes;
+  struct slos_inode *ino;
+  struct slos_node *svp;
+  struct buf *bp;
+  diskptr_t ptr;
+	size_t blksize = IOSIZE(SLSVP(dvp));
 
-	/* Create the new inode in the filesystem. */
-	error = slos_svpalloc(VPSLOS(dvp), mode, &pid);
+		/* If any ID will do, we need to get one. */
+	int svpid = alloc_unr(slsid_unr);
+  if (svpid < 0) 
+    return (EINVAL);
+
+	
+	// For now we will use the blkno for our svpids
+	error = vtree_find(&SLSVP(root_vp)->sn_vtree, svpid, &ptr);
+	if (error == 0) {
+	  VOP_UNLOCK(root_vp, 0);
+		return (EEXIST);
+	}
+
+  DEBUG1("Creating Inode %d\n", svpid);
+
+  /* Create the in memory SLOS node */
+	svp = slos_node_allocate();
+	svp->sn_slos = &slos;
+  ino = &svp->sn_ino;
+
+  ptr.size = blksize;
+  ptr.offset = 0;
+  ptr.flags = 0;
+	error = vtree_insert(&SLSVP(root_vp)->sn_vtree, svpid, &ptr);
+  MPASS(error == 0);
+
+	ino->ino_flags = IN_UPDATE | IN_ACCESS | IN_CHANGE | IN_CREATE;
+
+	slos_updatetime(ino);
+
+	ino->ino_pid = svpid;
+	ino->ino_nlink = 1;
+	ino->ino_flags = 0;
+	ino->ino_blk = 0;
+	ino->ino_magic = SLOS_IMAGIC;
+	ino->ino_mode = mode;
+	ino->ino_asize = 0;
+	ino->ino_size = 0;
+	ino->ino_blocks = 0;
+	ino->ino_rstat.type = 0;
+	ino->ino_rstat.len = 0;
+	ino->ino_wal_segment.size = 0;
+	ino->ino_wal_segment.offset = 0;
+	ino->ino_wal_segment.epoch = 0;
+
+	error = slos_blkalloc(&slos, VTREE_BLKSZ, &ptr);
 	if (error) {
 		return (error);
 	}
+	ino->ino_btree = ptr;
 
-	/* Get a vnode for the newly created inode. */
-	error = slsfs_vget(dvp->v_mount, pid, LK_EXCLUSIVE, &vp);
+	/* Get a new blank vnode. */
+	error = getnewvnode("slsfs", slos.slsfs_mount, &slsfs_vnodeops, &vp);
 	if (error) {
+    slos_vpfree(&slos, svp, true);
+		DEBUG("Problem getting new inode");
+		*vpp = NULL;
 		return (error);
 	}
 
-	SLSVP(vp)->sn_status |= SLOS_DIRTY;
+	vn_lock(vp, LK_EXCLUSIVE);
+  error = insmntque(vp, slos.slsfs_mount);
+  if (error) {
+    slos_vpfree(&slos, svp, true);
+    VOP_UNLOCK(vp, 0);
+    *vpp = NULL;
+    return (error);
+  }
+
+  error = vfs_hash_insert(
+      vp, svpid, LK_EXCLUSIVE, curthread, vpp, NULL, NULL);
+  if (error != 0 || *vpp != NULL) {
+    slos_vpfree(&slos, svp, true);
+    VOP_UNLOCK(vp, 0);
+    return (error);
+  }
+
+  error = vtree_create(&svp->sn_vtree, defaultops,
+    ino->ino_btree, sizeof(diskptr_t), 0, &inode_btree_rootchange, svp);
+
+  bp = getblk(svp->sn_vtree.v_vp, ptr.offset, VTREE_BLKSZ, 0, 0, 0);
+  MPASS(bp != NULL);
+  vfs_bio_clrbuf(bp);
+  bdwrite(bp);
+
+  /* LK shared, we already have a unique id, and the VOP lock */
+  VOP_LOCK(root_vp, LK_SHARED);
+  bp = getblk(root_vp, svpid, BLKSIZE(&slos), 0, 0, 0);
+  memcpy(bp->b_data, ino, sizeof(struct slos_inode));
+  bdwrite(bp);
+  VOP_UNLOCK(root_vp, 0);
+
+  MPASS(svp != NULL);
+
+	vp->v_data = svp;
+	vp->v_bufobj.bo_ops = &bufops_slsfs;
+	vp->v_bufobj.bo_bsize = BLKSIZE(&slos);
+	slsfs_init_vnode(vp, svpid);
+
 
 	/* Inherit group id from parent directory */
 	SLSVP(vp)->sn_ino.ino_gid = SLSVP(dvp)->sn_ino.ino_gid;
@@ -509,6 +635,25 @@ error:
 
 uint64_t checkpoints = 0;
 
+static int time_ms(struct timespec *start, struct timespec *end)
+{
+    int total_s = end->tv_sec - start->tv_sec;
+    int total_ns = end->tv_nsec - start->tv_nsec;
+    total_s = total_s * (int)1e9;
+    total_ns += total_s;
+    return total_ns / (int)1e6;
+}
+
+static int time_us(struct timespec *start, struct timespec *end)
+{
+    int total_s = end->tv_sec - start->tv_sec;
+    int total_ns = end->tv_nsec - start->tv_nsec;
+    total_s = total_s * (int)1e9;
+    total_ns += total_s;
+    return total_ns / (int)1e3;
+}
+
+
 static void
 slsfs_checkpoint(struct mount *mp, int closing)
 {
@@ -516,15 +661,24 @@ slsfs_checkpoint(struct mount *mp, int closing)
 	struct buf *bp;
 	struct slos_node *svp = NULL;
 	struct slos_inode *ino;
-	struct timespec te;
+	struct timespec te, ts;
+	struct timespec t1, t2;
+  int vnode_us = 0;
+  int superblock_us = 0;
+  int inode_us = 0;
+  int allocator_us = 0;
 	diskptr_t ptr;
 	int error;
+  int isdirty = 0;
+
   if (closing)
     closing = MNT_WAIT;
-  int isdirty = 0;
+
+  nanotime(&ts);
 
 again:
 	/* Go through the list of vnodes attached to the filesystem. */
+  nanotime(&t1);
 	MNT_VNODE_FOREACH_ALL (vp, mp, mvp) {
 		/* If we can't get a reference, the vnode is probably dead. */
 		if (vp->v_type == VNON) {
@@ -565,23 +719,14 @@ again:
 				vput(vp);
 				return;
 			}
-
-
-      VOP_LOCK(slos.slsfs_inodes, LK_EXCLUSIVE);
-      error = slsfs_bread(slos.slsfs_inodes, SLSVP(vp)->sn_pid, IOSIZE(SLSVP(vp)), NULL, 0, &bp);
-      MPASS(error == 0);
-
-      KASSERT(!SLS_ISWAL(slos.slsfs_inodes),
-          ("slsfs_inodes should not be marked as a WAL object"));
-
-      memcpy(bp->b_data, &SLSVP(vp)->sn_ino, sizeof(struct slos_inode));
-      bawrite(bp);
-	    VOP_UNLOCK(slos.slsfs_inodes, 0);
       isdirty += 1;
 		}
 
 		vput(vp);
 	}
+
+  nanotime(&t2);
+  vnode_us = time_us(&t1, &t2);
 
 	// Check if both the underlying Btree needs a sync or the inode itself -
 	// should be a way to make it the same TODO
@@ -591,6 +736,7 @@ again:
 
 		DEBUG("Checkpointing the inodes vnode\n");
 		/* 3 Sync Root Inodes and btree */
+    nanotime(&t1);
 		error = vn_lock(slos.slsfs_inodes, LK_EXCLUSIVE);
 		if (error) {
 			panic("vn_lock failed");
@@ -612,6 +758,8 @@ again:
 		MPASS(bp);
 		memcpy(bp->b_data, ino, sizeof(struct slos_inode));
 		bawrite(bp);
+    nanotime(&t2);
+    inode_us = time_us(&t1, &t2);
 
 
 		DEBUG1("Root Dir at %lu",
@@ -622,12 +770,16 @@ again:
 		
 		/* 4 Sync the allocator */
 		DEBUG("Syncing the allocator\n");
+    nanotime(&t1);
 		slos_allocator_sync(&slos, slos.slos_sb);
 		DEBUG2("Epoch %lu done at superblock index %u",
 		    slos.slos_sb->sb_epoch, slos.slos_sb->sb_index);
 		SLSVP(slos.slsfs_inodes)->sn_status &= ~(SLOS_DIRTY);
+    nanotime(&t2);
+    allocator_us = time_us(&t1, &t2);
 
     DEBUG1("Checkpointing super block at %u\n", slos.slos_sb->sb_index);
+    nanotime(&t1);
 		/* Flush the current superblock itself. */
 		bp = getblk(slos.slos_vp, slos.slos_sb->sb_index,
 		    slos.slos_sb->sb_ssize, 0, 0, 0);
@@ -635,16 +787,19 @@ again:
 		memcpy(bp->b_data, slos.slos_sb, sizeof(struct slos_sb));
 
 		bbarrierwrite(bp);
+    nanotime(&t2);
+    superblock_us = time_us(&t1, &t2);
 
     DEBUG("Creating the new superblock\n");
 		nanotime(&te);
 		slos.slos_sb->sb_time = te.tv_sec;
 		slos.slos_sb->sb_time_nsec = te.tv_nsec;
 
+    int total_us = time_us(&ts, &te);
 
 		checkpoints++;
-		printf("Checkpoint: %lu, %lu, %lu\n", checkpoints,
-		    slos.slos_sb->sb_data_synced, slos.slos_sb->sb_meta_synced);
+		printf("Checkpoint: %lu, %lu, %lu ckpt(%d) - vnode(%d), inode(%d), allocator(%d), super(%d)\n", checkpoints,
+		    slos.slos_sb->sb_data_synced, slos.slos_sb->sb_meta_synced, total_us, vnode_us, inode_us, allocator_us, superblock_us);
 
 		slos.slos_sb->sb_data_synced = 0;
 		slos.slos_sb->sb_meta_synced = 0;
@@ -656,7 +811,7 @@ again:
 	}
 }
 
-uint64_t checkpointtime = 100;
+uint64_t checkpointtime = 1000;
 /*
  * Daemon that flushes dirty buffers to the device.
  *
@@ -1151,39 +1306,6 @@ error:
 	return (error);
 }
 
-static void
-slsfs_init_vnode(struct vnode *vp, uint64_t ino)
-{
-	struct slos_node *mp = SLSVP(vp);
-
-	switch (ino) {
-	case SLOS_ROOT_INODE:
-		vp->v_vflag |= VV_ROOT;
-		vp->v_type = VDIR;
-		SLSVP(vp)->sn_ino.ino_gid = 0;
-		SLSVP(vp)->sn_ino.ino_uid = 0;
-		break;
-	case SLOS_INODES_ROOT:
-		vp->v_type = VREG;
-		vp->v_vflag |= VV_SYSTEM;
-		break;
-	case SLOS_SLSPART_INODE:
-	case SLOS_SLSPREFAULT_INODE:
-		vp->v_type = VREG;
-		break;
-	default:
-		vp->v_type = IFTOVT(mp->sn_ino.ino_mode);
-	}
-	SLSVP(vp)->sn_ino.ino_wal_segment.size = 0;
-	SLSVP(vp)->sn_ino.ino_wal_segment.offset = 0;
-
-	if (vp->v_type == VFIFO) {
-		vp->v_op = &slsfs_fifoops;
-	}
-
-	vnode_create_vobject(vp, 0, curthread);
-}
-
 /*
  * Get a new vnode for the specified SLOS inode.
  */
@@ -1195,6 +1317,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	struct vnode *none;
 	struct slos_node *svnode = NULL;
 	struct thread *td;
+  struct timespec t1, t2;
 
 	td = curthread;
 	vp = NULL;
@@ -1211,11 +1334,13 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	}
 
 	/* Bring the inode in memory. */
+  nanotime(&t1);
 	error = slos_iopen(&slos, ino, &svnode);
 	if (error) {
 		*vpp = NULL;
 		return (error);
 	}
+  nanotime(&t2);
 
 	/* Get a new blank vnode. */
 	error = getnewvnode("slsfs", mp, &slsfs_vnodeops, &vp);
