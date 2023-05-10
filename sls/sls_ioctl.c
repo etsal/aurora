@@ -138,6 +138,10 @@ sls_prockillall(void)
 {
 	struct proc *p, *tmp;
 
+	/* If we never completed initialization, abort. */
+	if (slsm.slsm_plist.lh_first == NULL)
+		return (0);
+
 	/*
 	 * The children take the SLS lock on exit while holding the process
 	 * lock. This means that we cannot hold the SLS lock when we get the
