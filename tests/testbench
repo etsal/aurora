@@ -1,9 +1,13 @@
 #!/bin/sh
 
-export MNT="/testmnt"
-export DISK="vtbd1"
-export DISKPATH="/dev/$DISK"
+if [ -z $MNT ]; then
+	export MNT="/testmnt"
+fi
 
+if [ -z $DISKPATH ]; then
+	export DISKPATH="/dev/vtbd1"
+
+fi
 export KTRLOG="ktrdump.log"
 export TESTLOG="testbench.log"
 
@@ -52,7 +56,6 @@ cleanup_testbench()
 {
 	# For good measure, if something went really wrong.
 	aurteardown
-	destroymd $MDDISK
 	exit 0
 }
 
