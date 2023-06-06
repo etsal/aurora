@@ -527,27 +527,37 @@ slsckpt_dataregion_getvm(struct slspart *slsp, struct proc *p,
 	map = &p->p_vmspace->vm_map;
 
 	/* Can't work with submaps. */
-	if (map->flags & MAP_IS_SUB_MAP)
+	if (map->flags & MAP_IS_SUB_MAP) {
+		printf("%s: %d\n", __func__, __LINE__);
 		return (EINVAL);
+	}
 
 	/* Find the entry holding the object. .*/
 	vm_map_lock(map);
 	contained = vm_map_lookup_entry(map, addr, &entry);
 	vm_map_unlock(map);
-	if (!contained)
+	if (!contained) {
+		printf("%s: %d\n", __func__, __LINE__);
 		return (EINVAL);
+	}
 
 	/* Requests must be aligned to a map entry. */
-	if (entry->start != addr)
+	if (entry->start != addr) {
+		printf("%s: %d\n", __func__, __LINE__);
 		return (EINVAL);
+	}
 
 	/* Cannot work with submaps or wired entries. */
-	if (entry->eflags & (MAP_ENTRY_IS_SUB_MAP | MAP_ENTRY_USER_WIRED))
+	if (entry->eflags & (MAP_ENTRY_IS_SUB_MAP | MAP_ENTRY_USER_WIRED)) {
+		printf("%s: %d\n", __func__, __LINE__);
 		return (EINVAL);
+	}
 
 	obj = entry->object.vm_object;
-	if (!OBJT_ISANONYMOUS(obj))
+	if (!OBJT_ISANONYMOUS(obj)) {
+		printf("%s: %d\n", __func__, __LINE__);
 		return (EINVAL);
+	}
 
 	*entryp = entry;
 	*objp = obj;
@@ -569,29 +579,37 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 	/* Get the VM entities that hold the relevant information. */
 	error = slsckpt_dataregion_getvm(
 	    slsp, p, addr, sckpt_data, &entry, &obj);
-	if (error != 0)
+	if (error != 0) {
+		printf("%s: %d\n", __func__, __LINE__);
 		return (error);
+	}
 
 	SDT_PROBE1(sls, , slsckpt_dataregion_fillckpt, , "Getting the object");
 	KASSERT(
 	    OBJT_ISANONYMOUS(obj), ("getting metadata for non anonymous obj"));
 
 	/* Only objects referenced only by the entry can be shadowed. */
-	if (obj->ref_count > 1)
+	if (obj->ref_count > 1) {
+		printf("%s: %d\n", __func__, __LINE__);
 		return (EINVAL);
+	}
 
 	/*Get the metadata of the VM object. */
 	error = slsvmobj_checkpoint(obj, sckpt_data);
-	if (error != 0)
+	if (error != 0) {
+		printf("%s: %d\n", __func__, __LINE__);
 		return (error);
+	}
 
 	SDT_PROBE1(
 	    sls, , slsckpt_dataregion_fillckpt, , "Object checkpointing");
 	/* Get the data and shadow it for the entry. */
 	error = slsvm_entry_shadow(p, sckpt_data->sckpt_shadowtable, entry,
 	    slsckpt_isfullckpt(slsp), true);
-	if (error != 0)
+	if (error != 0) {
+		printf("%s: %d\n", __func__, __LINE__);
 		return (error);
+	}
 
 	SDT_PROBE1(sls, , slsckpt_dataregion_fillckpt, , "Object shadowing");
 
@@ -632,8 +650,10 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 
 	if (slsp->slsp_target == SLS_OSD) {
 		error = sls_write_slos_dataregion(sckpt_data);
-		if (error != 0)
+		if (error != 0) {
+			printf("%s: %d\n", __func__, __LINE__);
 			DEBUG1("slsckpt_initio failed with %d", error);
+		}
 	}
 
 	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Writing out the data");
@@ -697,6 +717,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	 */
 	if ((slsp->slsp_target == SLS_MEM) || (slsp->slsp_mode == SLS_DELTA)) {
 		if (slsp->slsp_sckpt == NULL) {
+			printf("%s: %d\n", __func__, __LINE__);
 			sls_finishop();
 			return (EINVAL);
 		}
@@ -711,6 +732,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		    ("Blocking slsp_setstate() on live partition failed"));
 
 		sls_finishop();
+		printf("%s: %d\n", __func__, __LINE__);
 
 		/* Tried to checkpoint a removed partition. */
 		return (EINVAL);
@@ -721,12 +743,14 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	 * no races with the call below.
 	 */
 	if (!slsckpt_proc_in_part(slsp, p)) {
+		printf("%s: %d\n", __func__, __LINE__);
 		error = EINVAL;
 		goto error_single;
 	}
 
 	sckpt = slsckpt_alloc(&slsp->slsp_attr);
 	if (sckpt == NULL) {
+		printf("%s: %d\n", __func__, __LINE__);
 		error = ENOMEM;
 		goto error_single;
 	}
@@ -746,6 +770,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	/* Add the data and metadata. This also shadows the object. */
 	error = slsckpt_dataregion_fillckpt(slsp, p, addr, sckpt);
 	if (error != 0) {
+		printf("%s: %d\n", __func__, __LINE__);
 		error = EINVAL;
 		goto error;
 	}
