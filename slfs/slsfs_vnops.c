@@ -2421,19 +2421,25 @@ slsfs_sas_mmap(struct thread *td, struct vnode *vp, vm_offset_t *addrp)
 	vm_prot_t prot = VM_PROT_READ | VM_PROT_WRITE;
 	struct slos_node *svp = SLSVP(vp);
 	vm_offset_t addr = svp->sn_addr;
-	vm_object_t obj = svp->sn_obj;
+	vm_object_t obj, origobj = svp->sn_obj;
 	struct proc *p = td->td_proc;
 	vm_map_t map = &p->p_vmspace->vm_map;
 	vm_object_t shadow;
 	int error;
 
+retry:
+	obj = origobj;
 	VM_OBJECT_WLOCK(obj);
 	while (obj->shadow_count > 0) {
 		KASSERT(obj->shadow_count == 1, ("SAS object overly shadowed"));
 		shadow = LIST_FIRST(&obj->shadow_head);
 
-		VM_OBJECT_WLOCK(shadow);
+		error = VM_OBJECT_TRYWLOCK(shadow);
 		VM_OBJECT_WUNLOCK(obj);
+		if (error != 0) {
+			pause_sbt("sasmap", SBT_1MS, 0, C_HARDCLOCK);
+			goto retry;
+		}
 
 		obj = shadow;
 	}
