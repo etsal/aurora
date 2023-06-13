@@ -266,10 +266,19 @@ struct slstable_wfdctx {
 	int *error;
 };
 
+struct slstable_msnapctx {
+	struct task tk;
+	struct slspart *slsp;
+	struct slsckpt_data *sckpt;
+	uint64_t nextepoch;
+	int *error;
+};
+
 union slstable_taskctx {
 	struct slstable_readctx read;
 	struct slstable_writectx write;
 	struct slstable_wfdctx wfd;
+	struct slstable_msnapctx msnap;
 };
 
 #endif /* _SLS_INTERNAL_H_ */
