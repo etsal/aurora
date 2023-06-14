@@ -11,26 +11,29 @@
 
 #include "sls_private.h"
 
+int slsfd = -1;
+
 /* Generic ioctl for the SLS device. */
 int
 sls_ioctl(long ionum, void *args)
 {
 	int status;
-	int fd;
 
-	fd = open("/dev/sls", O_RDWR);
-	if (fd < 0) {
-		fprintf(stderr, "ERROR: Could not open SLS device: %m\n");
-		return (-1);
+	if (slsfd < 0) {
+		slsfd = open("/dev/sls", O_RDWR);
+		if (slsfd < 0) {
+			fprintf(stderr, "ERROR: Could not open SLS device: %m\n");
+			return (-1);
+		}
 	}
 
-	status = ioctl(fd, ionum, args);
+	status = ioctl(slsfd, ionum, args);
 	if (status < 0) {
 		fprintf(stderr, "ERROR: SLS proc ioctl failed: %m\n");
 		return (-1);
 	}
 
-	close(fd);
+	//close(fd);
 
 	return (status);
 }
