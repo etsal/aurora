@@ -1060,10 +1060,12 @@ static int __attribute__((noinline)) sls_writemeta_slos(
 		return (error);
 	}
 
+#if 0
 	/* Keep reading until we get all the info. */
 	error = slsio_fpwrite(fp, record, len);
 	if (error != 0)
 		goto error;
+#endif
 
 	/* Pass the open vnode to the caller if needed. */
 	if (fpp != NULL) {
@@ -1074,6 +1076,7 @@ static int __attribute__((noinline)) sls_writemeta_slos(
 	fdrop(fp, td);
 	return (0);
 
+#if 0
 error:
 	if (fp != NULL)
 		fdrop(fp, td);
@@ -1081,6 +1084,7 @@ error:
 	if (fpp != NULL)
 		*fpp = NULL;
 
+#endif
 	return (error);
 }
 
