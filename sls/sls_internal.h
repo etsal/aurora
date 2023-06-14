@@ -281,4 +281,6 @@ union slstable_taskctx {
 	struct slstable_msnapctx msnap;
 };
 
+extern struct file *dumpfp;
+
 #endif /* _SLS_INTERNAL_H_ */

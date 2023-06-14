@@ -58,6 +58,8 @@
 
 #define SLSTABLE_TASKWARM (256)
 
+struct file *dumpfp = NULL;
+
 /* The maximum size of a single data transfer */
 uint64_t sls_contig_limit = MAXBCACHEBUF;
 int sls_drop_io = 0;
@@ -1097,7 +1099,7 @@ error:
  * in the VM object.
  */
 static int
-sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt)
+sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt, bool hack)
 {
 	size_t amplification = sckpt->sckpt_attr.attr_amplification;
 	struct sbuf *sb = rec->srec_sb;
@@ -1123,14 +1125,22 @@ sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt)
 	 * is used when testing to stress the store quickly simulate
 	 * the creation of multiple checkpoints at once.
 	 */
-	for (i = 0; i < amplification; i++) {
-		offset = i * sbuf_len(rec->srec_sb);
-		/* Only the last iteration returns the locked vnode. */
-		infp = (i == amplification - 1) ? &fp : NULL;
-		error = sls_writemeta_slos(rec, infp, false, offset);
-		if (error != 0)
-			return (error);
+	if (hack && dumpfp != NULL) {
+		fp = dumpfp;
+	}  else {
+		for (i = 0; i < amplification; i++) {
+			offset = i * sbuf_len(rec->srec_sb);
+			/* Only the last iteration returns the locked vnode. */
+			infp = (i == amplification - 1) ? &fp : NULL;
+			error = sls_writemeta_slos(rec, infp, false, offset);
+			if (error != 0)
+				return (error);
+		}
+
+		if (hack) 
+			dumpfp = fp;
 	}
+
 
 	/*
 	 * The ID of the info struct and the in-memory pointer
@@ -1162,7 +1172,8 @@ sls_writedata_slos(struct sls_record *rec, struct slsckpt_data *sckpt)
 	vm_object_deallocate(obj);
 out:
 
-	fdrop(fp, td);
+	if (!hack)
+		fdrop(fp, td);
 
 	return (ret);
 }
@@ -1174,7 +1185,7 @@ slstable_writetask(void *ctx, int __unused pending)
 	struct slstable_writectx *writectx = &taskctx->write;
 	int error = 0;
 
-	error = sls_writedata_slos(writectx->rec, writectx->sckpt);
+	error = sls_writedata_slos(writectx->rec, writectx->sckpt, false);
 	if (error != 0)
 		atomic_set_int(writectx->error, 1);
 
@@ -1218,7 +1229,7 @@ sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
 		/* We only dump VM objects. */
 		KASSERT(sls_isdata(rec->srec_type),
 		    ("dumping non object %ld", rec->srec_type));
-		error = sls_writedata_slos(rec, sckpt_data);
+		error = sls_writedata_slos(rec, sckpt_data, true);
 		if (error != 0) {
 			KV_ABORT(iter);
 			return (error);

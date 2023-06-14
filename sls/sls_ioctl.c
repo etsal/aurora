@@ -1124,6 +1124,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 
 	case MOD_UNLOAD:
 
+		if (dumpfp != NULL)
+			fdrop(dumpfp, curthread);
 		SLS_LOCK();
 
 		/* Signal that we're exiting and wait for threads to finish. */
