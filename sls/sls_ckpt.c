@@ -745,6 +745,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		return (EINVAL);
 	}
 
+	SDT_PROBE1(sls, , slsckpt_dataregion, , "Waiting to enter");
 	/*
 	 * Once a process is in a partition it is there forever, so there can be
 	 * no races with the call below.
@@ -763,9 +764,6 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	if (sckpt == NULL)
 		panic("Unhandled path");
 
-	SDT_PROBE0(sls, , , stopclock_start);
-	SDT_PROBE0(sls, , , meta_start);
-
 	SDT_PROBE1(sls, , slsckpt_dataregion, , "Getting the partition");
 
 	/* Single thread to avoid races with other threads. */
@@ -774,8 +772,6 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	thread_single(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
 #endif
-
-	SDT_PROBE1(sls, , slsckpt_dataregion, , "Single threading");
 
 	/* Add the data and metadata. This also shadows the object. */
 	error = slsckpt_dataregion_fillckpt(slsp, p, addr, sckpt);
@@ -797,8 +793,6 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	PROC_UNLOCK(p);
 #endif
 
-	SDT_PROBE0(sls, , , stopclock_finish);
-
 	taskctx = uma_zalloc(slstable_task_zone, M_WAITOK);
 	msnapctx = &taskctx->msnap;
 	msnapctx->slsp = slsp;
@@ -806,6 +800,8 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	msnapctx->nextepoch = *nextepoch;
 	TASK_INIT(&msnapctx->tk, 0, &slsckpt_dataregion_dump, &msnapctx->tk);
 	taskqueue_enqueue(slsm.slsm_tabletq, &msnapctx->tk);
+
+	SDT_PROBE1(sls, , slsckpt_dataregion, , "Creating the task");
 
 	sls_memsnap_done += 1;
 
