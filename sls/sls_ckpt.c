@@ -663,8 +663,6 @@ slsckpt_dataregion_dump(void *ctx, int __unused pending)
 		}
 	}
 
-	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Writing out the data");
-
 	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
 	if (slsp->slsp_target == SLS_OSD) {
 		taskqueue_drain_all(slos.slos_tq);
@@ -672,8 +670,6 @@ slsckpt_dataregion_dump(void *ctx, int __unused pending)
 		VFS_SYNC(slos.slsfs_mount,
 		    (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
 	}
-
-	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Draining the taskqueue");
 
 	/*
 	 * We compact before turning the checkpoint available, because we modify
@@ -685,11 +681,9 @@ slsckpt_dataregion_dump(void *ctx, int __unused pending)
 		slsckpt_drop(sckpt_data);
 	}
 
-	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Compacting the data");
-
 	slsp_epoch_advance(slsp, nextepoch);
 
-	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "Advancing the epoch");
+	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "end");
 
 	stateerr = slsp_setstate(
 	    slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
@@ -745,7 +739,6 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		return (EINVAL);
 	}
 
-	SDT_PROBE1(sls, , slsckpt_dataregion, , "Waiting to enter");
 	/*
 	 * Once a process is in a partition it is there forever, so there can be
 	 * no races with the call below.
@@ -764,8 +757,6 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	if (sckpt == NULL)
 		panic("Unhandled path");
 
-	SDT_PROBE1(sls, , slsckpt_dataregion, , "Getting the partition");
-
 	/* Single thread to avoid races with other threads. */
 #if 0 
 	PROC_LOCK(p);
@@ -780,8 +771,6 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		error = EINVAL;
 		goto error;
 	}
-
-	SDT_PROBE1(sls, , slsckpt_dataregion, , "Filling in the data");
 
 	/* Preadvance the epoch, the kthread will advance it. */
 	*nextepoch = slsp_epoch_preadvance(slsp);
@@ -801,7 +790,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	TASK_INIT(&msnapctx->tk, 0, &slsckpt_dataregion_dump, &msnapctx->tk);
 	taskqueue_enqueue(slsm.slsm_tabletq, &msnapctx->tk);
 
-	SDT_PROBE1(sls, , slsckpt_dataregion, , "Creating the task");
+	SDT_PROBE1(sls, , slsckpt_dataregion, , "start");
 
 	sls_memsnap_done += 1;
 
