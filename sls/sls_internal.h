@@ -282,5 +282,6 @@ union slstable_taskctx {
 };
 
 extern struct file *dumpfp;
+extern int sls_objprotect;
 
 #endif /* _SLS_INTERNAL_H_ */

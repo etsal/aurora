@@ -76,6 +76,7 @@ SDT_PROBE_DEFINE0(sls, , , stopclock_start);
 SDT_PROBE_DEFINE0(sls, , , meta_start);
 SDT_PROBE_DEFINE0(sls, , , stopclock_finish);
 SDT_PROBE_DEFINE0(sls, , , meta_finish);
+SDT_PROBE_DEFINE0(sls, , , memsnap_end);
 
 /*
  * Stop the processes, and wait until they are truly not running.
@@ -610,7 +611,7 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 	    sls, , slsckpt_dataregion_fillckpt, , "Object checkpointing");
 	/* Get the data and shadow it for the entry. */
 	error = slsvm_entry_shadow(p, sckpt_data->sckpt_shadowtable, entry,
-	    slsckpt_isfullckpt(slsp), true);
+	    slsckpt_isfullckpt(slsp), sls_objprotect);
 	if (error != 0) {
 		printf("%s: %d\n", __func__, __LINE__);
 		return (error);
@@ -683,7 +684,7 @@ slsckpt_dataregion_dump(void *ctx, int __unused pending)
 
 	slsp_epoch_advance(slsp, nextepoch);
 
-	SDT_PROBE1(sls, , slsckpt_dataregion_dump, , "end");
+	SDT_PROBE0(sls, , , memsnap_end);
 
 	stateerr = slsp_setstate(
 	    slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
