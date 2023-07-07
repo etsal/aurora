@@ -590,14 +590,16 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 		return (error);
 	}
 
+	//printf("%lx -> %lx (%lx, %lx)\n", addr, obj->objid, entry->start, entry->end);
+
 	SDT_PROBE1(sls, , slsckpt_dataregion_fillckpt, , "Getting the object");
 	KASSERT(
 	    OBJT_ISANONYMOUS(obj), ("getting metadata for non anonymous obj"));
 
 	/* Only objects referenced only by the entry can be shadowed. */
-	if (obj->ref_count > 1) {
-		printf("%s: %d\n", __func__, __LINE__);
-		return (EINVAL);
+	while (obj->ref_count > 1) {
+		//printf("%s: %d\n", __func__, __LINE__);
+		return (EDOOFUS);
 	}
 
 	/*Get the metadata of the VM object. */
@@ -647,30 +649,9 @@ struct slsckpt_dataregion_dump_args {
 };
 
 static void
-slsckpt_dataregion_dump(void *ctx, int __unused pending)
+slsckpt_dataregion_cleanup(struct slsckpt_data *sckpt_data, struct slspart *slsp, uint64_t nextepoch)
 {
-	union slstable_taskctx *taskctx = (union slstable_taskctx *)ctx;
-	struct slstable_msnapctx *msnapctx = &taskctx->msnap;
-	struct slsckpt_data *sckpt_data = msnapctx->sckpt;
-	uint64_t nextepoch = msnapctx->nextepoch;
-	struct slspart *slsp = msnapctx->slsp;
-	int stateerr, error;
-
-	if (slsp->slsp_target == SLS_OSD) {
-		error = sls_write_slos_dataregion(sckpt_data);
-		if (error != 0) {
-			printf("%s: %d\n", __func__, __LINE__);
-			DEBUG1("slsckpt_initio failed with %d", error);
-		}
-	}
-
-	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
-	if (slsp->slsp_target == SLS_OSD) {
-		taskqueue_drain_all(slos.slos_tq);
-		/* XXX Using MNT_WAIT is causing a deadlock right now. */
-		VFS_SYNC(slos.slsfs_mount,
-		    (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
-	}
+	int stateerr;
 
 	/*
 	 * We compact before turning the checkpoint available, because we modify
@@ -692,8 +673,41 @@ slsckpt_dataregion_dump(void *ctx, int __unused pending)
 
 	slsp_deref(slsp);
 
-	uma_zfree(slstable_task_zone, taskctx);
+}
 
+static __attribute__((noinline)) void
+//slsckpt_dataregion_dump(void *ctx, int __unused pending)
+slsckpt_dataregion_dump(struct slsckpt_data *sckpt_data, struct slspart *slsp, uint64_t nextepoch)
+{
+	/*
+	union slstable_taskctx *taskctx = (union slstable_taskctx *)ctx;
+	struct slstable_msnapctx *msnapctx = &taskctx->msnap;
+	struct slsckpt_data *sckpt_data = msnapctx->sckpt;
+	uint64_t nextepoch = msnapctx->nextepoch;
+	struct slspart *slsp = msnapctx->slsp;
+	*/
+	int error;
+
+	if (slsp->slsp_target == SLS_OSD) {
+		error = sls_write_slos_dataregion(sckpt_data);
+		if (error != 0) {
+			printf("%s: %d\n", __func__, __LINE__);
+			DEBUG1("slsckpt_initio failed with %d", error);
+		}
+	}
+
+	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
+	if (slsp->slsp_target == SLS_OSD) {
+		taskqueue_drain_all(slos.slos_tq);
+		/* XXX Using MNT_WAIT is causing a deadlock right now. */
+		VFS_SYNC(slos.slsfs_mount,
+		    (sls_vfs_sync != 0) ? MNT_WAIT : MNT_NOWAIT);
+	}
+
+
+	slsckpt_dataregion_cleanup(sckpt_data, slsp, nextepoch);
+
+	//uma_zfree(slstable_task_zone, taskctx);
 	sls_finishop();
 
 }
@@ -705,9 +719,9 @@ int
 slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
     uint64_t *nextepoch)
 {
-	struct slstable_msnapctx *msnapctx;
+	//struct slstable_msnapctx *msnapctx;
 	struct slsckpt_data *sckpt = NULL;
-	union slstable_taskctx *taskctx;
+	//union slstable_taskctx *taskctx;
 	int stateerr, error;
 
 	sls_memsnap_attempted += 1;
@@ -767,7 +781,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 
 	/* Add the data and metadata. This also shadows the object. */
 	error = slsckpt_dataregion_fillckpt(slsp, p, addr, sckpt);
-	if (error != 0) {
+	if (error != 0 && error != EDOOFUS) {
 		printf("%s: %d\n", __func__, __LINE__);
 		error = EINVAL;
 		goto error;
@@ -775,13 +789,18 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 
 	/* Preadvance the epoch, the kthread will advance it. */
 	*nextepoch = slsp_epoch_preadvance(slsp);
+	if (error == EDOOFUS) {
+		slsckpt_dataregion_cleanup(sckpt, slsp, *nextepoch);
+		sls_finishop();
+		return (0);
+	}
+
 
 	/* The process can continue while we are dumping. */
 #if 0
 	PROC_LOCK(p);
 	thread_single_end(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
-#endif
 
 	taskctx = uma_zalloc(slstable_task_zone, M_WAITOK);
 	msnapctx = &taskctx->msnap;
@@ -790,6 +809,9 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	msnapctx->nextepoch = *nextepoch;
 	TASK_INIT(&msnapctx->tk, 0, &slsckpt_dataregion_dump, &msnapctx->tk);
 	taskqueue_enqueue(slsm.slsm_tabletq, &msnapctx->tk);
+
+#endif
+	slsckpt_dataregion_dump(sckpt, slsp, *nextepoch);
 
 	SDT_PROBE1(sls, , slsckpt_dataregion, , "start");
 
