@@ -128,7 +128,7 @@ struct sls_pgresident_args {
 #define SLSATTR_PRECOPY 0x10	/* Eagerly copy pages at restore time */
 #define SLSATTR_DELTAREST 0x20	/* Delta restores */
 #define SLSATTR_NOCKPT 0x40	/* Partition is not checkpointable */
-#define SLSATTR_SYNCHSNAP 0x80	/* Do memsnap synchronously */
+#define SLSATTR_ASYNCSNAP 0x80	/* Do memsnap asynchronously */
 
 #define SLSATTR_FLAGISSET(attr, flag) (((attr).attr_flags & flag) != 0)
 #define SLSATTR_ISIGNUNLINKED(attr) \
