@@ -676,16 +676,8 @@ slsckpt_dataregion_cleanup(struct slsckpt_data *sckpt_data, struct slspart *slsp
 }
 
 static __attribute__((noinline)) void
-//slsckpt_dataregion_dump(void *ctx, int __unused pending)
 slsckpt_dataregion_dump(struct slsckpt_data *sckpt_data, struct slspart *slsp, uint64_t nextepoch)
 {
-	/*
-	union slstable_taskctx *taskctx = (union slstable_taskctx *)ctx;
-	struct slstable_msnapctx *msnapctx = &taskctx->msnap;
-	struct slsckpt_data *sckpt_data = msnapctx->sckpt;
-	uint64_t nextepoch = msnapctx->nextepoch;
-	struct slspart *slsp = msnapctx->slsp;
-	*/
 	int error;
 
 	if (slsp->slsp_target == SLS_OSD) {
@@ -707,10 +699,23 @@ slsckpt_dataregion_dump(struct slsckpt_data *sckpt_data, struct slspart *slsp, u
 
 	slsckpt_dataregion_cleanup(sckpt_data, slsp, nextepoch);
 
-	//uma_zfree(slstable_task_zone, taskctx);
 	sls_finishop();
 
 }
+
+static __attribute__((noinline)) void
+slsckpt_dataregion_dumptask(void *ctx, int __unused pending)
+{
+	union slstable_taskctx *taskctx = (union slstable_taskctx *)ctx;
+	struct slstable_msnapctx *msnapctx = &taskctx->msnap;
+	struct slsckpt_data *sckpt_data = msnapctx->sckpt;
+	uint64_t nextepoch = msnapctx->nextepoch;
+	struct slspart *slsp = msnapctx->slsp;
+
+	uma_zfree(slstable_task_zone, taskctx);
+	slsckpt_dataregion_dump(sckpt_data, slsp, nextepoch);
+}
+
 
 /*
  * ones created during the previous checkpoint.
@@ -719,9 +724,9 @@ int
 slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
     uint64_t *nextepoch)
 {
-	//struct slstable_msnapctx *msnapctx;
+	struct slstable_msnapctx *msnapctx;
 	struct slsckpt_data *sckpt = NULL;
-	//union slstable_taskctx *taskctx;
+	union slstable_taskctx *taskctx;
 	int stateerr, error;
 
 	sls_memsnap_attempted += 1;
@@ -802,18 +807,23 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	thread_single_end(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
 
+#endif
+	if (!SLSATTR_ISASYNCSNAP(slsp->slsp_attr)) {
+		slsckpt_dataregion_dump(sckpt, slsp, *nextepoch);
+		sls_memsnap_done += 1;
+		return (0);
+	}
+
+
+	SDT_PROBE1(sls, , slsckpt_dataregion, , "start");
+
 	taskctx = uma_zalloc(slstable_task_zone, M_WAITOK);
 	msnapctx = &taskctx->msnap;
 	msnapctx->slsp = slsp;
 	msnapctx->sckpt = sckpt;
 	msnapctx->nextepoch = *nextepoch;
-	TASK_INIT(&msnapctx->tk, 0, &slsckpt_dataregion_dump, &msnapctx->tk);
+	TASK_INIT(&msnapctx->tk, 0, &slsckpt_dataregion_dumptask, &msnapctx->tk);
 	taskqueue_enqueue(slsm.slsm_tabletq, &msnapctx->tk);
-
-#endif
-	slsckpt_dataregion_dump(sckpt, slsp, *nextepoch);
-
-	SDT_PROBE1(sls, , slsckpt_dataregion, , "start");
 
 	sls_memsnap_done += 1;
 
