@@ -77,6 +77,9 @@ SDT_PROBE_DEFINE0(sls, , , meta_start);
 SDT_PROBE_DEFINE0(sls, , , stopclock_finish);
 SDT_PROBE_DEFINE0(sls, , , meta_finish);
 SDT_PROBE_DEFINE0(sls, , , memsnap_end);
+SDT_PROBE_DEFINE0(sls, , , memsnap_dump);
+SDT_PROBE_DEFINE0(sls, , , memsnap_wait);
+SDT_PROBE_DEFINE0(sls, , , memsnap_cleanup);
 
 /*
  * Stop the processes, and wait until they are truly not running.
@@ -598,7 +601,7 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 
 	/* Only objects referenced only by the entry can be shadowed. */
 	while (obj->ref_count > 1) {
-		//printf("%s: %d\n", __func__, __LINE__);
+		printf("%s: %d\n", __func__, __LINE__);
 		return (EDOOFUS);
 	}
 
@@ -688,6 +691,7 @@ slsckpt_dataregion_dump(struct slsckpt_data *sckpt_data, struct slspart *slsp, u
 		}
 	}
 
+	SDT_PROBE0(sls, , , memsnap_wait);
 	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
 	if (slsp->slsp_target == SLS_OSD) {
 		taskqueue_drain_all(slos.slos_tq);
@@ -697,6 +701,7 @@ slsckpt_dataregion_dump(struct slsckpt_data *sckpt_data, struct slspart *slsp, u
 	}
 
 
+	SDT_PROBE0(sls, , , memsnap_cleanup);
 	slsckpt_dataregion_cleanup(sckpt_data, slsp, nextepoch);
 
 	sls_finishop();
@@ -808,6 +813,7 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	PROC_UNLOCK(p);
 
 #endif
+	SDT_PROBE0(sls, , , memsnap_dump);
 	if (!SLSATTR_ISASYNCSNAP(slsp->slsp_attr)) {
 		slsckpt_dataregion_dump(sckpt, slsp, *nextepoch);
 		sls_memsnap_done += 1;
