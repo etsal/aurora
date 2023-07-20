@@ -38,6 +38,7 @@ tests/metroserver/metroserver
 tests/metrosimple/metrosimple
 tests/register/register
 tests/sas/sas
+tests/sastrack/sastrack
 tests/sasfork/sasfork
 tests/sasipc/sasipc
 tests/selfie/selfie

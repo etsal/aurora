@@ -17,6 +17,7 @@
 #include <sys/rwlock.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
+#include <sys/taskqueue.h>
 #include <sys/ucred.h>
 #include <sys/unistd.h>
 #include <sys/vnode.h>
@@ -1850,6 +1851,207 @@ slsfs_sas_create(char *path, size_t size, int *ret)
 	return 0;
 }
 
+static void
+slsfs_sas_page_track(vm_offset_t vaddr, struct pglist *pglist, vm_page_t m)
+{
+	vm_page_lock(m);
+
+	/* XXX Is holding the right kind of refcounting? */
+
+	vm_page_hold(m);
+	TAILQ_INSERT_TAIL(pglist, m, snapq);
+	m->auroid = m->object->objid;
+	m->vaddr = vaddr;
+
+	vm_page_unlock(m);
+}
+
+static void
+slsfs_sas_page_untrack(struct pglist *pglist, vm_page_t m)
+{
+	vm_page_lock(m);
+
+	vm_page_unhold(m);
+	TAILQ_REMOVE(pglist, m, snapq);
+
+	vm_page_unlock(m);
+}
+
+static vm_page_t
+slsfs_sas_page_copy(vm_page_t m)
+{
+	vm_page_t mcpy;
+
+	mcpy = vm_page_alloc(NULL, 0, VM_ALLOC_NOOBJ | VM_ALLOC_NORMAL);
+	pmap_copy_page(m, mcpy);
+	mcpy->auroid = m->auroid;
+	m->auroid = 0;
+
+	return (mcpy);
+}
+
+void
+slsfs_sas_trace_update(vm_offset_t vaddr, vm_map_t map, vm_page_t m)
+{
+	if ((map->flags & MAP_SNAP_TRACE) == 0)
+		return;
+
+	if (vaddr < SLS_SAS_INITADDR)
+		return;
+
+	if (vaddr >= SLS_SAS_MAXADDR)
+		return;
+
+	slsfs_sas_page_track(vaddr, &map->snaplist, m);
+}
+
+struct slsfs_sas_commit_args {
+	struct task tk;
+	struct pglist pglist;
+};
+
+static int
+slsfs_sas_trace_start(void)
+{
+	vm_map_t map = &curproc->p_vmspace->vm_map;
+
+	vm_map_lock(map);
+	/* This should grab any fork-&-exec looping cases */
+	KASSERT(
+	    (map->flags & MAP_SNAP_TRACE) == 0, ("map already being traced"));
+
+	map->flags |= MAP_SNAP_TRACE;
+	vm_map_unlock(map);
+	return (0);
+}
+
+static int
+slsfs_sas_commit_object(struct pglist *pglist, uint64_t auroid)
+{
+	uint64_t oid = auroid;
+	vm_page_t m, mtemp;
+	struct vnode *vp;
+	struct buf *bp;
+	size_t size;
+	int error;
+
+	/* Open the file. */
+	error = slos_svpalloc(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
+	if (error != 0)
+		return (error);
+
+	/* Get the vnode for the record and open it. */
+	error = VFS_VGET(slos.slsfs_mount, oid, LK_EXCLUSIVE, &vp);
+	if (error != 0)
+		return (error);
+
+	TAILQ_FOREACH_SAFE (m, pglist, snapq, mtemp) {
+		if (m->auroid != auroid)
+			continue;
+
+		size = pagesizes[m->psind];
+		error = slsfs_retrieve_buf(vp,
+		    PAGE_SIZE * (m->pindex + SLOS_OBJOFF), size, UIO_WRITE,
+		    GB_UNMAPPED, &bp);
+		if (error != 0)
+			break;
+
+		/* Second copy is wasteful but simple and we are not in the stop
+		 * path. */
+		KASSERT(!buf_mapped(bp), ("buffer is mapped"));
+		pmap_copy_page(m, bp->b_pages[0]);
+
+		TAILQ_REMOVE(pglist, m, snapq);
+		vm_page_free(m);
+
+		/* Prepare and issue the IO. */
+		KASSERT(bp->b_data == unmapped_buf, ("buffer is mapped"));
+		bp->b_resid = bp->b_bufsize = bp->b_bcount = size;
+		bp->b_npages = 1;
+		bp->b_iocmd = BIO_WRITE;
+		bawrite(bp);
+	}
+
+	vput(vp);
+	return (0);
+}
+
+static void
+slsfs_sas_commit(void *ctx, int __unused pending)
+{
+	struct slsfs_sas_commit_args *args = (struct slsfs_sas_commit_args *)
+	    ctx;
+	vm_page_t m;
+	int error;
+
+	while (!TAILQ_EMPTY(&args->pglist)) {
+		m = TAILQ_FIRST(&args->pglist);
+		error = slsfs_sas_commit_object(&args->pglist, m->auroid);
+		if (error != 0)
+			printf("slsfs_sas_commit_object returned %d\n", error);
+	}
+
+	free(args, M_SLOS_SB);
+}
+
+static void
+slsfs_sas_trace_commit(void)
+{
+	vm_map_t map = &curproc->p_vmspace->vm_map;
+	pmap_t pmap = &curproc->p_vmspace->vm_pmap;
+	struct slsfs_sas_commit_args *args;
+	vm_page_t m, mcpy;
+
+	vm_map_lock(map);
+	KASSERT((map->flags & MAP_SNAP_TRACE) != 0, ("map not being traced"));
+
+	args = malloc(sizeof(*args), M_SLOS_SB, M_WAITOK);
+	TAILQ_INIT(&args->pglist);
+
+	while (!TAILQ_EMPTY(&map->snaplist)) {
+		m = TAILQ_FIRST(&map->snaplist);
+		mcpy = slsfs_sas_page_copy(m);
+		pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
+		slsfs_sas_page_untrack(&map->snaplist, m);
+
+		TAILQ_INSERT_HEAD(&args->pglist, mcpy, snapq);
+	}
+	vm_map_unlock(map);
+
+	TASK_INIT(&args->tk, 0, slsfs_sas_commit, &args->tk);
+	taskqueue_enqueue(slos.slos_tq, &args->tk);
+}
+
+static void
+slsfs_sas_trace_abort(void)
+{
+	vm_map_t map = &curproc->p_vmspace->vm_map;
+	vm_page_t m;
+
+	vm_map_lock(map);
+	KASSERT((map->flags & MAP_SNAP_TRACE) != 0, ("map not being traced"));
+	while (!TAILQ_EMPTY(&map->snaplist)) {
+		m = TAILQ_FIRST(&map->snaplist);
+		slsfs_sas_page_untrack(&map->snaplist, m);
+	}
+	vm_map_unlock(map);
+}
+
+static void
+slsfs_sas_trace_end(void)
+{
+	vm_map_t map = &curproc->p_vmspace->vm_map;
+
+	slsfs_sas_trace_abort();
+
+	vm_map_lock(map);
+
+	KASSERT((map->flags & MAP_SNAP_TRACE) != 0, ("map not being traced"));
+
+	map->flags &= ~MAP_SNAP_TRACE;
+	vm_map_unlock(map);
+}
+
 static int
 slsfs_ioctl(struct vop_ioctl_args *ap)
 {
@@ -2489,6 +2691,22 @@ slsfs_sas_ioctl(struct vop_ioctl_args *ap)
 		memcpy(ap->a_data, &addr, sizeof(void *));
 		return (0);
 
+ 	case SLSFS_SAS_TRACE_START:
+ 		slsfs_sas_trace_start();
+ 		return (0);
+ 
+ 	case SLSFS_SAS_TRACE_END:
+ 		slsfs_sas_trace_end();
+ 		return (0);
+ 
+ 	case SLSFS_SAS_TRACE_ABORT:
+ 		slsfs_sas_trace_abort();
+ 		return (0);
+ 
+ 	case SLSFS_SAS_TRACE_COMMIT:
+ 		slsfs_sas_trace_commit();
+ 		return (0);
+ 
 	default:
 		panic("Unhandled SAS ioctl %ld", com);
 	}
