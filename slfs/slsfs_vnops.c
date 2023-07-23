@@ -55,6 +55,9 @@ SDT_PROBE_DEFINE3(slos, , , slsfs_vnodeblk, "uint64_t", "uint64_t", "int");
 static const size_t MAX_WAL_SIZE = 5368709000;
 static size_t wal_space_used = 0;
 
+uint64_t slsfs_sas_aborts;
+uint64_t slsfs_sas_commits;
+
 static int
 slsfs_inactive(struct vop_inactive_args *args)
 {
@@ -1976,7 +1979,7 @@ slsfs_sas_commit_object(struct pglist *pglist, uint64_t auroid)
 	return (0);
 }
 
-static void
+static __attribute__((noinline)) void
 slsfs_sas_commit(void *ctx, int __unused pending)
 {
 	struct slsfs_sas_commit_args *args = (struct slsfs_sas_commit_args *)
@@ -1994,7 +1997,7 @@ slsfs_sas_commit(void *ctx, int __unused pending)
 	free(args, M_SLOS_SB);
 }
 
-static void
+static __attribute__((noinline)) void
 slsfs_sas_trace_commit(void)
 {
 	vm_map_t map = &curproc->p_vmspace->vm_map;
@@ -2020,6 +2023,8 @@ slsfs_sas_trace_commit(void)
 
 	TASK_INIT(&args->tk, 0, slsfs_sas_commit, &args->tk);
 	taskqueue_enqueue(slos.slos_tq, &args->tk);
+
+	atomic_add_64(&slsfs_sas_commits, 1);
 }
 
 static void
@@ -2035,6 +2040,8 @@ slsfs_sas_trace_abort(void)
 		slsfs_sas_page_untrack(&map->snaplist, m);
 	}
 	vm_map_unlock(map);
+
+	atomic_add_64(&slsfs_sas_aborts, 1);
 }
 
 static void
