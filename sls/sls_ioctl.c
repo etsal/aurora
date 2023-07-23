@@ -44,6 +44,8 @@
 MALLOC_DEFINE(M_SLSMM, "sls", "SLS");
 MALLOC_DEFINE(M_SLSREC, "slsrec", "SLSREC");
 
+extern int (*slsfs_writeobj_data)(struct vnode *, vm_object_t, uint64_t);
+
 SDT_PROVIDER_DEFINE(sls);
 
 /* Variables set using sysctls. */
@@ -1118,6 +1120,8 @@ SLSHandler(struct module *inModule, int inEvent, void *inArg)
 		/* Make the SLS available to userspace. */
 		slsm.slsm_cdev = make_dev(
 		    &slsmm_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
+
+		slsfs_writeobj_data = sls_writeobj_data;
 
 		break;
 

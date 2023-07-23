@@ -961,7 +961,7 @@ error:
  *
  * This function is not inlined in order to be able to use DTrace on it.
  */
-static int __attribute__((noinline))
+int __attribute__((noinline))
 sls_writeobj_data(struct vnode *vp, vm_object_t obj, size_t offset)
 {
 	vm_pindex_t pindex;
@@ -990,6 +990,7 @@ sls_writeobj_data(struct vnode *vp, vm_object_t obj, size_t offset)
 			bp = sls_pager_writebuf(
 			    obj, pindex, sls_contig_limit, &retry);
 		}
+
 
 		VM_OBJECT_WUNLOCK(obj);
 		if (bp == NULL) {

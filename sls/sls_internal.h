@@ -284,4 +284,5 @@ union slstable_taskctx {
 extern struct file *dumpfp;
 extern int sls_objprotect;
 
+int sls_writeobj_data(struct vnode *, vm_object_t, uint64_t);
 #endif /* _SLS_INTERNAL_H_ */

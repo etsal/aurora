@@ -51,6 +51,8 @@ SDT_PROVIDER_DEFINE(slos);
 SDT_PROBE_DEFINE3(slos, , , slsfs_deviceblk, "uint64_t", "uint64_t", "int");
 SDT_PROBE_DEFINE3(slos, , , slsfs_vnodeblk, "uint64_t", "uint64_t", "int");
 
+int (*slsfs_writeobj_data)(struct vnode *, vm_object_t, uint64_t);
+
 /* 5 GiB */
 static const size_t MAX_WAL_SIZE = 5368709000;
 static size_t wal_space_used = 0;
@@ -1928,101 +1930,87 @@ slsfs_sas_trace_start(void)
 	return (0);
 }
 
-static int
-slsfs_sas_commit_object(struct pglist *pglist, uint64_t auroid)
+static __attribute__((noinline)) int
+slsfs_sas_write_object(vm_object_t obj)
 {
-	uint64_t oid = auroid;
-	vm_page_t m, mtemp;
+	uint64_t oid = obj->objid;
 	struct vnode *vp;
-	struct buf *bp;
-	size_t size;
 	int error;
 
-	/* Open the file. */
 	error = slos_svpalloc(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
 	if (error != 0)
 		return (error);
 
-	/* Get the vnode for the record and open it. */
 	error = VFS_VGET(slos.slsfs_mount, oid, LK_EXCLUSIVE, &vp);
 	if (error != 0)
 		return (error);
 
-	TAILQ_FOREACH_SAFE (m, pglist, snapq, mtemp) {
-		if (m->auroid != auroid)
-			continue;
+	VM_OBJECT_WLOCK(obj);
+	error = slsfs_writeobj_data(vp, obj, 0);
+	if (error != 0)
+		printf("sls_writeobj_data error %d\n", error);
 
-		size = pagesizes[m->psind];
-		error = slsfs_retrieve_buf(vp,
-		    PAGE_SIZE * (m->pindex + SLOS_OBJOFF), size, UIO_WRITE,
-		    GB_UNMAPPED, &bp);
-		if (error != 0)
-			break;
-
-		/* Second copy is wasteful but simple and we are not in the stop
-		 * path. */
-		KASSERT(!buf_mapped(bp), ("buffer is mapped"));
-		pmap_copy_page(m, bp->b_pages[0]);
-
-		TAILQ_REMOVE(pglist, m, snapq);
-		vm_page_free(m);
-
-		/* Prepare and issue the IO. */
-		KASSERT(bp->b_data == unmapped_buf, ("buffer is mapped"));
-		bp->b_resid = bp->b_bufsize = bp->b_bcount = size;
-		bp->b_npages = 1;
-		bp->b_iocmd = BIO_WRITE;
-		bawrite(bp);
-	}
-
+	VM_OBJECT_WUNLOCK(obj);
 	vput(vp);
 	return (0);
 }
 
-static __attribute__((noinline)) void
-slsfs_sas_commit(void *ctx, int __unused pending)
+static vm_object_t 
+slsfs_sas_copy_object(struct pglist snaplist, vm_object_t obj)
 {
-	struct slsfs_sas_commit_args *args = (struct slsfs_sas_commit_args *)
-	    ctx;
-	vm_page_t m;
-	int error;
+	pmap_t pmap = &curproc->p_vmspace->vm_pmap;
+	vm_page_t m, mcpy, mtmp;
+	vm_object_t objcpy;
 
-	while (!TAILQ_EMPTY(&args->pglist)) {
-		m = TAILQ_FIRST(&args->pglist);
-		error = slsfs_sas_commit_object(&args->pglist, m->auroid);
-		if (error != 0)
-			printf("slsfs_sas_commit_object returned %d\n", error);
+	objcpy = vm_object_allocate(OBJT_DEFAULT, obj->size);
+	objcpy->objid = obj->objid;
+
+	VM_OBJECT_WLOCK(objcpy);
+
+	TAILQ_FOREACH_SAFE(m, &snaplist, snapq, mtmp) {
+		if (m->object->objid != obj->objid)
+			continue;
+
+		mcpy = vm_page_grab(objcpy, m->pindex, VM_ALLOC_NORMAL | VM_ALLOC_NOBUSY);
+		pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
+
+		pmap_copy_page(m, mcpy);
+		mcpy->valid = VM_PAGE_BITS_ALL;
+
+		slsfs_sas_page_untrack(&snaplist, m);
 	}
 
-	free(args, M_SLOS_SB);
+	VM_OBJECT_WUNLOCK(objcpy);
+
+	return (objcpy);
 }
 
 static __attribute__((noinline)) void
 slsfs_sas_trace_commit(void)
 {
 	vm_map_t map = &curproc->p_vmspace->vm_map;
-	pmap_t pmap = &curproc->p_vmspace->vm_pmap;
-	struct slsfs_sas_commit_args *args;
-	vm_page_t m, mcpy;
-
+	vm_object_t obj, objcpy;
+	vm_page_t m;
+	
 	vm_map_lock(map);
 	KASSERT((map->flags & MAP_SNAP_TRACE) != 0, ("map not being traced"));
 
-	args = malloc(sizeof(*args), M_SLOS_SB, M_WAITOK);
-	TAILQ_INIT(&args->pglist);
-
 	while (!TAILQ_EMPTY(&map->snaplist)) {
 		m = TAILQ_FIRST(&map->snaplist);
-		mcpy = slsfs_sas_page_copy(m);
-		pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
-		slsfs_sas_page_untrack(&map->snaplist, m);
+		obj = m->object;
 
-		TAILQ_INSERT_HEAD(&args->pglist, mcpy, snapq);
+		VM_OBJECT_WLOCK(obj);
+		vm_object_reference_locked(obj);
+
+		objcpy = slsfs_sas_copy_object(map->snaplist, obj);
+
+		VM_OBJECT_WUNLOCK(obj);
+		vm_object_deallocate(obj);
+
+		slsfs_sas_write_object(objcpy);
+		vm_object_deallocate(objcpy);
 	}
 	vm_map_unlock(map);
-
-	TASK_INIT(&args->tk, 0, slsfs_sas_commit, &args->tk);
-	taskqueue_enqueue(slos.slos_tq, &args->tk);
 
 	atomic_add_64(&slsfs_sas_commits, 1);
 }
