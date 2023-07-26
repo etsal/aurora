@@ -43,6 +43,7 @@ int sas_trace_start(int fd);
 int sas_trace_end(int fd);
 int sas_trace_abort(int fd);
 int sas_trace_commit(int fd);
+int sas_refresh_protection(int fd);
 
 #ifdef __cplusplus
 }

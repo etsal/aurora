@@ -51,6 +51,13 @@ SDT_PROVIDER_DEFINE(slos);
 SDT_PROBE_DEFINE3(slos, , , slsfs_deviceblk, "uint64_t", "uint64_t", "int");
 SDT_PROBE_DEFINE3(slos, , , slsfs_vnodeblk, "uint64_t", "uint64_t", "int");
 
+SDT_PROVIDER_DEFINE(sas);
+SDT_PROBE_DEFINE3(sas, , , start, "long", "long", "long");
+SDT_PROBE_DEFINE0(sas, , , write);
+SDT_PROBE_DEFINE0(sas, , , block);
+SDT_PROBE_DEFINE1(sas, , , vget, "int");
+SDT_PROBE_DEFINE1(sas, , , copy, "int");
+
 int (*slsfs_writeobj_data)(struct vnode *, vm_object_t, uint64_t);
 
 /* 5 GiB */
@@ -58,7 +65,10 @@ static const size_t MAX_WAL_SIZE = 5368709000;
 static size_t wal_space_used = 0;
 
 uint64_t slsfs_sas_aborts;
+uint64_t slsfs_sas_attempts;
 uint64_t slsfs_sas_commits;
+long slsfs_sas_tracks;
+long slsfs_sas_inserts, slsfs_sas_removes;
 
 static int
 slsfs_inactive(struct vop_inactive_args *args)
@@ -1864,9 +1874,11 @@ slsfs_sas_page_track(vm_offset_t vaddr, struct pglist *pglist, vm_page_t m)
 	/* XXX Is holding the right kind of refcounting? */
 
 	vm_page_hold(m);
-	TAILQ_INSERT_TAIL(pglist, m, snapq);
+	TAILQ_INSERT_HEAD(pglist, m, snapq);
 	m->auroid = m->object->objid;
 	m->vaddr = vaddr;
+
+	slsfs_sas_inserts += 1;
 
 	vm_page_unlock(m);
 }
@@ -1874,39 +1886,41 @@ slsfs_sas_page_track(vm_offset_t vaddr, struct pglist *pglist, vm_page_t m)
 static void
 slsfs_sas_page_untrack(struct pglist *pglist, vm_page_t m)
 {
+	pmap_t pmap = &curproc->p_vmspace->vm_pmap;
+
 	vm_page_lock(m);
 
 	vm_page_unhold(m);
 	TAILQ_REMOVE(pglist, m, snapq);
+	pmap_protect(pmap, m->vaddr, m->vaddr + PAGE_SIZE, VM_PROT_READ);
+	slsfs_sas_removes += 1;
 
 	vm_page_unlock(m);
 }
 
-static vm_page_t
-slsfs_sas_page_copy(vm_page_t m)
+static void
+slsfs_sas_refresh_protection(void)
 {
-	vm_page_t mcpy;
-
-	mcpy = vm_page_alloc(NULL, 0, VM_ALLOC_NOOBJ | VM_ALLOC_NORMAL);
-	pmap_copy_page(m, mcpy);
-	mcpy->auroid = m->auroid;
-	m->auroid = 0;
-
-	return (mcpy);
+	pmap_protect(&curproc->p_vmspace->vm_pmap, SLS_SAS_INITADDR, SLS_SAS_MAXADDR, VM_PROT_READ);
 }
 
 void
-slsfs_sas_trace_update(vm_offset_t vaddr, vm_map_t map, vm_page_t m)
+slsfs_sas_trace_update(vm_offset_t vaddr, vm_map_t map, vm_page_t m, int fault_type)
 {
 	if ((map->flags & MAP_SNAP_TRACE) == 0)
 		return;
 
-	if (vaddr < SLS_SAS_INITADDR)
+	slsfs_sas_attempts += 1;
+
+	if ((fault_type & (VM_PROT_WRITE | VM_PROT_COPY)) == 0)
 		return;
 
 	if (vaddr >= SLS_SAS_MAXADDR)
 		return;
+	if (vaddr < SLS_SAS_INITADDR)
+		return;
 
+	slsfs_sas_tracks += 1;
 	slsfs_sas_page_track(vaddr, &map->snaplist, m);
 }
 
@@ -1926,6 +1940,7 @@ slsfs_sas_trace_start(void)
 	    (map->flags & MAP_SNAP_TRACE) == 0, ("map already being traced"));
 
 	map->flags |= MAP_SNAP_TRACE;
+	slsfs_sas_refresh_protection();
 	vm_map_unlock(map);
 	return (0);
 }
@@ -1938,12 +1953,18 @@ slsfs_sas_write_object(vm_object_t obj)
 	int error;
 
 	error = slos_svpalloc(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
-	if (error != 0)
+	if (error != 0) {
+		printf("%s:%d error %d\n", __func__, __LINE__, error);
 		return (error);
+	}
 
 	error = VFS_VGET(slos.slsfs_mount, oid, LK_EXCLUSIVE, &vp);
-	if (error != 0)
+	if (error != 0) {
+		printf("%s:%d error %d\n", __func__, __LINE__, error);
 		return (error);
+	}
+
+	SDT_PROBE1(sas, , , vget, obj->resident_page_count);
 
 	VM_OBJECT_WLOCK(obj);
 	error = slsfs_writeobj_data(vp, obj, 0);
@@ -1952,13 +1973,13 @@ slsfs_sas_write_object(vm_object_t obj)
 
 	VM_OBJECT_WUNLOCK(obj);
 	vput(vp);
+
 	return (0);
 }
 
 static vm_object_t 
 slsfs_sas_copy_object(struct pglist snaplist, vm_object_t obj)
 {
-	pmap_t pmap = &curproc->p_vmspace->vm_pmap;
 	vm_page_t m, mcpy, mtmp;
 	vm_object_t objcpy;
 
@@ -1972,7 +1993,6 @@ slsfs_sas_copy_object(struct pglist snaplist, vm_object_t obj)
 			continue;
 
 		mcpy = vm_page_grab(objcpy, m->pindex, VM_ALLOC_NORMAL | VM_ALLOC_NOBUSY);
-		pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
 
 		pmap_copy_page(m, mcpy);
 		mcpy->valid = VM_PAGE_BITS_ALL;
@@ -1985,15 +2005,29 @@ slsfs_sas_copy_object(struct pglist snaplist, vm_object_t obj)
 	return (objcpy);
 }
 
+#define MAX_SAS (256)
+
 static __attribute__((noinline)) void
 slsfs_sas_trace_commit(void)
 {
 	vm_map_t map = &curproc->p_vmspace->vm_map;
-	vm_object_t obj, objcpy;
+	vm_object_t objlist[MAX_SAS];
+	vm_object_t obj;
 	vm_page_t m;
+	int i, len;
 	
+	SDT_PROBE3(sas, , , start, slsfs_sas_tracks, slsfs_sas_removes, slsfs_sas_attempts);
+	slsfs_sas_tracks = 0;
+	slsfs_sas_removes = 0;
+	slsfs_sas_attempts = 0;
+
 	vm_map_lock(map);
 	KASSERT((map->flags & MAP_SNAP_TRACE) != 0, ("map not being traced"));
+
+	if ((map->flags & MAP_SNAP_TRACE) == 0)
+		panic("map not being traced");
+
+	len = 0;
 
 	while (!TAILQ_EMPTY(&map->snaplist)) {
 		m = TAILQ_FIRST(&map->snaplist);
@@ -2002,15 +2036,29 @@ slsfs_sas_trace_commit(void)
 		VM_OBJECT_WLOCK(obj);
 		vm_object_reference_locked(obj);
 
-		objcpy = slsfs_sas_copy_object(map->snaplist, obj);
+		if (len >= MAX_SAS)
+			panic("overflow");
+		objlist[len++] = slsfs_sas_copy_object(map->snaplist, obj);
 
 		VM_OBJECT_WUNLOCK(obj);
 		vm_object_deallocate(obj);
 
-		slsfs_sas_write_object(objcpy);
-		vm_object_deallocate(objcpy);
 	}
 	vm_map_unlock(map);
+	SDT_PROBE1(sas, , , copy, len);
+
+	for (i = 0; i < len; i++) {
+		slsfs_sas_write_object(objlist[i]);
+	}
+
+	SDT_PROBE0(sas, , , write);
+
+	for (i = 0; i < len; i++) {
+		vm_object_deallocate(objlist[i]);
+	}
+
+	taskqueue_drain_all(slos.slos_tq);
+	SDT_PROBE0(sas, , , block);
 
 	atomic_add_64(&slsfs_sas_commits, 1);
 }
@@ -2044,6 +2092,7 @@ slsfs_sas_trace_end(void)
 	KASSERT((map->flags & MAP_SNAP_TRACE) != 0, ("map not being traced"));
 
 	map->flags &= ~MAP_SNAP_TRACE;
+	slsfs_sas_refresh_protection();
 	vm_map_unlock(map);
 }
 
@@ -2700,6 +2749,10 @@ slsfs_sas_ioctl(struct vop_ioctl_args *ap)
  
  	case SLSFS_SAS_TRACE_COMMIT:
  		slsfs_sas_trace_commit();
+ 		return (0);
+ 
+ 	case SLSFS_SAS_REFRESH_PROTECTION:
+ 		slsfs_sas_refresh_protection();
  		return (0);
  
 	default:

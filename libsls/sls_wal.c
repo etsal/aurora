@@ -385,3 +385,18 @@ sas_trace_abort(int fd)
 
 	return (0);
 }
+
+
+int
+sas_refresh_protection(int fd)
+{
+	int error;
+
+	error = ioctl(fd, SLSFS_SAS_REFRESH_PROTECTION);
+	if (error != 0) {
+		perror("sas_trace_abort");
+		return (1);
+	}
+
+	return (0);
+}
