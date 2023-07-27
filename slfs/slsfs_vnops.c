@@ -2032,8 +2032,6 @@ sas_test_cow(vm_offset_t vaddr, vm_page_t *m)
 	vm_object_t obj = (*m)->object;
 	vm_page_t oldm, newm;
 
-	VM_OBJECT_ASSERT_WLOCKED(obj);
-
 	if (((*m)->flags & VPO_SASCOW) == 0)
 		return;
 

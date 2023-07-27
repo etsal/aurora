@@ -119,6 +119,7 @@ slsfs_uninit(struct vfsconf *vfsp)
 	 * for our purposes right now.
 	 */
 	sls_writefault_hook = NULL;
+	sas_cow_hook = NULL;
 
 	slos_radix_fini();
 	uma_zdestroy(fnode_zone);
