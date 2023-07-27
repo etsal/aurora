@@ -1889,7 +1889,8 @@ slsfs_sas_page_untrack(struct pglist *pglist, vm_page_t m)
 
 	vm_page_unhold(m);
 	TAILQ_REMOVE(pglist, m, snapq);
-	pmap_protect(pmap, m->vaddr, m->vaddr + PAGE_SIZE, VM_PROT_READ);
+	pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
+	m->vaddr = 0;
 	slsfs_sas_removes += 1;
 
 	vm_page_unlock(m);
@@ -1898,7 +1899,8 @@ slsfs_sas_page_untrack(struct pglist *pglist, vm_page_t m)
 static void
 slsfs_sas_refresh_protection(void)
 {
-	pmap_protect(&curproc->p_vmspace->vm_pmap, SLS_SAS_INITADDR, SLS_SAS_MAXADDR, VM_PROT_READ);
+	struct pmap *pmap = &curproc->p_vmspace->vm_pmap;
+	pmap_protect(pmap, SLS_SAS_INITADDR, SLS_SAS_MAXADDR, VM_PROT_READ);
 }
 
 void
@@ -1915,6 +1917,10 @@ slsfs_sas_trace_update(vm_offset_t vaddr, vm_map_t map, vm_page_t m, int fault_t
 	if (vaddr >= SLS_SAS_MAXADDR)
 		return;
 	if (vaddr < SLS_SAS_INITADDR)
+		return;
+
+	/* XXX Find out why we may fault a page twice. */
+	if (m->vaddr != 0)
 		return;
 
 	slsfs_sas_tracks += 1;
@@ -1947,109 +1953,93 @@ slsfs_sas_getvp(uint64_t oid)
 	return (vp);
 }
 
-/*
- * XXX Replace with a SLOS-oriented VFS API
- * XXX Factor out vnode operations, open the
- * vnode and link to it from the object. Then
- * use the retrieve_buf routine to grab buffers
- * and call slsfs_strategy on them.
- */
-static struct buf *
-sas_getbuf(struct pglist *snaplist, bool *retry)
+static void
+sas_pager_done(struct buf *bp)
 {
-	size_t npages = 0;
-	vm_pindex_t pindex_init;
-	vm_page_t m, mtmp;
+	vm_object_t obj = bp->b_pages[0]->object;
+	vm_page_t m;
+	int i;
+
+	for (i = 0; i < bp->b_npages; i++) {
+		m = bp->b_pages[i];
+		bp->b_pages[i] = NULL;
+
+		m->flags &= ~VPO_SWAPINPROG;
+		obj = m->object;
+	}
+		
+	VM_OBJECT_WLOCK(obj);
+	vm_object_pip_wakeupn(obj, bp->b_npages);
+	VM_OBJECT_WUNLOCK(obj);
+
+	bp->b_bufsize = bp->b_bcount = 0;
+	bp->b_npages = 0;
+	bdone(bp);
+}
+
+#define MAX_PAGES (16)
+
+static int
+sas_bawrite(struct vnode *vp, vm_page_t *ma, size_t mlen)
+{
+	//vm_object_t obj = ma[0]->object;
+	size_t off, size;
 	struct buf *bp;
-	uint64_t oid;
+	int error;
 
-	bp = trypbuf(&slos_pbufcnt);
-	if (bp == NULL) {
-		*retry = true;
-		return (NULL);
-	}
+	return (0);
+	off = PAGE_SIZE * (ma[0]->pindex + SLOS_OBJOFF);
+	size = PAGE_SIZE * mlen;
 
-	KASSERT(bp != NULL, ("did not get new physical buffer"));
-	KASSERT(bp->b_resid == 0, ("Buffer already has resid"));
+	error = slsfs_retrieve_buf(vp, off, size, UIO_WRITE,
+		0, &bp);
+		//GB_UNMAPPED, &bp);
+	if (error != 0)
+		return (error);
 
-	TAILQ_FOREACH_SAFE(m, snaplist, snapq, mtmp) {
-		if (npages == 0) {
-			pindex_init = m->pindex;
-			oid  = m->object->objid;
-		}
-
-		if (m->object->objid != oid) {
-			printf("WRONG OID\n");
-			continue;
-		}
-
-		KASSERT(npages < btoc(MAXPHYS), ("overran b_pages[] array"));
-		KASSERT(pagesizes[m->psind] <= PAGE_SIZE,
-		    ("dumping page %p with size %ld", m, pagesizes[m->psind]));
-
-		/*
-		 * We do not need physical contiguity for pages
-		 * since we insert each page separately.
-		 */
-		/* XXX Turn on and use for COW */
-		//m->oflags |= VPO_SWAPINPROG;
-		bp->b_pages[npages++] = m;
-		bp->b_resid += pagesizes[m->psind];
-		KASSERT(pagesizes[m->psind] == PAGE_SIZE,
-		    ("unexpected page size %ld", pagesizes[m->psind]));
-
-		slsfs_sas_page_untrack(snaplist, m);
-
-		if (npages == btoc(MAXPHYS))
-			break;
-	}
-
-	KASSERT(npages > 0, ("no pages"));
-
-	bp->b_data = unmapped_buf;
-	bp->b_npages = npages;
-	bp->b_bcount = bp->b_bufsize = bp->b_resid;
-	bp->b_lblkno = pindex_init + SLOS_OBJOFF;
+	bp->b_resid = bp->b_bufsize = bp->b_bcount = size;
 	bp->b_iocmd = BIO_WRITE;
+	//bp->b_iodone = sas_pager_done;
+	bp->b_iodone = bdone;
+	bp->b_npages = 0;
 
-	BUF_ASSERT_LOCKED(bp);
+	for (int i = 0; i < mlen; i++)
+		memcpy(&bp->b_data[PAGE_SIZE * i], ma[i], PAGE_SIZE);
 
-	*retry = false;
+	//bp->b_npages = mlen;
+	//memcpy(bp->b_pages, ma, mlen * sizeof(*ma));
 
-	return (bp);
+	/* XXX Issue the writes from a workqueue and wait on them. */
+	bwrite(bp);
+
+	return (0);
 }
 
 static int __attribute__((noinline))
-sas_genio(struct vnode *vp, struct pglist *snaplist)
+sas_genio(struct vnode *vp, struct pglist *snaplist, uint64_t oid)
 {
+	vm_page_t ma[MAX_PAGES];
 	vm_pindex_t pindex;
-	struct buf *bp;
-	bool retry;
-	int error;
+	vm_page_t m, mtmp;
+	size_t mlen;
 
 	pindex = 0;
-	while (!TAILQ_EMPTY(snaplist)) {
-		bp = sas_getbuf(snaplist, &retry);
-		while (retry) {
-			/*
-			 * XXX hack right now, if we are out of buffers we
-			 * are in deep trouble anyway.
-			 */
-			pause_sbt("wswbuf", 10 * SBT_1MS, 0, 0);
-			bp = sas_getbuf(snaplist, &retry);
+	mlen = 0;
+	TAILQ_FOREACH_SAFE(m, snaplist, snapq, mtmp) {
+		if (m->object->objid == oid) {
+			m->flags |= VPO_SWAPINPROG;
+			ma[mlen++] = m;
+			slsfs_sas_page_untrack(snaplist, m);
 		}
 
-
-		if (bp == NULL) {
-			KASSERT(retry == false, ("out of buffers"));
-			break;
+		if (mlen == MAX_PAGES) {
+			sas_bawrite(vp, ma, mlen);
+			mlen = 0;
 		}
-
-		BUF_ASSERT_LOCKED(bp);
-
-		/* XXX Is this the right thing to do? */
-		error = slos_iotask_create(vp, bp, true);
 	}
+
+	if (mlen > 0)
+		sas_bawrite(vp, ma, mlen);
 
 	return (0);
 }
@@ -2060,7 +2050,8 @@ static __attribute__((noinline)) void
 slsfs_sas_trace_commit(void)
 {
 	struct pglist *snaplist = &curthread->td_snaplist;
-	struct vnode *vp = NULL;
+	struct pmap *pmap = &curproc->p_vmspace->vm_pmap;
+	struct vnode *vp;
 	uint64_t oid;
 	
 	SDT_PROBE3(sas, , , start, slsfs_sas_tracks, slsfs_sas_removes, slsfs_sas_attempts);
@@ -2069,15 +2060,16 @@ slsfs_sas_trace_commit(void)
 	slsfs_sas_attempts = 0;
 
 	while (!TAILQ_EMPTY(snaplist)) {
-		if (vp == NULL) {
-			oid = TAILQ_FIRST(snaplist)->object->objid;
-			vp = slsfs_sas_getvp(oid);
-		}
-		sas_genio(vp, snaplist);
+		oid = TAILQ_FIRST(snaplist)->object->objid;
+		vp = slsfs_sas_getvp(oid);
+		sas_genio(vp, snaplist, oid);
+		vput(vp);
 	}
 
-	if (vp != NULL)
-		vput(vp);
+	PMAP_LOCK(pmap);
+	pmap_invalidate_all(pmap);
+	PMAP_UNLOCK(pmap);
+
 
 	taskqueue_drain_all(slos.slos_tq);
 	SDT_PROBE0(sas, , , block);
