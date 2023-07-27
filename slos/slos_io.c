@@ -402,7 +402,8 @@ slos_io(void *ctx, int __unused pending)
 
 	BUF_ASSERT_LOCKED(bp);
 
-	KASSERT(bp->b_iodone != NULL, ("buffer %p has no callback", bp));
+
+	//KASSERT(bp->b_iodone != NULL, ("buffer %p has no callback", bp));
 
 	if (iocmd == BIO_WRITE) {
 		/* Create the physical segment backing the write. */
@@ -438,7 +439,7 @@ slos_io(void *ctx, int __unused pending)
 		bp->b_blkno,
 		slos.slos_sb->sb_bsize *
 		    (SLOS_BSIZE(slos) / SLOS_DEVBSIZE(slos))));
-	KASSERT(bp->b_iodone != NULL, ("buffer %p has no callback", bp));
+	//KASSERT(bp->b_iodone != NULL, ("buffer %p has no callback", bp));
 
 	g_vfs_strategy(&slos.slos_vp->v_bufobj, bp);
 
