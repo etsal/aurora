@@ -1880,16 +1880,15 @@ slsfs_sas_page_track(vm_offset_t vaddr, struct pglist *pglist, vm_page_t m)
 static void
 slsfs_sas_page_untrack(struct pglist *pglist, vm_page_t m)
 {
-	pmap_t pmap = &curproc->p_vmspace->vm_pmap;
 
 	vm_page_lock(m);
 
-	TAILQ_REMOVE(pglist, m, snapq);
-	pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
 	m->vaddr = 0;
-	slsfs_sas_removes += 1;
+	TAILQ_REMOVE(pglist, m, snapq);
 
 	vm_page_unlock(m);
+
+	slsfs_sas_removes += 1;
 }
 
 static void
@@ -1959,7 +1958,7 @@ sas_pager_done(struct buf *bp)
 		m = bp->b_pages[i];
 		bp->b_pages[i] = NULL;
 
-		m->flags &= ~VPO_SWAPINPROG;
+		//m->flags &= ~VPO_SWAPINPROG;
 	}
 		
 	bp->b_bufsize = bp->b_bcount = 0;
@@ -2011,7 +2010,6 @@ sas_genio(struct vnode *vp, struct pglist *snaplist, uint64_t oid)
 	mlen = 0;
 	TAILQ_FOREACH_SAFE(m, snaplist, snapq, mtmp) {
 		if (m->object->objid == oid) {
-			m->flags |= VPO_SWAPINPROG;
 			ma[mlen++] = m;
 			slsfs_sas_page_untrack(snaplist, m);
 		}
@@ -2037,12 +2035,21 @@ slsfs_sas_trace_commit(void)
 	struct pmap *pmap = &curproc->p_vmspace->vm_pmap;
 	struct vnode *vp;
 	uint64_t oid;
+	vm_page_t m;
 	
 	SDT_PROBE3(sas, , , start, slsfs_sas_tracks, slsfs_sas_removes, slsfs_sas_attempts);
 	slsfs_sas_tracks = 0;
 	slsfs_sas_removes = 0;
 	slsfs_sas_attempts = 0;
 
+	PMAP_LOCK(pmap);
+	TAILQ_FOREACH(m, snaplist, snapq) {
+		pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
+		//m->flags |= VPO_SWAPINPROG;
+	}
+
+	pmap_invalidate_all(pmap);
+	PMAP_UNLOCK(pmap);
 
 	while (!TAILQ_EMPTY(snaplist)) {
 		oid = TAILQ_FIRST(snaplist)->object->objid;
@@ -2051,9 +2058,6 @@ slsfs_sas_trace_commit(void)
 		vput(vp);
 	}
 
-	PMAP_LOCK(pmap);
-	pmap_invalidate_all(pmap);
-	PMAP_UNLOCK(pmap);
 
 	taskqueue_drain_all(slos.slos_tq);
 	SDT_PROBE0(sas, , , block);
@@ -2084,11 +2088,17 @@ static void
 slsfs_sas_trace_abort(void)
 {
 	struct pglist *snaplist = &curthread->td_snaplist;
+	pmap_t pmap = &curproc->p_vmspace->vm_pmap;
 	vm_page_t m, mtmp;
 
 	TAILQ_FOREACH_SAFE(m, snaplist, snapq, mtmp) {
 		slsfs_sas_page_untrack(snaplist, m);
+		pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
 	}
+	
+	PMAP_LOCK(pmap);
+	pmap_invalidate_all(pmap);
+	PMAP_UNLOCK(pmap);
 
 	atomic_add_64(&slsfs_sas_aborts, 1);
 }
