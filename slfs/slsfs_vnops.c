@@ -1947,6 +1947,13 @@ slsfs_sas_getvp(uint64_t oid)
 	return (vp);
 }
 
+/*
+ * XXX Replace with a SLOS-oriented VFS API
+ * XXX Factor out vnode operations, open the
+ * vnode and link to it from the object. Then
+ * use the retrieve_buf routine to grab buffers
+ * and call slsfs_strategy on them.
+ */
 static struct buf *
 sas_getbuf(struct pglist *snaplist, bool *retry)
 {
@@ -1992,6 +1999,9 @@ sas_getbuf(struct pglist *snaplist, bool *retry)
 		    ("unexpected page size %ld", pagesizes[m->psind]));
 
 		slsfs_sas_page_untrack(snaplist, m);
+
+		if (npages == btoc(MAXPHYS))
+			break;
 	}
 
 	KASSERT(npages > 0, ("no pages"));
