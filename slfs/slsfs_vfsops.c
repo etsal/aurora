@@ -91,6 +91,7 @@ slsfs_init(struct vfsconf *vfsp)
 	}
 
 	sls_writefault_hook = slsfs_sas_trace_update;
+	sas_cow_hook = sas_test_cow;
 
 	slos_radix_init();
 

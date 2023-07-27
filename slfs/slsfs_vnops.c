@@ -1958,15 +1958,13 @@ sas_pager_done(struct buf *bp)
 		m = bp->b_pages[i];
 		bp->b_pages[i] = NULL;
 
-		//m->flags &= ~VPO_SWAPINPROG;
+		m->flags &= ~VPO_SASCOW;
 	}
 		
 	bp->b_bufsize = bp->b_bcount = 0;
 	bp->b_npages = 0;
 	bdone(bp);
 }
-
-#define MAX_PAGES (16)
 
 static int
 sas_bawrite(struct vnode *vp, vm_page_t *ma, size_t mlen)
@@ -1998,6 +1996,8 @@ sas_bawrite(struct vnode *vp, vm_page_t *ma, size_t mlen)
 	return (0);
 }
 
+#define MAX_PAGES (16)
+
 static int __attribute__((noinline))
 sas_genio(struct vnode *vp, struct pglist *snaplist, uint64_t oid)
 {
@@ -2026,6 +2026,47 @@ sas_genio(struct vnode *vp, struct pglist *snaplist, uint64_t oid)
 	return (0);
 }
 
+void
+sas_test_cow(vm_offset_t vaddr, vm_page_t *m)
+{
+	vm_object_t obj = (*m)->object;
+	vm_page_t oldm, newm;
+
+	VM_OBJECT_ASSERT_WLOCKED(obj);
+
+	if (((*m)->flags & VPO_SASCOW) == 0)
+		return;
+
+	if (vaddr < SLS_SAS_INITADDR || vaddr < SLS_SAS_MAXADDR)
+		return;
+
+	oldm = *m;
+
+	vm_page_lock(oldm);
+	vm_page_remove(oldm);
+	vm_page_unlock(oldm);
+	vm_page_xunbusy(oldm);
+
+	pmap_remove_all(oldm);
+
+	newm = vm_page_alloc(obj, oldm->pindex, VM_ALLOC_WAITOK);
+	pmap_copy_page(oldm, newm);
+	newm->flags = VM_PAGE_BITS_ALL;
+	vm_page_xbusy(newm);
+	*m = newm;
+
+	/* Check if the IO finished while we were applying COW. */
+	vm_page_lock(oldm);
+	if ((oldm->flags & VPO_SASCOW) == 0) {
+		vm_page_unlock(oldm);
+		vm_page_free(oldm);
+	}
+
+	oldm->flags &= ~VPO_SASCOW;
+	vm_page_unlock(oldm);
+}
+
+
 #define MAX_SAS (256)
 
 static __attribute__((noinline)) void
@@ -2045,7 +2086,7 @@ slsfs_sas_trace_commit(void)
 	PMAP_LOCK(pmap);
 	TAILQ_FOREACH(m, snaplist, snapq) {
 		pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
-		//m->flags |= VPO_SWAPINPROG;
+		m->flags |= VPO_SASCOW;
 	}
 
 	pmap_invalidate_all(pmap);
