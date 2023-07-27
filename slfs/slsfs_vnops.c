@@ -2004,7 +2004,7 @@ sas_bawrite(struct vnode *vp, vm_page_t *ma, size_t mlen)
 	bp->b_npages = 0;
 
 	for (int i = 0; i < mlen; i++)
-		memcpy(&bp->b_data[PAGE_SIZE * i], ma[i], PAGE_SIZE);
+		memcpy(&bp->b_data[PAGE_SIZE * i], (void *)PHYS_TO_DMAP(ma[i]->phys_addr), PAGE_SIZE);
 
 	//bp->b_npages = mlen;
 	//memcpy(bp->b_pages, ma, mlen * sizeof(*ma));
