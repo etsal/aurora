@@ -1869,9 +1869,6 @@ slsfs_sas_page_track(vm_offset_t vaddr, struct pglist *pglist, vm_page_t m)
 {
 	vm_page_lock(m);
 
-	/* XXX Is holding the right kind of refcounting? */
-
-	vm_page_hold(m);
 	TAILQ_INSERT_HEAD(pglist, m, snapq);
 	m->vaddr = vaddr;
 
@@ -1887,7 +1884,6 @@ slsfs_sas_page_untrack(struct pglist *pglist, vm_page_t m)
 
 	vm_page_lock(m);
 
-	vm_page_unhold(m);
 	TAILQ_REMOVE(pglist, m, snapq);
 	pmap_protect_page(pmap, m->vaddr, VM_PROT_READ);
 	m->vaddr = 0;
@@ -1956,7 +1952,6 @@ slsfs_sas_getvp(uint64_t oid)
 static void
 sas_pager_done(struct buf *bp)
 {
-	vm_object_t obj = bp->b_pages[0]->object;
 	vm_page_t m;
 	int i;
 
@@ -1965,13 +1960,8 @@ sas_pager_done(struct buf *bp)
 		bp->b_pages[i] = NULL;
 
 		m->flags &= ~VPO_SWAPINPROG;
-		obj = m->object;
 	}
 		
-	VM_OBJECT_WLOCK(obj);
-	vm_object_pip_wakeupn(obj, bp->b_npages);
-	VM_OBJECT_WUNLOCK(obj);
-
 	bp->b_bufsize = bp->b_bcount = 0;
 	bp->b_npages = 0;
 	bdone(bp);
@@ -1982,35 +1972,29 @@ sas_pager_done(struct buf *bp)
 static int
 sas_bawrite(struct vnode *vp, vm_page_t *ma, size_t mlen)
 {
-	//vm_object_t obj = ma[0]->object;
 	size_t off, size;
 	struct buf *bp;
-	int error;
+	int i;
 
-	return (0);
 	off = PAGE_SIZE * (ma[0]->pindex + SLOS_OBJOFF);
 	size = PAGE_SIZE * mlen;
 
-	error = slsfs_retrieve_buf(vp, off, size, UIO_WRITE,
-		0, &bp);
-		//GB_UNMAPPED, &bp);
-	if (error != 0)
-		return (error);
+	bp = trypbuf(&slos_pbufcnt);
+	KASSERT(bp != NULL, ("failed to grab buffer"));
 
-	bp->b_resid = bp->b_bufsize = bp->b_bcount = size;
+	bp->b_data = unmapped_buf;
+	bp->b_lblkno = ma[0]->pindex + SLOS_OBJOFF;
 	bp->b_iocmd = BIO_WRITE;
-	//bp->b_iodone = sas_pager_done;
-	bp->b_iodone = bdone;
-	bp->b_npages = 0;
 
-	for (int i = 0; i < mlen; i++)
-		memcpy(&bp->b_data[PAGE_SIZE * i], (void *)PHYS_TO_DMAP(ma[i]->phys_addr), PAGE_SIZE);
+	bp->b_resid = bp->b_bufsize = bp->b_bcount = mlen * PAGE_SIZE;
+	bp->b_iocmd = BIO_WRITE;
+	bp->b_iodone = sas_pager_done;
 
-	//bp->b_npages = mlen;
-	//memcpy(bp->b_pages, ma, mlen * sizeof(*ma));
+	bp->b_npages = mlen;
+	for (i = 0; i < mlen; i++)
+		bp->b_pages[i] = ma[i];
 
-	/* XXX Issue the writes from a workqueue and wait on them. */
-	bwrite(bp);
+	slos_iotask_create(vp, bp, true);
 
 	return (0);
 }
@@ -2059,6 +2043,7 @@ slsfs_sas_trace_commit(void)
 	slsfs_sas_removes = 0;
 	slsfs_sas_attempts = 0;
 
+
 	while (!TAILQ_EMPTY(snaplist)) {
 		oid = TAILQ_FIRST(snaplist)->object->objid;
 		vp = slsfs_sas_getvp(oid);
@@ -2069,7 +2054,6 @@ slsfs_sas_trace_commit(void)
 	PMAP_LOCK(pmap);
 	pmap_invalidate_all(pmap);
 	PMAP_UNLOCK(pmap);
-
 
 	taskqueue_drain_all(slos.slos_tq);
 	SDT_PROBE0(sas, , , block);
