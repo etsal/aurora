@@ -2053,7 +2053,7 @@ sas_test_cow(vm_offset_t vaddr, vm_page_t *m)
 	newm->flags = VM_PAGE_BITS_ALL;
 	vm_page_xbusy(newm);
 	*m = newm;
-	VM_OBJECT_UNLOCK(obj);
+	VM_OBJECT_WUNLOCK(obj);
 
 	/* Check if the IO finished while we were applying COW. */
 	vm_page_lock(oldm);
