@@ -52,20 +52,21 @@ SDT_PROBE_DEFINE3(slos, , , slsfs_deviceblk, "uint64_t", "uint64_t", "int");
 SDT_PROBE_DEFINE3(slos, , , slsfs_vnodeblk, "uint64_t", "uint64_t", "int");
 
 SDT_PROVIDER_DEFINE(sas);
-SDT_PROBE_DEFINE3(sas, , , start, "long", "long", "long");
+SDT_PROBE_DEFINE4(sas, , , start, "long", "long", "long", "long");
+SDT_PROBE_DEFINE0(sas, , , protect);
 SDT_PROBE_DEFINE0(sas, , , write);
 SDT_PROBE_DEFINE0(sas, , , block);
-SDT_PROBE_DEFINE1(sas, , , vget, "int");
-SDT_PROBE_DEFINE1(sas, , , copy, "int");
 
 /* 5 GiB */
 static const size_t MAX_WAL_SIZE = 5368709000;
 static size_t wal_space_used = 0;
 
+uint64_t slsfs_sas_tracks;
 uint64_t slsfs_sas_aborts;
 uint64_t slsfs_sas_attempts;
+uint64_t slsfs_sas_copies;
+
 uint64_t slsfs_sas_commits;
-long slsfs_sas_tracks;
 long slsfs_sas_inserts, slsfs_sas_removes;
 
 static int
@@ -2064,6 +2065,8 @@ sas_test_cow(vm_offset_t vaddr, vm_page_t *m)
 
 	oldm->flags &= ~VPO_SASCOW;
 	vm_page_unlock(oldm);
+
+	atomic_add_64(&slsfs_sas_copies, 1);
 }
 
 
@@ -2078,7 +2081,7 @@ slsfs_sas_trace_commit(void)
 	uint64_t oid;
 	vm_page_t m;
 	
-	SDT_PROBE3(sas, , , start, slsfs_sas_tracks, slsfs_sas_removes, slsfs_sas_attempts);
+	SDT_PROBE4(sas, , , start, slsfs_sas_tracks, slsfs_sas_removes, slsfs_sas_attempts, slsfs_sas_copies);
 	slsfs_sas_tracks = 0;
 	slsfs_sas_removes = 0;
 	slsfs_sas_attempts = 0;
@@ -2092,6 +2095,8 @@ slsfs_sas_trace_commit(void)
 	pmap_invalidate_all(pmap);
 	PMAP_UNLOCK(pmap);
 
+	SDT_PROBE0(sas, , , protect);
+
 	while (!TAILQ_EMPTY(snaplist)) {
 		oid = TAILQ_FIRST(snaplist)->object->objid;
 		vp = slsfs_sas_getvp(oid);
@@ -2099,6 +2104,7 @@ slsfs_sas_trace_commit(void)
 		vput(vp);
 	}
 
+	SDT_PROBE0(sas, , , write);
 
 	taskqueue_drain_all(slos.slos_tq);
 	SDT_PROBE0(sas, , , block);

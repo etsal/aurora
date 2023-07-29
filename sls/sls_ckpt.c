@@ -76,10 +76,11 @@ SDT_PROBE_DEFINE0(sls, , , stopclock_start);
 SDT_PROBE_DEFINE0(sls, , , meta_start);
 SDT_PROBE_DEFINE0(sls, , , stopclock_finish);
 SDT_PROBE_DEFINE0(sls, , , meta_finish);
-SDT_PROBE_DEFINE0(sls, , , memsnap_end);
-SDT_PROBE_DEFINE0(sls, , , memsnap_dump);
-SDT_PROBE_DEFINE0(sls, , , memsnap_wait);
-SDT_PROBE_DEFINE0(sls, , , memsnap_cleanup);
+SDT_PROBE_DEFINE0(sls, , , enter);
+SDT_PROBE_DEFINE0(sls, , , cow);
+SDT_PROBE_DEFINE0(sls, , , write);
+SDT_PROBE_DEFINE0(sls, , , wait);
+SDT_PROBE_DEFINE0(sls, , , cleanup);
 
 /*
  * Stop the processes, and wait until they are truly not running.
@@ -668,8 +669,6 @@ slsckpt_dataregion_cleanup(struct slsckpt_data *sckpt_data, struct slspart *slsp
 
 	slsp_epoch_advance(slsp, nextepoch);
 
-	SDT_PROBE0(sls, , , memsnap_end);
-
 	stateerr = slsp_setstate(
 	    slsp, SLSP_CHECKPOINTING, SLSP_AVAILABLE, false);
 	KASSERT(stateerr == 0, ("partition not in ckpt state"));
@@ -691,7 +690,7 @@ slsckpt_dataregion_dump(struct slsckpt_data *sckpt_data, struct slspart *slsp, u
 		}
 	}
 
-	SDT_PROBE0(sls, , , memsnap_wait);
+	SDT_PROBE0(sls, , , write);
 	/* Drain the taskqueue, ensuring all IOs have hit the disk. */
 	if (slsp->slsp_target == SLS_OSD) {
 		taskqueue_drain_all(slos.slos_tq);
@@ -701,9 +700,10 @@ slsckpt_dataregion_dump(struct slsckpt_data *sckpt_data, struct slspart *slsp, u
 	}
 
 
-	SDT_PROBE0(sls, , , memsnap_cleanup);
+	SDT_PROBE0(sls, , , wait);
 	slsckpt_dataregion_cleanup(sckpt_data, slsp, nextepoch);
 
+	SDT_PROBE0(sls, , , cleanup);
 	sls_finishop();
 
 }
@@ -774,6 +774,8 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		goto error_single;
 	}
 
+	SDT_PROBE0(sls, , , enter);
+
 	sckpt = slsp->slsp_blanksckpt;
 	slsp->slsp_blanksckpt = NULL;
 
@@ -813,15 +815,13 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	PROC_UNLOCK(p);
 
 #endif
-	SDT_PROBE0(sls, , , memsnap_dump);
+	SDT_PROBE0(sls, , , cow);
+
 	if (!SLSATTR_ISASYNCSNAP(slsp->slsp_attr)) {
 		slsckpt_dataregion_dump(sckpt, slsp, *nextepoch);
 		sls_memsnap_done += 1;
 		return (0);
 	}
-
-
-	SDT_PROBE1(sls, , slsckpt_dataregion, , "start");
 
 	taskctx = uma_zalloc(slstable_task_zone, M_WAITOK);
 	msnapctx = &taskctx->msnap;
