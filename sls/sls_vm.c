@@ -322,6 +322,40 @@ slsvm_objtable_collapse(
 	}
 }
 
+static bool
+slsvm_tracebuf_invalidate(struct proc *p)
+{
+	pmap_t pmap = &p->p_vmspace->vm_pmap;
+	struct pmap_tracebuf *pmt = &pmap->pm_tracebuf;
+	pt_entry_t pbits;
+	pt_entry_t *pte;
+	int i;
+
+	if (pmt->pmt_size == 0) {
+		PMAP_LOCK(pmap);
+		pmap_tracebuf_init(pmap, SLS_TRACEBUF_SIZE);
+		PMAP_UNLOCK(pmap);
+		return (true);
+	}
+
+	if (pmt->pmt_index == pmt->pmt_size)
+		return (true);
+
+	for (i = 0; i < pmt->pmt_index; i++) {
+		pte = pmt->pmt_ptes[i];
+		pbits = *pte;
+
+		if ((pbits & PG_V) == 0)
+			continue;
+
+		*pte = (pbits & (~(PG_RW | PG_M))) | pg_nx;
+	}
+
+	pmt->pmt_index = 0;
+	return (false);
+}
+
+
 static void
 slsvm_entry_protect(struct proc *p, struct vm_map_entry *entry)
 {
@@ -334,6 +368,15 @@ slsvm_entry_protect(struct proc *p, struct vm_map_entry *entry)
 
 	if (obj->resident_page_count == 0)
 		return;
+
+	if (sls_tracebuf) {
+		slsvm_tracebuf_invalidate(p);
+
+		PMAP_LOCK(pmap);
+		pmap_invalidate_all(pmap);
+		PMAP_UNLOCK(pmap);
+		return;
+	}
 
 	if (!sls_objprotect) {
 		pmap_protect(pmap, entry->start, entry->end,
@@ -504,40 +547,6 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
 
 	return (0);
 }
-
-static bool
-slsvm_tracebuf_invalidate(struct proc *p)
-{
-	pmap_t pmap = &p->p_vmspace->vm_pmap;
-	struct pmap_tracebuf *pmt = &pmap->pm_tracebuf;
-	pt_entry_t pbits;
-	pt_entry_t *pte;
-	int i;
-
-	if (pmt->pmt_size == 0) {
-		PMAP_LOCK(pmap);
-		pmap_tracebuf_init(pmap, SLS_TRACEBUF_SIZE);
-		PMAP_UNLOCK(pmap);
-		return (true);
-	}
-
-	if (pmt->pmt_index == pmt->pmt_size)
-		return (true);
-
-	for (i = 0; i < pmt->pmt_index; i++) {
-		pte = pmt->pmt_ptes[i];
-		pbits = *pte;
-
-		if ((pbits & PG_V) == 0)
-			continue;
-
-		*pte = (pbits & (~(PG_RW | PG_M))) | pg_nx;
-	}
-
-	pmt->pmt_index = 0;
-	return (false);
-}
-
 /*
  * Get all objects accessible through the VM entries of the checkpointed
  * process. This causes any CoW objects shared among memory maps to split into
