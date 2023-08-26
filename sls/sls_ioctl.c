@@ -47,7 +47,6 @@ MALLOC_DEFINE(M_SLSREC, "slsrec", "SLSREC");
 SDT_PROVIDER_DEFINE(sls);
 
 /* Variables set using sysctls. */
-extern int sls_objprotect;
 extern int sls_tracebuf;
 extern int sls_only_flush_deltas;
 extern uint64_t sls_successful_restores;

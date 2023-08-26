@@ -172,6 +172,8 @@ extern uint64_t sls_memsnap_done;
 extern uint64_t sls_ckpt_attempted;
 extern uint64_t sls_ckpt_done;
 extern uint64_t sls_ckpt_duration;
+extern int sls_objprotect;
+
 SDT_PROVIDER_DECLARE(sls);
 
 #define SLS_ASSERT_LOCKED() (mtx_assert(&slsm.slsm_mtx, MA_OWNED))
