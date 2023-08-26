@@ -28,8 +28,8 @@
 #include "sls_prefault.h"
 #include "sls_vm.h"
 
-int sls_objprotect = 1;
-int sls_tracebuf = 1;
+int sls_objprotect = 0;
+int sls_tracebuf = 0;
 SDT_PROBE_DEFINE(sls, , , procset_loop);
 
 #define SLS_TRACEBUF_SIZE (32768)
