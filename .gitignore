@@ -121,4 +121,6 @@ criu-results/
 stats.*
 dtraceoutput
 __pycache__
+
+metropolis/opt_global.h
 sls/opt_global.h
