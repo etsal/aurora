@@ -13,8 +13,7 @@
 
 #include <machine/param.h>
 
-/* The number of buckets created. */
-#define SLSKV_BUCKETS (16)
+#define SLSKV_MAXSLOTS (4096)
 
 /*
  * Generic hashtable data structure. Built on top
@@ -22,19 +21,14 @@
  */
 struct slskv_pair {
 	uint64_t key;		     /* A 64bit key */
-	uintptr_t value;	     /* Pointer to a value of arbitrary size,
-					or possibly the value itself. */
-	LIST_ENTRY(slskv_pair) next; /* Used for chaining in the hashtable */
+	uintptr_t value; /* Pointer to a value of arbitrary size */
 };
-
-LIST_HEAD(slskv_pairs, slskv_pair); /* A bucket of the hashtable */
 
 /* The main key-value table. */
 struct slskv_table {
-	struct mtx_padalign mtx[SLSKV_BUCKETS]; /* Per-bucket locking */
-	struct slskv_pairs *buckets; /* The buckets of key-value pairs */
-	/* Read-only elements of the struct */
-	u_long mask; /* Hashmask used by the builtin hashtable */
+	struct slskv_pair
+	    slots[SLSKV_MAXSLOTS]; /* The buckets of key-value pairs */
+	size_t firstfree;	   /* The largest free slot */
 	void *data;  /* Private data */
 };
 
@@ -73,14 +67,12 @@ void slskv_fini(void);
  * This data structure should be opaque to the users of the table.
  */
 struct slskv_iter {
-	int bucket;		   /* The bucket currently being dumped */
-	struct slskv_pair *pair;   /* The KV pair currently being returned */
+	size_t slot;
 	struct slskv_table *table; /* The table being currently returned */
 };
 
 struct slskv_iter slskv_iterstart(struct slskv_table *table);
 int slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value);
-void slskv_iterabort(struct slskv_iter *iter);
 
 #define KV_FOREACH_POP(table, kvkey, kvvalue)                \
 	_Static_assert(sizeof(kvkey) == sizeof(uint64_t),    \
@@ -110,11 +102,6 @@ void slskv_iterabort(struct slskv_iter *iter);
 	for ((iter) = slskv_iterstart(settable);              \
 	     slskv_itercont(&(iter), (uint64_t *)&(setvalue), \
 		 (uintptr_t *)&(setvalue)) != SLSKV_ITERDONE;)
-
-#define KV_ABORT(iter)                      \
-	do {                                \
-		(slskv_iterabort(&(iter))); \
-	} while (0)
 
 /* Zone for the key value tables. */
 extern uma_zone_t slskv_zone;

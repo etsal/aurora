@@ -202,22 +202,17 @@ slsckpt_vnode_serialize(struct slsckpt_data *sckpt_data)
 	{
 		/* Check if we have already serialized this vnode. */
 		if (slskv_find(sckpt_data->sckpt_rectable, (uint64_t)vp,
-			&exists) == 0) {
-			KV_ABORT(iter);
+			&exists) == 0)
 			return (0);
-		}
 
 		error = slsckpt_vnode_serialize_single(
 		    vp, SLSATTR_ISIGNUNLINKED(sckpt_data->sckpt_attr), &sb);
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			return (error);
-		}
 
 		error = slsckpt_addrecord(
 		    sckpt_data, (uint64_t)vp, sb, SLOSREC_VNODE);
 		if (error != 0) {
-			KV_ABORT(iter);
 			sbuf_delete(sb);
 			return (error);
 		}

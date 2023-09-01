@@ -70,7 +70,6 @@ sls_proc_inpart(uint64_t oid, struct proc *p)
 	KVSET_FOREACH(slsp->slsp_procs, iter, slsp_pid)
 	{
 		if (p->p_pid == slsp_pid) {
-			KV_ABORT(iter);
 			slsp_deref_locked(slsp);
 			return (true);
 		}
@@ -477,10 +476,8 @@ sls_receive_stopall(void)
 			continue;
 
 		error = sls_write_rcvdone(slsp);
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			return (error);
-		}
 	}
 
 	return (0);

@@ -11,23 +11,8 @@
 #include "sls_internal.h"
 #include "sls_kv.h"
 
-/*
- * NOTE: Iterating through a table while doing other operations
- * on it is undefined. This is a deliberate inconsistency in the design of
- * the data structure which does not affect us because at no point during
- * normal operation are the two operations supposed to overlap. We still
- * use per-bucket mutexes. Even if an add/delete overlaps with an
- * iteration there is no possibility of data corruption. What _does_ happen
- * is that iteration operates on an inconsistent view of the KV store, and
- * might thus return erroneous results. The same holds for a popall operation.
- */
-
-/* Hash function from keys to buckets. */
-#define SLSKV_BUCKETNO(table, key) (((u_long)key & table->mask))
-#define SLSKVPAIR_ZONEWARM (8192)
 #define SLSKV_ZONEWARM (256)
 
-static uma_zone_t slskvpair_zone = NULL;
 uma_zone_t slskv_zone = NULL;
 
 int slskv_count = 0;
@@ -35,8 +20,15 @@ int slskv_count = 0;
 static int
 slskv_zone_ctor(void *mem, int size, void *args __unused, int flags __unused)
 {
-	/* XXX Put in KASSERTs */
+	struct slskv_table *table;
+
 	atomic_add_int(&slskv_count, 1);
+
+	table = (struct slskv_table *)mem;
+
+	table->firstfree = 0;
+	table->data = NULL;
+
 	return (0);
 }
 
@@ -44,85 +36,24 @@ static void
 slskv_zone_dtor(void *mem, int size, void *args __unused)
 {
 	struct slskv_table *table;
-	struct slskv_pair *kv, *tmpkv;
-	int i;
 
 	table = (struct slskv_table *)mem;
 
-	/* Iterate all buckets. */
-	for (i = 0; i <= table->mask; i++) {
-		LIST_FOREACH_SAFE (kv, &table->buckets[i], next, tmpkv) {
-			/*
-			 * Remove all elements from each bucket and free them.
-			 * We are also responsible for freeing the values
-			 * themselves.
-			 */
-			LIST_REMOVE(kv, next);
-			uma_zfree(slskvpair_zone, kv);
-		}
-	}
+	KASSERT(table->firstfree == 0, ("Non-empty table\n"));
 
 	atomic_add_int(&slskv_count, -1);
-}
-
-static int
-slskv_zone_init(void *mem, int size, int flags __unused)
-{
-	struct slskv_table *table;
-	int i;
-
-	table = (struct slskv_table *)mem;
-
-	/* Create the buckets using the existing kernel functions. */
-	table->buckets = hashinit(SLSKV_BUCKETS, M_SLSMM, &table->mask);
-	if (table->buckets == NULL)
-		return (ENOMEM);
-
-	/* Initialize the mutexes. */
-	for (i = 0; i < SLSKV_BUCKETS; i++)
-		mtx_init(&table->mtx[i], "slskvmtx", NULL, MTX_SPIN);
-
-	table->data = NULL;
-
-	return (0);
-}
-
-static void
-slskv_zone_fini(void *mem, int size)
-{
-	struct slskv_table *table;
-	int i;
-
-	table = (struct slskv_table *)mem;
-
-	/* Destroy the hashtable itself. */
-	hashdestroy(table->buckets, M_SLSMM, table->mask);
-
-	/* Destroy the lock. */
-	for (i = 0; i < SLSKV_BUCKETS; i++)
-		mtx_destroy(&table->mtx[i]);
 }
 
 int
 slskv_init(void)
 {
 	slskv_zone = uma_zcreate("slstable", sizeof(struct slskv_table),
-	    slskv_zone_ctor, slskv_zone_dtor, slskv_zone_init, slskv_zone_fini,
+	    slskv_zone_ctor, slskv_zone_dtor, NULL, NULL,
 	    UMA_ALIGNOF(struct slskv_table), 0);
 	if (slskv_zone == NULL)
 		return (ENOMEM);
 
-	uma_prealloc(slskv_zone, SLSKVPAIR_ZONEWARM);
-
-	slskvpair_zone = uma_zcreate("slkvpair", sizeof(struct slskv_pair),
-	    NULL, NULL, NULL, NULL, UMA_ALIGNOF(struct slskv_pair), 0);
-	if (slskvpair_zone == NULL) {
-		uma_zdestroy(slskv_zone);
-		slskv_zone = NULL;
-		return (ENOMEM);
-	}
-
-	uma_prealloc(slskvpair_zone, SLSKVPAIR_ZONEWARM);
+	uma_prealloc(slskv_zone, SLSKV_ZONEWARM);
 
 	return (0);
 }
@@ -132,9 +63,6 @@ slskv_fini(void)
 {
 	if (slskv_zone != NULL)
 		uma_zdestroy(slskv_zone);
-
-	if (slskvpair_zone != NULL)
-		uma_zdestroy(slskvpair_zone);
 }
 
 int
@@ -150,148 +78,72 @@ slskv_create(struct slskv_table **tablep)
 void
 slskv_destroy(struct slskv_table *table)
 {
-	uint64_t key;
-	uintptr_t value;
-
-	/* Pop all elements from the table */
-	KV_FOREACH_POP(table, key, value);
-
 	uma_zfree(slskv_zone, table);
-}
-
-/* Find a value corresponding to a 64bit key. */
-static int
-slskv_find_unlocked(struct slskv_table *table, uint64_t key, uintptr_t *value)
-{
-	struct slskv_pair *kv;
-
-	/* Traverse the bucket for the specific key. */
-	LIST_FOREACH (kv, &table->buckets[SLSKV_BUCKETNO(table, key)], next) {
-		if (kv->key == key) {
-			*value = kv->value;
-			return (0);
-		}
-	}
-
-	/* We failed to find the key. */
-	return (EINVAL);
 }
 
 int
 slskv_find(struct slskv_table *table, uint64_t key, uintptr_t *value)
 {
-	int error;
+	struct slskv_pair slot;
+	int i;
 
-	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-	error = slskv_find_unlocked(table, key, value);
-	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-
-	return (error);
-}
-
-static int
-slskv_add_unlocked(struct slskv_table *table, struct slskv_pair *newkv)
-{
-	struct slskv_pairs *bucket;
-	struct slskv_pair *kv;
-
-	/* Get the bucket for the key. */
-
-	bucket = &table->buckets[SLSKV_BUCKETNO(table, newkv->key)];
-
-	/* Try to find existing instances of the key. */
-	LIST_FOREACH (kv, bucket, next) {
-		/* We found the key, so we cannot insert. */
-		if (kv->key == newkv->key)
-			return (EINVAL);
+	for (i = 0; i < table->firstfree; i++) {
+		slot = table->slots[i];
+		if (slot.key == key) {
+			*value = slot.value;
+			return (0);
+		}
 	}
 
-	/* We didn't find the key, so we are free to insert. */
-	LIST_INSERT_HEAD(bucket, newkv, next);
+	return (EINVAL);
+}
+
+int
+slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
+{
+	uintptr_t existing;
+
+	/*
+	 * XXX Check whether we can relax the
+	 * call's semantics to avoid the check.
+	 */
+	if (slskv_find(table, key, &existing) == 0)
+		return (EINVAL);
+
+	/* XXX Double in size. */
+	if (table->firstfree == SLSKV_MAXSLOTS)
+		panic("Overflow");
+
+	table->slots[table->firstfree].key = key;
+	table->slots[table->firstfree].value = value;
+	table->firstfree += 1;
 
 	return (0);
 }
 
-/* Add a new value to the hashtable. Duplicates are not allowed. */
-int
-slskv_add(struct slskv_table *table, uint64_t key, uintptr_t value)
-{
-	struct slskv_pair *newkv;
-	int error;
-
-	newkv = uma_zalloc(slskvpair_zone, M_WAITOK);
-	newkv->key = key;
-	newkv->value = value;
-
-	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-	error = slskv_add_unlocked(table, newkv);
-	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-
-	if (error != 0)
-		uma_zfree(slskvpair_zone, newkv);
-
-	return (error);
-}
-
-static struct slskv_pair *
-slskv_del_unlocked(struct slskv_table *table, uint64_t key)
-{
-	struct slskv_pairs *bucket;
-	struct slskv_pair *kv, *tmpkv;
-
-	/* Get the bucket for the key and traverse it. */
-	bucket = &table->buckets[SLSKV_BUCKETNO(table, key)];
-
-	LIST_FOREACH_SAFE (kv, bucket, next, tmpkv) {
-		/*
-		 * We found an instance of the key.
-		 * Remove it and erase it and its value.
-		 */
-		if (kv->key == key) {
-			LIST_REMOVE(kv, next);
-			return (kv);
-		}
-	}
-
-	return (NULL);
-}
-
-/*
- * Delete all instances of a key.
- */
 void
 slskv_del(struct slskv_table *table, uint64_t key)
 {
-	struct slskv_pair *kv;
-
-	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-	kv = slskv_del_unlocked(table, key);
-	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-
-	uma_zfree(slskvpair_zone, kv);
-}
-
-static struct slskv_pair *
-slskv_pop_unlocked(struct slskv_table *table, uint64_t *key, uintptr_t *value)
-{
-	struct slskv_pairs *bucket;
-	struct slskv_pair *kv;
+	struct slskv_pair slot;
 	int i;
 
-	for (i = 0; i <= table->mask; i++) {
-		bucket = &table->buckets[i];
-		if (!LIST_EMPTY(bucket)) {
-			kv = LIST_FIRST(bucket);
-
-			*key = kv->key;
-			*value = kv->value;
-
-			LIST_REMOVE(kv, next);
-			return (kv);
-		}
+	/* Get the bucket for the key. */
+	for (i = 0; i < table->firstfree; i++) {
+		slot = table->slots[i];
+		if (slot.key == key)
+			break;
 	}
 
-	return (NULL);
+	if (i == table->firstfree)
+		return;
+
+	if (table->firstfree == 1) {
+		table->firstfree -= 1;
+		return;
+	}
+
+	table->slots[i] = table->slots[table->firstfree - 1];
+	table->firstfree -= 1;
 }
 
 /*
@@ -301,46 +153,14 @@ slskv_pop_unlocked(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 int
 slskv_pop(struct slskv_table *table, uint64_t *key, uintptr_t *value)
 {
-	struct slskv_pair *kv;
+	if (table->firstfree == 0)
+		return (EINVAL);
 
-	mtx_lock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
-	kv = slskv_pop_unlocked(table, key, value);
-	mtx_unlock_spin(&table->mtx[SLSKV_BUCKETNO(table, key)]);
+	*key = table->slots[table->firstfree - 1].key;
+	*value = table->slots[table->firstfree - 1].value;
+	table->firstfree -= 1;
 
-	if (kv != NULL) {
-		uma_zfree(slskvpair_zone, kv);
-		return (0);
-	}
-
-	return (EINVAL);
-}
-
-/*
- * Find the first nonempty bucket of the table.
- * If the whole table is empty, stop searching
- * after inspecting the last bucket.
- */
-static void
-slskv_iternextbucket(struct slskv_iter *iter)
-{
-	/* Find the first nonempty bucket. */
-	for (;;) {
-
-		/* If the index is out of bounds we're done. */
-		if (iter->bucket > iter->table->mask)
-			return;
-
-		/* Inspect the current bucket, break if we find any data. */
-		if (!LIST_EMPTY(&iter->table->buckets[iter->bucket]))
-			break;
-
-		/* Have the global index point to the next unchecked bucket. */
-		iter->bucket += 1;
-	}
-
-	/* If there is a nonempty bucket, point to its first element. */
-	iter->pair = LIST_FIRST(&iter->table->buckets[iter->bucket]);
-	iter->bucket += 1;
+	return (0);
 }
 
 /*
@@ -357,8 +177,7 @@ slskv_iterstart(struct slskv_table *table)
 	KASSERT(table != NULL, ("iterating on NULL table\n"));
 
 	iter.table = table;
-	iter.bucket = 0;
-	iter.pair = NULL;
+	iter.slot = 0;
 
 	return (iter);
 }
@@ -370,34 +189,20 @@ slskv_iterstart(struct slskv_table *table)
 int
 slskv_itercont(struct slskv_iter *iter, uint64_t *key, uintptr_t *value)
 {
-	if (iter->pair == NULL) {
+	struct slskv_table *table = iter->table;
+	struct slskv_pair slot;
 
-		/* We need to find the another bucket. */
-		slskv_iternextbucket(iter);
+	if (iter->slot == table->firstfree)
+		return (SLSKV_ITERDONE);
 
-		/* If we have no more buckets to look at, iteration is done. */
-		if (iter->pair == NULL) {
-			KASSERT(iter->bucket > iter->table->mask,
-			    ("stopped iteration on bucket %d", iter->bucket));
-			return (SLSKV_ITERDONE);
-		}
-	}
+	slot = table->slots[iter->slot];
+	iter->slot += 1;
 
 	/* Export the found pair to the caller. */
-	*key = iter->pair->key;
-	*value = iter->pair->value;
-
-	/* Point to the next pair. */
-	iter->pair = LIST_NEXT(iter->pair, next);
+	*key = slot.key;
+	*value = slot.value;
 
 	return (0);
-}
-
-/* Abort the iteration. Needed to release the lock. */
-void
-slskv_iterabort(struct slskv_iter *iter)
-{
-	bzero(iter, sizeof(*iter));
 }
 
 int

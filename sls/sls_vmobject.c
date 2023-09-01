@@ -296,17 +296,13 @@ slsvmobj_restore_all(struct slsckpt_data *sckpt, struct slskv_table *objtable)
 
 		/* Get the data associated with the object in the table. */
 		error = slsvmobj_deserialize(&info, &buf, &buflen);
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			return (error);
-		}
 
 		/* Restore the object. */
 		error = slsvmobj_restore(&info, sckpt, objtable);
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			return (error);
-		}
 	}
 
 	/* Second pass; link up the objects to their shadows. */
@@ -328,10 +324,8 @@ slsvmobj_restore_all(struct slsckpt_data *sckpt, struct slskv_table *objtable)
 
 		error = slskv_find(
 		    objtable, infop->slsid, (uintptr_t *)&object);
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			return (error);
-		}
 
 		if (object == NULL)
 			continue;
@@ -339,10 +333,8 @@ slsvmobj_restore_all(struct slsckpt_data *sckpt, struct slskv_table *objtable)
 		/* Find a parent for the restored object, if it exists. */
 		error = slskv_find(
 		    objtable, infop->backer, (uintptr_t *)&parent);
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			return (error);
-		}
 
 		vm_object_reference(parent);
 		slsvm_forceshadow(object, parent, infop->backer_off);

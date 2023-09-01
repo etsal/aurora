@@ -595,10 +595,8 @@ slsvm_procset_shadow(
 	{
 		SDT_PROBE0(sls, , , procset_loop);
 		error = slsvm_proc_shadow(p, sckpt, is_fullckpt);
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			return (error);
-		}
 	}
 
 	return (0);

@@ -785,10 +785,8 @@ slsrest_dofiles(struct slsrest_data *restdata)
 
 		error = slsrest_dofile(
 		    restdata, sbuf_data(rec->srec_sb), sbuf_len(rec->srec_sb));
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			return (error);
-		}
 	}
 
 	return (0);
@@ -821,7 +819,6 @@ slsrest_ckptshadow(struct slsrest_data *restdata, struct slsckpt_data *sckpt)
 		if (error != 0) {
 			DEBUG1("Tried to add object %lx twice", obj->objid);
 			vm_object_deallocate(shadow);
-			KV_ABORT(iter);
 			return (error);
 		}
 	}
@@ -907,7 +904,6 @@ slsrest_data_backend(struct slspart *slsp, struct slsrest_data *restdata)
 		if (error != 0) {
 			DEBUG2("%s: vnode restore failed with %d\n", __func__,
 			    error);
-			KV_ABORT(iter);
 			return (error);
 		}
 	}
@@ -1109,10 +1105,8 @@ sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 		buflen = sbuf_len(rec->srec_sb);
 
 		error = slsrest_dosysvshm(buf, buflen, restdata->objtable);
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			goto out;
-		}
 	}
 
 	SDT_PROBE1(sls, , sls_rest, , "Restoring SYSV shared memory");
@@ -1130,10 +1124,8 @@ sls_rest(struct slspart *slsp, uint64_t rest_stopped)
 		buflen = sbuf_len(rec->srec_sb);
 
 		error = slsrest_fork(rest_stopped, buf, buflen, restdata);
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			goto out;
-		}
 	}
 
 out:

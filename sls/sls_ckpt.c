@@ -430,7 +430,6 @@ static int __attribute__((noinline)) sls_ckpt(slsset *procset,
 		if (error != 0) {
 			DEBUG2("Checkpointing process %d failed with %d\n",
 			    p->p_pid, error);
-			KV_ABORT(iter);
 			slsckpt_cont(procset, pcaller);
 			goto error;
 		}
@@ -606,10 +605,8 @@ slsckpt_proc_in_part(struct slspart *slsp, struct proc *p)
 	/* Make sure the process is in the partition. */
 	KVSET_FOREACH(slsp->slsp_procs, iter, pid)
 	{
-		if (p->p_pid == (pid_t)pid) {
-			KV_ABORT(iter);
+		if (p->p_pid == (pid_t)pid)
 			return (true);
-		}
 	}
 
 	return (false);
@@ -845,7 +842,6 @@ slsckpt_gather_processes(
 		error = slsset_add(procset, (uint64_t)p);
 		if (error != 0) {
 			PRELE(p);
-			KV_ABORT(iter);
 			return (error);
 		}
 	}
@@ -890,7 +886,6 @@ slsckpt_gather_children_once(
 				PROC_UNLOCK(pchild);
 				error = slsset_add(procset, (uint64_t)pchild);
 				if (error != 0) {
-					KV_ABORT(iter);
 					PRELE(pchild);
 					return (error);
 				}

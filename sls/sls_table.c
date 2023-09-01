@@ -318,7 +318,9 @@ sls_readdata_slos_vmobj(struct slspart *slsp, struct slskv_table *table,
 	int error;
 
 	/* Add the record to the table to be parsed later. */
+	mtx_lock(&slsp->slsp_syncmtx);
 	error = slskv_add(table, slsid, (uintptr_t)rec);
+	mtx_unlock(&slsp->slsp_syncmtx);
 	if (error != 0) {
 		sls_record_destroy(rec);
 		return (error);
@@ -679,7 +681,9 @@ sls_readdata(struct slspart *slsp, struct file *fp, uint64_t slsid,
 
 		KASSERT(obj->objid == slsid, ("new object's objid is wrong"));
 		/* Add the object to the table. */
+		mtx_lock(&slsp->slsp_syncmtx);
 		error = slskv_add(objtable, slsid, (uintptr_t)obj);
+		mtx_unlock(&slsp->slsp_syncmtx);
 		if (error != 0) {
 			DEBUG1("%s: duplicate object\n", __func__);
 			goto error;
@@ -1215,10 +1219,8 @@ sls_write_slos_dataregion(struct slsckpt_data *sckpt_data)
 		KASSERT(sls_isdata(rec->srec_type),
 		    ("dumping non object %ld", rec->srec_type));
 		error = sls_writedata_slos(rec, sckpt_data);
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			return (error);
-		}
 	}
 
 	return (0);

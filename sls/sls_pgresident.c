@@ -229,10 +229,8 @@ slspre_resident(struct slspart *slsp, struct file *fp)
 	KVSET_FOREACH(procset, iter, p)
 	{
 		error = slspre_track_map(p->p_vmspace, fp);
-		if (error != 0) {
-			KV_ABORT(iter);
+		if (error != 0)
 			break;
-		}
 	}
 	slsckpt_cont(procset, pcaller);
 
