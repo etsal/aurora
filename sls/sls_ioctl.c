@@ -90,7 +90,7 @@ sls_proc_registered(struct proc *p)
 
 /* Add a process into Aurora. */
 void
-sls_procadd_unlocked(uint64_t oid, struct proc *p, bool metropolis)
+sls_procadd_unlocked(uint64_t oid, struct proc *p)
 {
 	SLS_ASSERT_LOCKED();
 	PROC_LOCK_ASSERT(p, MA_OWNED);
@@ -101,19 +101,17 @@ sls_procadd_unlocked(uint64_t oid, struct proc *p, bool metropolis)
 
 	p->p_auroid = oid;
 	p->p_sysent = &slssyscall_sysvec;
-	if (metropolis)
-		p->p_sysent = &slsmetropolis_sysvec;
 
 	LIST_INSERT_HEAD(&slsm.slsm_plist, p, p_aurlist);
 }
 
 /* Add a process into Aurora. */
 void
-sls_procadd(uint64_t oid, struct proc *p, bool metropolis)
+sls_procadd(uint64_t oid, struct proc *p)
 {
 	SLS_LOCK();
 	PROC_LOCK(p);
-	sls_procadd_unlocked(oid, p, metropolis);
+	sls_procadd_unlocked(oid, p);
 	PROC_UNLOCK(p);
 	SLS_UNLOCK();
 }
@@ -325,7 +323,7 @@ sls_attach(struct sls_attach_args *args)
 		return (error);
 
 	/* Try to add the new process. */
-	error = slsp_attach(args->oid, p, false);
+	error = slsp_attach(args->oid, p);
 
 	PRELE(p);
 	return (error);

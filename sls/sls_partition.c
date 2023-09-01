@@ -273,7 +273,7 @@ slsp_hasproc(struct slspart *slsp, pid_t pid)
 
 /* Attach a process to the partition. */
 int
-slsp_attach(uint64_t oid, struct proc *p, bool metropolis)
+slsp_attach(uint64_t oid, struct proc *p)
 {
 	struct slspart *slsp;
 	int error;
@@ -304,7 +304,7 @@ slsp_attach(uint64_t oid, struct proc *p, bool metropolis)
 	slsp->slsp_procnum += 1;
 
 	/* Check if we're already in Aurora. */
-	sls_procadd_unlocked(oid, p, metropolis);
+	sls_procadd_unlocked(oid, p);
 
 	PROC_UNLOCK(p);
 	SLS_UNLOCK();

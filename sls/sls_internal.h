@@ -215,8 +215,8 @@ int sls_checkpoint(struct sls_checkpoint_args *args);
 int sls_attach(struct sls_attach_args *args);
 int sls_restore(struct sls_restore_args *args);
 
-void sls_procadd(uint64_t oid, struct proc *p, bool metropolis);
-void sls_procadd_unlocked(uint64_t oid, struct proc *p, bool metropolis);
+void sls_procadd(uint64_t oid, struct proc *p);
+void sls_procadd_unlocked(uint64_t oid, struct proc *p);
 void sls_procremove(struct proc *p);
 
 bool sls_proc_attached(uint64_t oid, struct proc *p);
