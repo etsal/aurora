@@ -304,7 +304,9 @@ slsp_attach(uint64_t oid, struct proc *p)
 	slsp->slsp_procnum += 1;
 
 	/* Check if we're already in Aurora. */
-	sls_procadd_unlocked(oid, p);
+	p->p_auroid = oid;
+	p->p_sysent = &slssyscall_sysvec;
+	LIST_INSERT_HEAD(&slsm.slsm_plist, p, p_aurlist);
 
 	PROC_UNLOCK(p);
 	SLS_UNLOCK();

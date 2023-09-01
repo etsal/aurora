@@ -46,7 +46,8 @@ sls_exit_procremove(struct proc *p)
 	SLS_LOCK();
 	PROC_LOCK(p);
 
-	sls_procremove(p);
+	LIST_REMOVE(p, p_aurlist);
+	p->p_auroid = 0;
 
 	cv_signal(&slsm.slsm_exitcv);
 	SLS_UNLOCK();

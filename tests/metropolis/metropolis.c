@@ -361,8 +361,8 @@ main(int argc, char **argv)
 	pid_t pid;
 	long opt;
 
-	while ((opt = getopt_long(
-		    argc, argv, "4aefx", metropolis_longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "4aefx", metropolis_longopts,
+		    NULL)) != -1) {
 		switch (opt) {
 		case '4':
 			testaccept = true;
