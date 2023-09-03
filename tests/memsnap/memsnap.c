@@ -106,7 +106,7 @@ int
 main(int argc, char **argv)
 {
 	enum ckptwait wait;
-	uint64_t nextepoch;
+	uint64_t nextepoch = 1;
 	bool unaligned = false;
 	void *addr, *snapaddr;
 	int error;

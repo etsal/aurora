@@ -6,7 +6,7 @@ aursetup
 sleep 3
 
 # Let the workload snapshot itself and exit with an error.
-"./memsnap/memsnap" -w > /dev/null 2> /dev/null &
+"./memsnap/memsnap" -w &
 PID=$!
 sleep 1
 
