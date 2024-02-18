@@ -1,6 +1,6 @@
 
-LIB=  objsnap
-SRCS = objsnap.c
+LIB=  osnap
+SRCS = osnap.c
 MAN =
 CFLAGS = -I../include -fPIC
 LDADD=
