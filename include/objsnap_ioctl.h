@@ -11,6 +11,7 @@ extern "C" {
 typedef uint64_t epoch_t;
 typedef uint64_t index_t;
 
+
 typedef struct {
 	size_t super_num_inodes;
 	index_t super_freelist;
@@ -48,6 +49,7 @@ struct objsnap_dirty_page_args {
 #define OBJSNAP_CREATEOBJ _IOWR('d', 2, struct objsnap_create_args)
 #define OBJSNAP_DIRTYPAGE _IOWR('d', 3, struct objsnap_dirty_page_args)
 #define OBJSNAP_INIT _IOWR('d', 4, struct objsnap_init_args)
+
 
 #ifdef __cplusplus
 }
