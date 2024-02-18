@@ -1,4 +1,4 @@
-SUBDIR=include objsnap # benchmarks #tests tools
+SUBDIR=include objsnap tools/new_objsnap libobjsnap # benchmarks #tests tools
 
 IDENT=${:!sysctl -n kern.ident!}
 .if (${IDENT} == "FASTDBG")

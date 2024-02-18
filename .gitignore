@@ -66,6 +66,7 @@ tools/radixdbg/radixdbg
 tools/server/server
 tools/slsctl/slsctl
 tools/slsdb/slsdb
+tools/new_objsnap/new_objsnap
 
 test.sh
 load.sh
