@@ -83,23 +83,47 @@ objsnap_init(struct objsnap_init_args *args)
 	int error = 0;
 	char *path = args->path;
 
-	NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, path, curthread);
+	// Take path and convert to a device vnode.
+	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, path, curthread);
 	error = namei(&nd);
 	if (error != 0) {
 		printf("Error looking up path: %d\n", error);
 		return;
 	}
+	NDFREE(&nd, NDF_ONLY_PNBUF);
 
 	vp = nd.ni_vp;
 
+	if (!vn_isdisk_error(vp, &error)) {
+		/* XXX Can we make it so we can use a file? */
+		printf("Is not a disk! %d\n", error);
+		vput(vp);
+		return;
+	}
+	
+	dev_ref(vp->v_rdev);
+
+	g_topology_lock();
+
+	// Geom layer vfs consumer
 	error = g_vfs_open(vp, &osdata.os_consumer, "objsnap", 1);
 	if (error != 0) {
-		printf("Error opening geom devvp: %d\n", error);
-		vrele(vp);
+		printf("Error opening geom devvp: %p %d\n", vp->v_rdev, error);
+		vput(vp);
+
+		g_topology_unlock();
+
 		return;
 	}
 
+	g_topology_unlock();
+
+	vref(vp);
+
 	osdata.os_vp = vp;
+
+	vput(vp);
+
 	return;
 }
 
@@ -162,6 +186,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		}
 
 		if (osdata.os_vp != NULL) {
+
 			vrele(osdata.os_vp);
 
 			osdata.os_vp = NULL;
