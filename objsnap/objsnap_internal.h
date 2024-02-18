@@ -24,23 +24,10 @@
 #include "objsnap_ioctl.h"
 
 struct objsnap_metadata {
-	struct cdev *slsm_cdev;		/* The cdev that exposes the SLS ops */
+	struct cdev *os_cdev;	/* The cdev that exposes the SLS ops */
+	struct vnode *os_vp;
+	struct g_consumer *os_consumer;
 };
-
-typedef struct {
-	uint64_t d_offset;
-} diskptr_t;
-
-typedef struct {
-	diskptr_t i_ptr;
-	epoch_t i_epoch;
-	index_t i_index;
-} osinode_t;
-
-typedef struct {
-	size_t super_num_inodes;
-	index_t super_freelist;
-} super_t;
 
 MALLOC_DECLARE(M_OBJSNAP);
 

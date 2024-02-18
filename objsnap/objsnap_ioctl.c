@@ -1,31 +1,40 @@
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/bitstring.h>
-#include <sys/capsicum.h>
+#include <sys/bio.h>
+#include <sys/buf.h>
 #include <sys/conf.h>
-#include <sys/file.h>
+#include <sys/dirent.h>
+#include <sys/extattr.h>
+#include <sys/fcntl.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
-#include <sys/limits.h>
-#include <sys/lock.h>
-#include <sys/malloc.h>
-#include <sys/md5.h>
+#include <sys/lockf.h>
 #include <sys/module.h>
+#include <sys/mount.h>
 #include <sys/mutex.h>
-#include <sys/protosw.h>
-#include <sys/queue.h>
+#include <sys/namei.h>
+#include <sys/pctrie.h>
+#include <sys/priv.h>
+#include <sys/proc.h>
 #include <sys/rwlock.h>
-#include <sys/sbuf.h>
 #include <sys/stat.h>
-#include <sys/sx.h>
+#include <sys/syscallsubr.h>
 #include <sys/sysctl.h>
-#include <sys/time.h>
+#include <sys/taskqueue.h>
 #include <sys/uio.h>
+#include <sys/unistd.h>
 #include <sys/vnode.h>
-#include <sys/wait.h>
 
+#include <vm/vm.h>
+#include <vm/vm_extern.h>
 #include <vm/vm_page.h>
-#include <vm/vm_param.h>
+
+#include <machine/param.h>
+#include <machine/vmparam.h>
+
+#include <geom/geom.h>
+#include <geom/geom_vfs.h>
+
 
 #include "objsnap_internal.h"
 #include "objsnap_ioctl.h"
@@ -65,11 +74,44 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 	return;
 }
 
+static void
+objsnap_init(struct objsnap_init_args *args)
+{
+	struct nameidata nd;
+	struct vnode *vp;
+
+	int error = 0;
+	char *path = args->path;
+
+	NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, path, curthread);
+	error = namei(&nd);
+	if (error != 0) {
+		printf("Error looking up path: %d\n", error);
+		return;
+	}
+
+	vp = nd.ni_vp;
+
+	error = g_vfs_open(vp, &osdata.os_consumer, "objsnap", 1);
+	if (error != 0) {
+		printf("Error opening geom devvp: %d\n", error);
+		vrele(vp);
+		return;
+	}
+
+	osdata.os_vp = vp;
+	return;
+}
+
 static int
 objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
     struct thread *td)
 {
 	switch (cmd) {
+
+	case OBJSNAP_INIT:
+		objsnap_init((struct objsnap_init_args *)data);
+		break;
 
 	case OBJSNAP_CHECKPOINT:
 		objsnap_checkpoint((struct objsnap_checkpoint_args *)data);
@@ -82,13 +124,16 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 	case OBJSNAP_DIRTYPAGE:
 		objsnap_dirty_page((struct objsnap_dirty_page_args *)data);
 		break;
+
 	}
+
 	return (0);
 }
 
 static struct cdevsw objsnap_cdevsw = {
 	.d_version = D_VERSION,
 	.d_ioctl = objsnap_ioctl,
+	.d_name = "objsnap_dev"
 };
 
 static int
@@ -99,13 +144,36 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 		/* Make the SLS available to userspace. */
-		osdata.slsm_cdev = make_dev(
-		    &objsnap_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "sls");
+		osdata.os_cdev = make_dev(
+			&objsnap_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "objsnap");
+
+		osdata.os_vp = NULL;
 
 		break;
-
 	case MOD_UNLOAD:
-    break;
+		if (osdata.os_vp != NULL) {
+			g_topology_lock();
+
+			g_vfs_close(osdata.os_consumer);
+
+			g_topology_unlock();
+
+			osdata.os_consumer = NULL;
+		}
+
+		if (osdata.os_vp != NULL) {
+			vrele(osdata.os_vp);
+
+			osdata.os_vp = NULL;
+		}
+
+		if (osdata.os_cdev != NULL) {
+			destroy_dev(osdata.os_cdev);
+
+			osdata.os_cdev = NULL;
+		}
+
+    	break;
 	default:
 		error = EOPNOTSUPP;
 		break;
