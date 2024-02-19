@@ -247,6 +247,13 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 			printf("Destroying device\n");
 		}
 
+		for (int i = 0; i < MAXINODES; i ++) {
+			struct objsnap_vnode *vnode = &vnode_cache[i];
+			if (vnode->v_tree.v_tree != NULL) {
+				free(vnode->v_tree.v_tree, M_OBJSNAP);
+				vnode->v_tree.v_tree = NULL;
+			}
+		}
 		free(vnode_cache, M_OBJSNAP);
 
     	break;
