@@ -27,16 +27,17 @@ struct objsnap_metadata {
 	struct cdev *os_cdev;	/* The cdev that exposes the SLS ops */
 	struct vnode *os_vp;
 	struct g_consumer *os_consumer;
+	struct lock os_lock;
 };
 
-struct allocator {
-  size_t alloc_size_total_blocks;
-  size_t alloc_block_size;
-  size_t alloc_next_block;
-};
-
+extern struct objsnap_metadata osdata;
 extern struct allocator alloc;
 extern super_t superblock;
+
+#define LOCK_SUPER() (lockmgr(&osdata.os_lock, LK_EXCLUSIVE, NULL))
+#define UNLOCK_SUPER() (lockmgr(&osdata.os_lock, LK_RELEASE, NULL))
+
+#define DEVICE_BLOCK_NUM(blki) ((blki) * (BLOCKSIZE / superblock.super_bsize))
 
 MALLOC_DECLARE(M_OBJSNAP);
 

@@ -100,10 +100,24 @@ int newfs(const char *path)
 	sb->super_bsize = bsize;
 	sb->super_size = size;
 	sb->super_asize = bsize;
+    sb->super_max_inodes = MAXINODES;
+    sb->super_next = 1;
+    sb->super_version = 0;
+    sb->super_blk = 0;
 
     ssize_t written = write(fd, sb, BLOCKSIZE);
     if (written == (-1)) {
         perror("writing superblock failed");
+        free(sb);
+        return (1);
+    }
+    
+    // Increment to cover the sister super block.
+    sb->super_blk = 1;
+
+    written = write(fd, sb, BLOCKSIZE);
+    if (written == (-1)) {
+        perror("writing second superblock failed");
         free(sb);
         return (1);
     }

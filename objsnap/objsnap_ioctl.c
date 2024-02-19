@@ -38,6 +38,7 @@
 
 #include "objsnap_internal.h"
 #include "objsnap_ioctl.h"
+#include "alloc.h"
 
 /* XXX Rename to M_SLS. */
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
@@ -75,12 +76,6 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 	return;
 }
 
-static void
-allocator_init()
-{
-
-};
-
 static int
 superblock_init(struct vnode *vp)
 {
@@ -105,6 +100,8 @@ objsnap_init(struct objsnap_init_args *args)
 
 	int error = 0;
 	char *path = args->path;
+
+	bzero(&osdata, sizeof(osdata));
 
 	// Take path and convert to a device vnode.
 	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, path, curthread);
@@ -144,6 +141,8 @@ objsnap_init(struct objsnap_init_args *args)
 	vref(vp);
 
 	osdata.os_vp = vp;
+	lockinit(&osdata.os_lock, PVFS, "objsnap_big_lock", 
+		VLKTIMEOUT, LK_NOSHARE);
 
 	superblock_init(vp);
 
