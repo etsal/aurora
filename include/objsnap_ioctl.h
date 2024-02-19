@@ -50,8 +50,8 @@ struct objsnap_create_args {
 };
 
 struct objsnap_dirty_page_args {
-  int os_fd;
-  int os_dirty_i;
+  index_t os_index;
+  off_t os_dirty_i;
 };
 
 #define OBJSNAP_CHECKPOINT _IOWR('d', 1, struct objsnap_checkpoint_args)

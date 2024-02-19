@@ -142,8 +142,28 @@ int main()
         printf("Error with objsnap init\n");
         return -1;
     }
-
-    index_t inode = objsnap_create();
-
     printf("Init good!\n");
+
+    index_t inode1 = objsnap_create();
+
+    printf("Object created! %lu\n", inode1);
+
+  
+    index_t inode2 = objsnap_create();
+
+    printf("Object created! %lu\n", inode2);
+
+    error = objsnap_dirty(inode1, 0);
+    if (error) {
+        printf("Could not dirty page");
+    }
+
+    index_t checkpointed[2];
+    checkpointed[0] = inode1;
+    checkpointed[1] = inode2;
+
+    error = objsnap_checkpoint(checkpointed);
+    if (error) {
+        printf("Problem Checkpointing");
+    }
 }

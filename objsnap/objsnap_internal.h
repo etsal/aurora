@@ -30,6 +30,10 @@ struct objsnap_metadata {
 	struct lock os_lock;
 };
 
+struct objsnap_vnode {
+	osinode_t v_inode;
+};
+
 extern struct objsnap_metadata osdata;
 extern struct allocator alloc;
 extern super_t superblock;

@@ -2,8 +2,7 @@
 #define _VTREE_H_
 
 #include <sys/types.h>
-
-#include "buf.h"
+#include <sys/buf.h>
 
 /*
  * Virtual Tree Interface

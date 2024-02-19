@@ -60,18 +60,22 @@ objsnap_create()
 }
 
 int 
-objsnap_dirty(int fd, off_t index)
+objsnap_dirty(index_t fd, off_t offset)
 {
     int error = 0;
+    struct objsnap_dirty_page_args args;
+
     if ((error = objsnap_fd_check()) != 0) {
         return error;
     }
 
-    return (0);
+    args.os_index = fd;
+    args.os_dirty_i = offset;
+    return ioctl(OS_FD, OBJSNAP_DIRTYPAGE, &args);
 }
 
 int 
-objsnap_checkpoint(int *fds)
+objsnap_checkpoint(index_t *fds)
 {
     int error = 0;
     if ((error = objsnap_fd_check()) != 0) {
