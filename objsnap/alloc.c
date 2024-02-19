@@ -58,24 +58,25 @@ init_ondisk_inode(osinode_t *inode)
 //
 // It should be noted that we assume object creation is rare and 
 // designing it this way means we keep things flat in the object store.
-int allocate_inode()
+int allocate_inode(osinode_t *newinode)
 {
     struct buf *super_bp;
     int error = 0;
-    osinode_t newinode;
-    newinode.i_index = atomic_fetchadd_64(&superblock.super_next, 2);
-    newinode.i_treeptr = NULLDISKPTR;
+    newinode->i_index = atomic_fetchadd_64(&superblock.super_next, 2);
+    newinode->i_treeptr = NULLDISKPTR;
 
     LOCK_SUPER();
 
-    if ((error = init_ondisk_inode(&newinode)) != 0) {
+    if ((error = init_ondisk_inode(newinode)) != 0) {
+        newinode->i_index = -1;
         goto allocate_inode_done;
     }
     
     // Increment and write the sister tree
-    newinode.i_index += 1;
+    newinode->i_index += 1;
 
-    if ((error = init_ondisk_inode(&newinode)) != 0) {
+    if ((error = init_ondisk_inode(newinode)) != 0) {
+        newinode->i_index = -1;
         goto allocate_inode_done;
     }
 
@@ -85,6 +86,7 @@ int allocate_inode()
         BLOCKSIZE, NOCRED, &super_bp);
     if (error) {
         printf("Error with writing sister super block %d", error);
+        newinode->i_index = -1;
         goto allocate_inode_done;
     }
 
@@ -93,8 +95,12 @@ int allocate_inode()
     // Make sure to update our in-memory copy.
     superblock.super_blk = blk;
 
+    // Decrement to original index.
+    newinode->i_index -= 1;
+
 allocate_inode_done:
 
     UNLOCK_SUPER();
+
     return (error);
 }

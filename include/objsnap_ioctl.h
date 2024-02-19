@@ -11,6 +11,7 @@ extern "C" {
 #define BLOCKSIZE (4096)
 #define MAXINODES (1024)
 #define NULLDISKPTR ((diskptr_t) -1)
+#define BADINDEX ((index_t)(-1))
 
 typedef uint64_t epoch_t;
 typedef uint64_t index_t;
@@ -44,7 +45,7 @@ struct objsnap_checkpoint_args {
 };
 
 struct objsnap_create_args {
-  int *os_fd;
+  index_t *os_index;
   int error;
 };
 

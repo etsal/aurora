@@ -67,6 +67,15 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 static void
 objsnap_create(struct objsnap_create_args *args)
 {
+	int error;
+	osinode_t inode;
+
+	if ((error = allocate_inode(&inode)) == BADINDEX) {
+		printf("Issue creating inode\n");
+	}
+
+	*args->os_index = inode.i_index;
+
 	return;
 }
 
