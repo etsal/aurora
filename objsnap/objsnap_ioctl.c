@@ -110,7 +110,6 @@ objsnap_init(struct objsnap_init_args *args)
 	int error = 0;
 	char *path = args->path;
 
-	bzero(&osdata, sizeof(osdata));
 
 	// Take path and convert to a device vnode.
 	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, path, curthread);
@@ -202,6 +201,9 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 	switch (inEvent) {
 	case MOD_LOAD:
+	
+		bzero(&osdata, sizeof(osdata));
+
 		/* Make the SLS available to userspace. */
 		error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
 			&osdata.os_cdev, &objsnap_cdevsw, 0, UID_ROOT, GID_WHEEL, 
@@ -215,7 +217,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		break;
 	case MOD_UNLOAD:
-		if (osdata.os_vp != NULL) {
+		if (osdata.os_consumer != NULL) {
 			g_topology_lock();
 
 			g_vfs_close(osdata.os_consumer);
@@ -223,6 +225,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 			g_topology_unlock();
 
 			osdata.os_consumer = NULL;
+			printf("Destroying consumer\n");
 		}
 
 		if (osdata.os_vp != NULL) {
@@ -230,12 +233,14 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 			vrele(osdata.os_vp);
 
 			osdata.os_vp = NULL;
+			printf("Destroying device vnode\n");
 		}
 
 		if (osdata.os_cdev != NULL) {
 			destroy_dev(osdata.os_cdev);
 
 			osdata.os_cdev = NULL;
+			printf("Destroying device\n");
 		}
 
     	break;
