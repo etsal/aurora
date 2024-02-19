@@ -75,6 +75,14 @@ int allocate_inode(osinode_t *newinode)
     VTREE_INIT(&vnode->v_tree, osdata.os_vp, 
         newinode->i_treeptr, sizeof(diskptr_t));
 
+    // Initialize ondisk root block
+    error = bread(osdata.os_vp, DEVICE_BLOCK_NUM(newinode->i_treeptr), 
+        BLOCKSIZE, NOCRED, &super_bp);
+
+    bzero(super_bp->b_data, BLOCKSIZE);
+
+    bwrite(super_bp);
+    
     LOCK_SUPER();
 
     if ((error = init_ondisk_inode(newinode)) != 0) {
@@ -108,7 +116,7 @@ int allocate_inode(osinode_t *newinode)
     // Decrement to original index.
     newinode->i_index -= 1;
     vnode->v_inode = *newinode;
-
+    vnode->v_magic = OBJMAGIC;
 
 allocate_inode_done:
 

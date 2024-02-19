@@ -158,6 +158,8 @@ int main()
         printf("Could not dirty page");
     }
 
+    printf("Dirty page 0 of inode %lu\n", inode1);
+
     index_t checkpointed[2];
     checkpointed[0] = inode1;
     checkpointed[1] = inode2;

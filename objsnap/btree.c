@@ -13,6 +13,7 @@
 #include "btree.h"
 #include "alloc.h"
 
+#define DEBUG
 
 #define INDEX_NULL ((uint16_t)-1)
 
@@ -306,7 +307,7 @@ btnode_find_ge(btree_t tree, uint64_t* key, void* value, int acquire_as)
   }
 
 #ifdef DEBUG
-  printf("[Find] %lu in %lu\n", *key, node->n_ptr.offset);
+  printf("[Find] %lu in %lu\n", *key, node->n_ptr);
 #endif
 
   *key = node->n_keys[idx];
@@ -438,7 +439,7 @@ btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
   }
 
 #ifdef DEBUG
-  printf("[Insert] %lu at %d in node %lu\n", key, idx, node->n_ptr.offset);
+  printf("[Insert] %lu at %d in node %lu\n", key, idx, node->n_ptr);
 #endif
 
   node->n_keys[idx] = key;
@@ -475,7 +476,7 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
   }
 
   /* Update over insert */
-  if (node->n_keys[idx] == key) {
+  if (node->n_keys[idx] == key && node->n_len) {
     btnode_leaf_update(node, idx, value);
   } else {
     btnode_leaf_insert(node, idx, key, value);

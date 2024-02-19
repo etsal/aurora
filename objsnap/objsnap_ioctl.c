@@ -83,6 +83,25 @@ objsnap_create(struct objsnap_create_args *args)
 static void
 objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 {
+	index_t inode_i = args->os_index;
+	off_t i = args->os_dirty_i;
+	diskptr_t ptr;
+	int error = 0;
+
+	struct objsnap_vnode *vnode = INDEX_TO_VNODE(inode_i);
+
+	if (vnode->v_magic != OBJMAGIC) {
+		printf("Invalid vnode\n");
+		return;
+	}
+
+	vtree *tree = &vnode->v_tree;
+	ptr = allocate_block();
+	error = VTREE_INSERT(tree, i, &ptr);
+	if (error) {
+		printf("ERROR INSERTING INTO TREE %d\n", error);
+	}
+
 	return;
 }
 
