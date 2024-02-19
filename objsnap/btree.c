@@ -118,6 +118,9 @@ static void
 btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 {
   struct buf* bp = getblk(tree->tr_vp, ptr, BLOCKSIZE, 0, 0, 0);
+#ifdef DEBUG
+  printf("[Btnode init] %p\n", bp);
+#endif
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
@@ -170,7 +173,7 @@ path_cow(bpath_t path)
 
       btnode_create(&path->p_nodes[i], tmp.n_tree, tmp.n_type);
       /* Perform the copy of data or however we choose to transfer it over */
-      memcpy(path->p_nodes[i].n_data, tmp.n_data, BLKSZ);
+      memcpy(path->p_nodes[i].n_data, tmp.n_data, BLOCKSIZE);
 
       /* Update our parent to know of the change */
       if (i > 0) {

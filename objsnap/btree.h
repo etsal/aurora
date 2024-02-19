@@ -21,7 +21,6 @@
 
 #include "vtree.h"
 
-#define BLKSZ (64 * 1024)
 #define BT_MAX_KEY_SIZE (8)
 #define BT_MAX_HDR_SIZE (64)
 #define BT_MAX_PATH_SIZE (10)
@@ -33,9 +32,10 @@
  * (BLKSZ - BT_MAX_HDR_SIZE - BT_MAX_VALUE_SIZE) /
  *  (BT_MAX_KEY_SIZE + BT_MAX_VALUE_SIZE)
  */
-
-#define BT_MAX_KEYS (1636)
-#define SPLIT_KEYS (818)
+#define TOP (BLOCKSIZE - sizeof(btnodehdr) - sizeof(diskptr_t))
+#define BOT (sizeof(diskptr_t) + sizeof(uint64_t))
+#define BT_MAX_KEYS (TOP / BOT)
+#define SPLIT_KEYS (BT_MAX_KEYS / 2)
 
 #define BT_COW (1)
 #define BT_FRESHCOPY (2)
