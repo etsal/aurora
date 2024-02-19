@@ -17,6 +17,8 @@
 #include "alloc.h"
 #include "objsnap_internal.h"
 
+struct allocator alloc;
+
 void
 allocator_init()
 {
