@@ -45,6 +45,7 @@ MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
 
 struct objsnap_metadata osdata;
 super_t superblock;
+struct objsnap_vnode *vnode_cache = NULL;
 
 static int
 objsnap_sysctl_init(void)
@@ -155,7 +156,6 @@ objsnap_init(struct objsnap_init_args *args)
 	superblock_init(vp);
 
 	allocator_init();
-
 
 	vput(vp);
 
