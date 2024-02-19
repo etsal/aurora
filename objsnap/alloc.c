@@ -65,7 +65,15 @@ int allocate_inode(osinode_t *newinode)
     struct buf *super_bp;
     int error = 0;
     newinode->i_index = atomic_fetchadd_64(&superblock.super_next, 2);
-    newinode->i_treeptr = NULLDISKPTR;
+    newinode->i_treeptr = allocate_block();
+
+    struct objsnap_vnode *vnode = INDEX_TO_VNODE(newinode->i_index);
+
+    // We must allocate the btree first and place it in our inode structures
+    btree_t btree = malloc(sizeof(btree), M_OBJSNAP, M_WAITOK);
+    vnode->v_tree = vtree_create(btree, &btreeops, 0);
+    VTREE_INIT(&vnode->v_tree, osdata.os_vp, 
+        newinode->i_treeptr, sizeof(diskptr_t));
 
     LOCK_SUPER();
 
@@ -99,12 +107,8 @@ int allocate_inode(osinode_t *newinode)
 
     // Decrement to original index.
     newinode->i_index -= 1;
-    
-    struct objsnap_vnode *vnode = INDEX_TO_VNODE(newinode->i_index);
     vnode->v_inode = *newinode;
 
-    btree_t btree = malloc(sizeof(btree), M_OBJSNAP, M_WAITOK);
-    vnode->v_tree = vtree_create(btree, &btreeops, 0);
 
 allocate_inode_done:
 
