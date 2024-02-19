@@ -45,7 +45,7 @@ struct objsnap_checkpoint_args {
 };
 
 struct objsnap_create_args {
-  index_t *os_index;
+  index_t os_index;
   int error;
 };
 

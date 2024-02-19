@@ -40,14 +40,23 @@ objsnap_init(char *path)
     strcpy(args.path, path);
     return ioctl(OS_FD, OBJSNAP_INIT, &args);
 }
-int 
+
+index_t
 objsnap_create()
 {
     int error = 0;
+    struct objsnap_create_args args;
+
     if ((error = objsnap_fd_check()) != 0) {
         return error;
     }
-    return (0);
+
+    error = ioctl(OS_FD, OBJSNAP_CREATEOBJ, &args);
+    if (error) {
+        return BADINDEX;
+    }
+
+    return (args.os_index);
 }
 
 int 

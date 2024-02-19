@@ -111,7 +111,7 @@ int newfs(const char *path)
         free(sb);
         return (1);
     }
-    
+
     // Increment to cover the sister super block.
     sb->super_blk = 1;
 
@@ -142,6 +142,8 @@ int main()
         printf("Error with objsnap init\n");
         return -1;
     }
+
+    index_t inode = objsnap_create();
 
     printf("Init good!\n");
 }

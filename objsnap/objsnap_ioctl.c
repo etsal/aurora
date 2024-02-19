@@ -74,7 +74,7 @@ objsnap_create(struct objsnap_create_args *args)
 		printf("Issue creating inode\n");
 	}
 
-	*args->os_index = inode.i_index;
+	args->os_index = inode.i_index;
 
 	return;
 }
