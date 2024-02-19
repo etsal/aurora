@@ -60,7 +60,7 @@ objsnap_create()
 }
 
 int 
-objsnap_dirty(index_t fd, off_t offset)
+objsnap_dirty(index_t fd, void *ptr)
 {
     int error = 0;
     struct objsnap_dirty_page_args args;
@@ -70,7 +70,7 @@ objsnap_dirty(index_t fd, off_t offset)
     }
 
     args.os_index = fd;
-    args.os_dirty_i = offset;
+    args.os_page = (uintptr_t)ptr;
     return ioctl(OS_FD, OBJSNAP_DIRTYPAGE, &args);
 }
 

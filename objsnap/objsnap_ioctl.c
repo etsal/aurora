@@ -28,6 +28,7 @@
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
 #include <vm/vm_page.h>
+#include <vm/vm_map.h>
 
 #include <machine/param.h>
 #include <machine/vmparam.h>
@@ -80,20 +81,27 @@ objsnap_create(struct objsnap_create_args *args)
 	return;
 }
 
-static void
+static int
 objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 {
+	vm_offset_t addr = args->os_page;
 	index_t inode_i = args->os_index;
-	off_t i = args->os_dirty_i;
+	struct proc *p = curthread->td_proc;
+	struct vmspace *vms = p->p_vmspace;
 	diskptr_t ptr;
 	int error = 0;
+	int i = 0;
 
 	struct objsnap_vnode *vnode = INDEX_TO_VNODE(inode_i);
 
 	if (vnode->v_magic != OBJMAGIC) {
 		printf("Invalid vnode\n");
-		return;
+		return (error);
 	}
+
+	// Check if page is valid range
+	if (!vm_map_range_valid(&vms->vm_map, addr, addr + BLOCKSIZE))
+		return EINVAL;
 
 	vtree *tree = &vnode->v_tree;
 	ptr = allocate_block();
@@ -102,7 +110,7 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 		printf("ERROR INSERTING INTO TREE %d\n", error);
 	}
 
-	return;
+	return (error);
 }
 
 static int
@@ -185,6 +193,8 @@ static int
 objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
     struct thread *td)
 {
+	int error = 0;
+
 	switch (cmd) {
 
 	case OBJSNAP_INIT:
@@ -200,12 +210,12 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 		break;
 
 	case OBJSNAP_DIRTYPAGE:
-		objsnap_dirty_page((struct objsnap_dirty_page_args *)data);
+		error = objsnap_dirty_page((struct objsnap_dirty_page_args *)data);
 		break;
 
 	}
 
-	return (0);
+	return (error);
 }
 
 static struct cdevsw objsnap_cdevsw = {

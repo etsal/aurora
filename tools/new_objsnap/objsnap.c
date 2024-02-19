@@ -3,6 +3,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/vnode.h>
+#include <sys/mman.h>
 
 #include <assert.h>
 #include <dirent.h>
@@ -131,6 +132,7 @@ int newfs(const char *path)
 
 int main()
 {
+    
     int error = newfs("/dev/nvd0");
     if (error) {
         printf("Problem creating new objsnap device");
@@ -142,6 +144,14 @@ int main()
         printf("Error with objsnap init\n");
         return -1;
     }
+
+    char *addr = mmap(NULL, BLOCKSIZE * 100, PROT_READ | PROT_WRITE, 
+        MAP_ANON, -1, 0);
+    if (addr == MAP_FAILED) {
+        printf("MMAP FAILED\n");
+        return -1;
+    }
+
     printf("Init good!\n");
 
     index_t inode1 = objsnap_create();
@@ -153,7 +163,7 @@ int main()
 
     printf("Object created! %lu\n", inode2);
 
-    error = objsnap_dirty(inode1, 0);
+    error = objsnap_dirty(inode1, addr);
     if (error) {
         printf("Could not dirty page");
     }
