@@ -43,6 +43,7 @@
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
 
 struct objsnap_metadata osdata;
+super_t superblock;
 
 static int
 objsnap_sysctl_init(void)
@@ -73,6 +74,28 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 {
 	return;
 }
+
+static void
+allocator_init()
+{
+
+};
+
+static int
+superblock_init(struct vnode *vp)
+{
+	struct buf *bp = NULL;
+	int error;
+
+	if ((error = bread(vp, 0, BLOCKSIZE, NOCRED, &bp)) != 0) {
+		return error;
+	}
+
+	memcpy(&superblock, bp->b_data, sizeof(super_t));
+	brelse(bp);
+	printf("Size of disk %zu\n", superblock.super_size);	
+	return (0);
+};
 
 static void
 objsnap_init(struct objsnap_init_args *args)
@@ -121,6 +144,10 @@ objsnap_init(struct objsnap_init_args *args)
 	vref(vp);
 
 	osdata.os_vp = vp;
+
+	superblock_init(vp);
+
+	allocator_init();
 
 	vput(vp);
 

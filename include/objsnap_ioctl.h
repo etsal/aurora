@@ -8,12 +8,18 @@
 extern "C" {
 #endif
 
+#define BLOCKSIZE (4096)
+
 typedef uint64_t epoch_t;
 typedef uint64_t index_t;
 
 typedef struct {
-	size_t super_num_inodes;
 	index_t super_freelist;
+  size_t super_max_inodes;
+  size_t super_bsize;
+  size_t super_ssize;
+  size_t super_size;
+  size_t super_asize;
 } super_t;
 
 typedef struct {

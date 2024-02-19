@@ -29,6 +29,15 @@ struct objsnap_metadata {
 	struct g_consumer *os_consumer;
 };
 
+struct allocator {
+  size_t alloc_size_total_blocks;
+  size_t alloc_block_size;
+  size_t alloc_next_block;
+};
+
+extern struct allocator alloc;
+extern super_t superblock;
+
 MALLOC_DECLARE(M_OBJSNAP);
 
 #endif
