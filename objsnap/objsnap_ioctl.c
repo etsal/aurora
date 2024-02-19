@@ -29,6 +29,7 @@
 #include <vm/vm_extern.h>
 #include <vm/vm_page.h>
 #include <vm/vm_map.h>
+#include <vm/vm_param.h>
 
 #include <machine/param.h>
 #include <machine/vmparam.h>
@@ -81,16 +82,50 @@ objsnap_create(struct objsnap_create_args *args)
 	return;
 }
 
+static struct vm_page * 
+usrptr_to_page(vm_offset_t ptr) {
+	vm_map_entry_t entry;
+	vm_object_t obj;
+	vm_pindex_t pindex;
+	vm_prot_t out_prot;
+	boolean_t wired;
+
+	struct proc *p = curthread->td_proc;
+	struct vmspace *vms = p->p_vmspace;
+    vm_map_t map = &vms->vm_map;
+
+
+	// Check if page is valid range
+	if (!vm_map_range_valid(&vms->vm_map, ptr, ptr + BLOCKSIZE))
+		return NULL;
+
+	if (vm_map_lookup(&map, ptr, VM_PROT_READ | VM_PROT_WRITE, 
+		&entry, &obj, &pindex, &out_prot, &wired) != KERN_SUCCESS) {
+		// Error handling
+		return NULL;
+	}
+
+	vm_map_unlock_read(map);
+	
+
+	// Convert the KVA to a physical address (PA)
+	vm_paddr_t pa = vtophys(entry);
+
+	// Obtain the vm_page structure corresponding to the physical address
+	struct vm_page *page = PHYS_TO_VM_PAGE(pa);
+
+	
+	return page;
+}
+
+
 static int
 objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 {
 	vm_offset_t addr = args->os_page;
 	index_t inode_i = args->os_index;
-	struct proc *p = curthread->td_proc;
-	struct vmspace *vms = p->p_vmspace;
-	diskptr_t ptr;
+	struct vm_page *page;
 	int error = 0;
-	int i = 0;
 
 	struct objsnap_vnode *vnode = INDEX_TO_VNODE(inode_i);
 
@@ -99,18 +134,25 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 		return (error);
 	}
 
-	// Check if page is valid range
-	if (!vm_map_range_valid(&vms->vm_map, addr, addr + BLOCKSIZE))
+	page = usrptr_to_page(addr);
+	if (page == NULL) {
 		return EINVAL;
-
-	vtree *tree = &vnode->v_tree;
-	ptr = allocate_block();
-	error = VTREE_INSERT(tree, i, &ptr);
-	if (error) {
-		printf("ERROR INSERTING INTO TREE %d\n", error);
 	}
 
-	return (error);
+	// SLOW LOOKUP
+	for (int i = 0; i < vnode->v_dirtycnt; i++) {
+		vm_page_t p = vnode->v_dirty_pageset[vnode->v_dirtycnt].page;
+		if (page == p)
+			return (0);
+	}
+
+	printf("Adding %lu to dirty set %d\n", IDX_TO_OFF(page->pindex), 
+		vnode->v_dirtycnt);
+
+	vnode->v_dirty_pageset[vnode->v_dirtycnt].page = page;
+	vnode->v_dirtycnt += 1;
+
+	return (0);
 }
 
 static int

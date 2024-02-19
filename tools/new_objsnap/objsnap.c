@@ -168,7 +168,15 @@ int main()
         printf("Could not dirty page");
     }
 
-    printf("Dirty page 0 of inode %lu\n", inode1);
+    error = objsnap_dirty(inode1, (char *)addr + BLOCKSIZE);
+    if (error) {
+        printf("Could not dirty page");
+    }
+
+    error = objsnap_dirty(inode1, (char *)addr + (2 * BLOCKSIZE));
+    if (error) {
+        printf("Could not dirty page");
+    }
 
     index_t checkpointed[2];
     checkpointed[0] = inode1;

@@ -25,6 +25,7 @@
 #include "vtree.h"
 
 #define OBJMAGIC (0xdeadbeef)
+#define MAXDRTYCNT (64)
 
 struct objsnap_metadata {
 	struct cdev *os_cdev;	/* The cdev that exposes the SLS ops */
@@ -33,11 +34,18 @@ struct objsnap_metadata {
 	struct lock os_lock;
 };
 
+struct pageset {
+	vm_page_t page;
+};
+
 struct objsnap_vnode {
 	osinode_t v_inode;
 	uint64_t v_magic;
 	struct virtualtree v_tree;
+	int v_dirtycnt;
+	struct pageset v_dirty_pageset[MAXDRTYCNT];
 };
+
 
 extern struct objsnap_metadata osdata;
 extern struct allocator alloc;
