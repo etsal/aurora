@@ -22,6 +22,7 @@
 #include <vm/vm_object.h>
 
 #include "objsnap_ioctl.h"
+#include "vtree.h"
 
 struct objsnap_metadata {
 	struct cdev *os_cdev;	/* The cdev that exposes the SLS ops */
@@ -32,17 +33,19 @@ struct objsnap_metadata {
 
 struct objsnap_vnode {
 	osinode_t v_inode;
+
+	struct virtualtree v_tree;
 };
 
 extern struct objsnap_metadata osdata;
 extern struct allocator alloc;
 extern super_t superblock;
+extern struct objsnap_vnode *vnode_cache;
 
 #define LOCK_SUPER() (lockmgr(&osdata.os_lock, LK_EXCLUSIVE, NULL))
 #define UNLOCK_SUPER() (lockmgr(&osdata.os_lock, LK_RELEASE, NULL))
-
+#define INDEX_TO_VNODE(i) (&vnode_cache[(i) / 2])
 #define DEVICE_BLOCK_NUM(blki) ((blki) * (BLOCKSIZE / superblock.super_bsize))
 
-MALLOC_DECLARE(M_OBJSNAP);
 
 #endif

@@ -1,8 +1,27 @@
 #ifndef _VTREE_H_
 #define _VTREE_H_
 
-#include <sys/types.h>
+#include <sys/param.h>
+#include <sys/bitstring.h>
+#include <sys/condvar.h>
+#include <sys/fcntl.h>
+#include <sys/file.h>
+#include <sys/filedesc.h>
+#include <sys/lock.h>
+#include <sys/mutex.h>
+#include <sys/proc.h>
+#include <sys/queue.h>
+#include <sys/sdt.h>
+#include <sys/stat.h>
+#include <sys/syscallsubr.h>
+#include <sys/sysctl.h>
+#include <sys/vnode.h>
 #include <sys/buf.h>
+
+#include "objsnap_ioctl.h"
+
+
+MALLOC_DECLARE(M_OBJSNAP);
 
 /*
  * Virtual Tree Interface
@@ -18,7 +37,7 @@ typedef struct kvp
   unsigned char data[BT_MAX_VALUE_SIZE];
 } kvp;
 
-typedef int (*vtree_init_t)(void* tree, diskptr_t key, size_t value_size);
+typedef int (*vtree_init_t)(void* tree, struct vnode *vp, diskptr_t key, size_t value_size);
 
 /* Write ops */
 typedef int (*vtree_insert_t)(void* tree, uint64_t key, void* value);
@@ -60,17 +79,17 @@ struct vtreeops
 #define VTREE_WITHWAL (0x1)
 #define VTREE_WALBULK (0x2)
 
-struct vtree
+typedef struct virtualtree
 {
   void* v_tree;
   uint32_t v_flags;
   kvp* v_wal;
   int v_cur_wal_idx;
   struct vtreeops* v_ops;
-};
+} vtree;
 
-#define VTREE_INIT(tree, ptr, keysize)                                         \
-  ((tree)->v_ops->vtree_init((tree)->v_tree, ptr, keysize))
+#define VTREE_INIT(tree, vp, ptr, keysize)                                         \
+  ((tree)->v_ops->vtree_init((tree)->v_tree, vp, ptr, keysize))
 
 #define VTREE_INSERT(tree, key, value)                                         \
   ((tree)->v_ops->vtree_insert((tree)->v_tree, key, value))
@@ -95,8 +114,9 @@ struct vtree
 
 #define VTREE_GETKEYSIZE(tree) ((tree)->v_ops->vtree_getkeysize((tree)->v_tree))
 
-struct vtree
+vtree
 vtree_create(void* tree, struct vtreeops* ops, uint32_t v_flags);
+
 int
 vtree_insert(vtree* tree, uint64_t key, void* value);
 int

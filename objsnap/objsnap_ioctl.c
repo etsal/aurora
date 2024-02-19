@@ -156,6 +156,7 @@ objsnap_init(struct objsnap_init_args *args)
 
 	allocator_init();
 
+
 	vput(vp);
 
 	return;
@@ -201,7 +202,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 	switch (inEvent) {
 	case MOD_LOAD:
-	
+
 		bzero(&osdata, sizeof(osdata));
 
 		/* Make the SLS available to userspace. */
@@ -215,6 +216,9 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		osdata.os_vp = NULL;
 
+		vnode_cache = malloc(sizeof(struct objsnap_vnode) * MAXINODES,
+			M_OBJSNAP, M_WAITOK);
+	
 		break;
 	case MOD_UNLOAD:
 		if (osdata.os_consumer != NULL) {
@@ -242,6 +246,8 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 			osdata.os_cdev = NULL;
 			printf("Destroying device\n");
 		}
+
+		free(vnode_cache, M_OBJSNAP);
 
     	break;
 	default:

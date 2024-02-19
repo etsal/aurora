@@ -1,8 +1,22 @@
-#include <cassert>
-#include <sys/types.h>
+#include <sys/param.h>
+#include <sys/bitstring.h>
+#include <sys/condvar.h>
+#include <sys/fcntl.h>
+#include <sys/file.h>
+#include <sys/filedesc.h>
+#include <sys/lock.h>
+#include <sys/mutex.h>
+#include <sys/proc.h>
+#include <sys/queue.h>
+#include <sys/sdt.h>
+#include <sys/stat.h>
+#include <sys/syscallsubr.h>
+#include <sys/sysctl.h>
+#include <sys/vnode.h>
+#include <sys/buf.h>
 
-#include "buf.h"
 #include "vtree.h"
+
 
 #define BINARY_SEARCH_CUTOFF (64)
 
@@ -43,9 +57,8 @@ binary_search(kvp* arr, size_t size, uint64_t key)
 void
 vtree_empty_wal(vtree* tree)
 {
-  size_t ks = VTREE_GETKEYSIZE(tree);
   kvp kv;
-  int error;
+  int error = 0;
 
   if (tree->v_flags & VTREE_WITHWAL) {
     /* Checkpoint should also clear out the wal hopefully before this point */
@@ -55,7 +68,6 @@ vtree_empty_wal(vtree* tree)
       for (int i = 0; i < tree->v_cur_wal_idx; i++) {
         kv = tree->v_wal[i];
         error = VTREE_INSERT(tree, kv.key, kv.data);
-        assert(error == 0);
       }
     }
 
@@ -63,14 +75,14 @@ vtree_empty_wal(vtree* tree)
   }
 }
 
-struct vtree
+vtree
 vtree_create(void* tree, struct vtreeops* ops, uint32_t v_flags)
 {
-  struct vtree vtree;
+  vtree vtree;
   vtree.v_tree = tree;
   vtree.v_flags = v_flags;
   if (v_flags & VTREE_WITHWAL) {
-    vtree.v_wal = (kvp*)malloc(VTREE_WALSIZE);
+    vtree.v_wal = (kvp*)malloc(VTREE_WALSIZE, M_OBJSNAP, M_WAITOK);
   }
   vtree.v_ops = ops;
   vtree.v_cur_wal_idx = 0;
@@ -101,7 +113,6 @@ wal_insert(vtree* tree, size_t keysize, uint64_t key, void* data)
 int
 vtree_insert(vtree* tree, uint64_t key, void* value)
 {
-  int error;
   size_t ks = VTREE_GETKEYSIZE(tree);
   if (tree->v_flags & VTREE_WITHWAL) {
     /* Checkpoint should also clear out the wal hopefully before this point */

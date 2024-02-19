@@ -16,8 +16,9 @@
  */
 
 #include <sys/types.h>
+#include <sys/buf.h>
+#include <sys/vnode.h>
 
-#include "buf.h"
 #include "vtree.h"
 
 #define BLKSZ (64 * 1024)
@@ -75,7 +76,7 @@ typedef struct btdata
 typedef btdata* btdata_t;
 
 struct btree;
-typedef btree* btree_t;
+typedef struct btree* btree_t;
 
 /* In memory btnode */
 typedef struct btnode
@@ -99,10 +100,11 @@ typedef struct btree
 {
   diskptr_t tr_ptr;
   size_t tr_vs;
+  struct vnode *tr_vp;
 } btree;
 
 int
-btree_init(void* tree, diskptr_t ptr, size_t value_size);
+btree_init(void* tree, struct vnode *vp, diskptr_t ptr, size_t value_size);
 int
 btree_insert(void* tree, uint64_t key, void* value);
 int

@@ -16,6 +16,8 @@
 
 #include "alloc.h"
 #include "objsnap_internal.h"
+#include "vtree.h"
+#include "btree.h"
 
 struct allocator alloc;
 
@@ -97,6 +99,12 @@ int allocate_inode(osinode_t *newinode)
 
     // Decrement to original index.
     newinode->i_index -= 1;
+    
+    struct objsnap_vnode *vnode = INDEX_TO_VNODE(newinode->i_index);
+    vnode->v_inode = *newinode;
+
+    btree_t btree = malloc(sizeof(btree), M_OBJSNAP, M_WAITOK);
+    vnode->v_tree = vtree_create(btree, &btreeops, 0);
 
 allocate_inode_done:
 

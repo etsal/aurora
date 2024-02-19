@@ -1,7 +1,18 @@
-#include <assert.h>
+#include <sys/param.h>
+#include <sys/condvar.h>
+#include <sys/kernel.h>
+#include <sys/limits.h>
+#include <sys/lock.h>
+#include <sys/lockmgr.h>
+#include <sys/malloc.h>
+#include <sys/mutex.h>
+#include <sys/uuid.h>
+#include <sys/buf.h>
 
+#include "objsnap_ioctl.h"
 #include "btree.h"
-#include "buf.h"
+#include "alloc.h"
+
 
 #define INDEX_NULL ((uint16_t)-1)
 
@@ -15,11 +26,9 @@ typedef struct bpath
 
 typedef bpath* bpath_t;
 
-static int num_splits = 0;
-
 #define BINARY_SEARCH_CUTOFF (64)
 
-int
+static int
 binary_search(uint64_t* arr, size_t size, uint64_t key)
 {
 
@@ -56,7 +65,7 @@ binary_search(uint64_t* arr, size_t size, uint64_t key)
 static void
 btnode_print(btnode_t node)
 {
-  printf("\nNode %lx %u\n", node->n_ptr.offset, node->n_len);
+  printf("\nNode %lx %u\n", node->n_ptr, BLOCKSIZE);
   for (int i = 0; i < node->n_len; i += 10) {
     printf("%d: ", i);
     for (int j = i; j < i + 10 && j < node->n_len; j++) {
@@ -69,7 +78,7 @@ btnode_print(btnode_t node)
     for (int i = 0; i < (node->n_len + 1); i += 10) {
       printf("%d: ", i);
       for (int j = i; j < i + 10 && (j < (node->n_len + 1)); j++) {
-        printf(" %lx |", ((diskptr_t*)(&node->n_ch[j]))->offset);
+        printf(" %lx |", (*(diskptr_t*)(&node->n_ch[j])));
       }
       printf("\n");
     }
@@ -96,11 +105,10 @@ btnode_wrap_bp(btnode_t node, btree_t tree, struct buf* bp)
 {
   diskptr_t ptr;
 
-  ptr.size = BLKSZ;
-  ptr.offset = bp->bp_lblkno;
+  ptr = bp->b_lblkno;
 
   node->n_bp = bp;
-  node->n_data = (btdata_t)bp->bp_data;
+  node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
   node->n_ptr = ptr;
 }
@@ -108,9 +116,9 @@ btnode_wrap_bp(btnode_t node, btree_t tree, struct buf* bp)
 static void
 btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 {
-  struct buf* bp = getblk(ptr.offset, ptr.size * PBLKSZ, lk_flags);
+  struct buf* bp = getblk(tree->tr_vp, ptr, BLOCKSIZE, 0, 0, 0);
   node->n_bp = bp;
-  node->n_data = (btdata_t)bp->bp_data;
+  node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
   node->n_ptr = ptr;
 }
@@ -119,7 +127,7 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 static void
 btnode_create(btnode_t node, btree_t tree, uint8_t type)
 {
-  diskptr_t ptr = allocate_blk(BLKSZ);
+  diskptr_t ptr = allocate_block();
   btnode_init(node, tree, ptr, LK_EXCLUSIVE);
   node->n_type = type;
   node->n_len = 0;
@@ -171,10 +179,9 @@ path_cow(bpath_t path)
         path->p_nodes[i].n_tree->tr_ptr = path->p_nodes[i].n_ptr;
       }
 
-      buf_unlock(tmp.n_bp, LK_EXCLUSIVE);
-
       /* We must invalidate the buffer to insure it never writes */
-      bclean(tmp.n_bp);
+      tmp.n_bp->b_flags |= B_INVAL;
+      brelse(tmp.n_bp);
 
       /* Turn of cow on the node and dirty the node */
       BT_FRESH_COW(&path->p_nodes[i]);
@@ -202,7 +209,7 @@ static inline void
 path_unacquire(bpath_t path, int acquire_as)
 {
   for (int i = 0; i < path->p_len; i++) {
-    buf_unlock(path->p_nodes[i].n_bp, acquire_as);
+    brelse(path->p_nodes[i].n_bp);
   }
 }
 
@@ -324,7 +331,7 @@ path_parent(bpath_t path)
 static void
 btnode_inner_insert(btnode_t node, int idx, uint64_t key, diskptr_t value)
 {
-  assert(BT_ISINNER(node));
+  KASSERT(BT_ISINNER(node), ("BTNODE IS NOT INNER"));
   if (node->n_len) {
     int num_to_move = node->n_len - idx + 1;
     memmove(
@@ -404,7 +411,7 @@ btnode_split(bpath_t path)
   btnode_dirty(&right_child);
   btnode_dirty(node);
 
-  buf_unlock(right_child.n_bp, LK_EXCLUSIVE);
+  bawrite(right_child.n_bp);
 
   if (parent.n_len == BT_MAX_KEYS) {
     printf("DOUBLE SPLIT\n");
@@ -416,8 +423,8 @@ btnode_split(bpath_t path)
 static void
 btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
 {
-  assert(BT_ISLEAF(node));
-  assert(!BT_ISCOW(node));
+  KASSERT(BT_ISLEAF(node), ("MUST BE LEAF"));
+  KASSERT(!BT_ISCOW(node), ("MUST NOT BE COW"));
   int num_to_move = node->n_len - idx;
   if (num_to_move > 0) {
     memmove(
@@ -444,8 +451,8 @@ btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
 static void
 btnode_leaf_update(btnode_t node, int idx, void* value)
 {
-  assert(BT_ISLEAF(node));
-  assert(!BT_ISCOW(node));
+  KASSERT(BT_ISLEAF(node), ("MUST BE LEAF"));
+  KASSERT(!BT_ISCOW(node), ("MUST NOT BE COW"));
   memcpy(&node->n_ch[idx + 1], value, BT_VALSZ(node));
   bdirty(node->n_bp);
 }
@@ -482,7 +489,7 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
 static void
 btnode_leaf_delete(btnode_t node, int idx, void* value)
 {
-  assert(BT_ISLEAF(node));
+  KASSERT(BT_ISLEAF(node), ("MUST BE LEAF"));
   int num_to_move = node->n_len - idx;
 
   if (value != NULL)
@@ -531,7 +538,7 @@ btnode_inner_collapse(bpath_t path)
       break;
   }
 
-  assert(memcmp(ptr, &node->n_ptr, sizeof(diskptr_t)) == 0);
+  KASSERT(memcmp(ptr, &node->n_ptr, sizeof(diskptr_t)) == 0, ("DOES NOT EQUAL KEY"));
   int num_to_move = parent->n_len - idx;
   memmove(&parent->n_keys[idx],
           &parent->n_keys[idx + 1],
@@ -582,8 +589,8 @@ btnode_leaf_bulkinsert(btnode_t node,
                        size_t* len,
                        int64_t max_key)
 {
-  assert(BT_ISLEAF(node));
-  assert(!BT_ISCOW(node));
+  KASSERT(BT_ISLEAF(node), ("MUST BE LEAF"));
+  KASSERT(!BT_ISCOW(node), ("MUST NOT BE COW"));
   int keys_i = 0;
   int node_i = 0;
   int inserted = 0;
@@ -657,7 +664,7 @@ btree_delete(void* treep, uint64_t key, void* value)
 #define BULK_CONTINUE (2)
 #define BULK_MAX ((uint64_t)(-1))
 
-int
+static int
 btnode_bulkinsert(bpath_t path, kvp** keyvalues, size_t* len, uint64_t max_key)
 {
   int idx;
@@ -712,7 +719,6 @@ btree_bulkinsert(void* treep, kvp* keyvalues, size_t len)
   int ret;
   bpath path;
   path.p_len = 0;
-  kvp* kvs = keyvalues;
 
   path_add(&path, tree, tree->tr_ptr, INDEX_NULL, LK_EXCLUSIVE);
   ret = btnode_bulkinsert(&path, &keyvalues, &len, BULK_MAX);
@@ -731,15 +737,15 @@ btree_bulkinsert(void* treep, kvp* keyvalues, size_t len)
 }
 
 int
-btree_init(void* tree_ptr, diskptr_t ptr, size_t value_size)
+btree_init(void* tree_ptr, struct vnode *vp, diskptr_t ptr, size_t value_size)
 {
   btree_t tree = (btree_t)tree_ptr;
 
-  assert(value_size <= BT_MAX_VALUE_SIZE);
+  KASSERT(value_size <= BT_MAX_VALUE_SIZE, ("VALUE SIZE TOO LARGE"));
 
   tree->tr_ptr = ptr;
   tree->tr_vs = value_size;
-
+  tree->tr_vp = vp;
   return 0;
 }
 
@@ -803,14 +809,15 @@ btree_find(void* treep, uint64_t key, void* value)
   return 0;
 }
 
+// TODO FIXUP CHECKPOINT
 diskptr_t
 btree_checkpoint(void* treep)
 {
   btree_t tree = (btree_t)treep;
-  size_t size;
-  struct buf** ds = get_dirty_set(&size);
+  size_t size = 0;
+  struct buf** ds = NULL; // = get_dirty_set(&size);
   btnode node;
-  diskptr ptr = tree->tr_ptr;
+  diskptr_t ptr = tree->tr_ptr;
 
 #ifdef DEBUG
   printf("[Checkpoint]\n");
@@ -822,7 +829,7 @@ btree_checkpoint(void* treep)
 
     /* Node is dead - clean up */
     if (node.n_len == 0) {
-      bclean(ds[i]);
+      brelse(ds[i]);
     }
 
     btnode_mark_cow(&node);
@@ -831,7 +838,7 @@ btree_checkpoint(void* treep)
 
   /* TODO: Barrier writes or wait for all buffers to flush on the new root node
    */
-  free(ds);
+  free(ds, M_OBJSNAP);
   return (ptr);
 }
 
