@@ -218,6 +218,8 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		vnode_cache = malloc(sizeof(struct objsnap_vnode) * MAXINODES,
 			M_OBJSNAP, M_WAITOK);
+
+		bzero(vnode_cache, sizeof(struct objsnap_vnode) * MAXINODES);
 	
 		break;
 	case MOD_UNLOAD:

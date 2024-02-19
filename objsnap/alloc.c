@@ -70,7 +70,7 @@ int allocate_inode(osinode_t *newinode)
     struct objsnap_vnode *vnode = INDEX_TO_VNODE(newinode->i_index);
 
     // We must allocate the btree first and place it in our inode structures
-    btree_t btree = malloc(sizeof(btree), M_OBJSNAP, M_WAITOK);
+    btree_t btree = malloc(sizeof(struct btree), M_OBJSNAP, M_WAITOK);
     vnode->v_tree = vtree_create(btree, &btreeops, 0);
     VTREE_INIT(&vnode->v_tree, osdata.os_vp, 
         newinode->i_treeptr, sizeof(diskptr_t));
