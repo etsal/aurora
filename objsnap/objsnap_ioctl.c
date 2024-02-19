@@ -203,8 +203,13 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 		/* Make the SLS available to userspace. */
-		osdata.os_cdev = make_dev(
-			&objsnap_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "objsnap");
+		error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
+			&osdata.os_cdev, &objsnap_cdevsw, 0, UID_ROOT, GID_WHEEL, 
+			0666, "objsnap");
+
+		if (error) {
+			return (error);
+		}
 
 		osdata.os_vp = NULL;
 
