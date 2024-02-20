@@ -14,6 +14,6 @@ void allocator_init(void);
 
 diskptr_t allocate_block(void);
 
-int allocate_inode(osinode_t *inode);
+osinode_t *allocate_inode(void);
 
 #endif

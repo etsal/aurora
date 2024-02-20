@@ -39,9 +39,10 @@ struct pageset {
 };
 
 struct objsnap_vnode {
-	osinode_t v_inode;
+	osinode_t *v_inode;
 	uint64_t v_magic;
 	struct virtualtree v_tree;
+	struct lock v_lock;
 	int v_dirtycnt;
 	struct pageset v_dirty_pageset[MAXDRTYCNT];
 };
@@ -51,9 +52,12 @@ extern struct objsnap_metadata osdata;
 extern struct allocator alloc;
 extern super_t superblock;
 extern struct objsnap_vnode *vnode_cache;
+#define LOCK(lock, type) (lockmgr(lock, type, NULL))
+#define UNLOCK(lock) (lockmgr(lock, LK_RELEASE, NULL))
 
-#define LOCK_SUPER() (lockmgr(&osdata.os_lock, LK_EXCLUSIVE, NULL))
-#define UNLOCK_SUPER() (lockmgr(&osdata.os_lock, LK_RELEASE, NULL))
+#define LOCK_SUPER() (LOCK(&osdata.os_lock, LK_EXCLUSIVE))
+#define UNLOCK_SUPER() (UNLOCK(&osdata.os_lock))
+
 #define INDEX_TO_VNODE(i) (&vnode_cache[(i) / 2])
 #define DEVICE_BLOCK_NUM(blki) ((blki) * (BLOCKSIZE / superblock.super_bsize))
 

@@ -64,22 +64,39 @@ sls_sysctl_fini(void)
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
-	//int cnt = args->ckpt_cnt;
-	//index_t *inode_i = args->ckpt_inodes;
+	int cnt = args->ckpt_cnt;
+	index_t *inodes = args->ckpt_inodes;
+	int i;
+	struct objsnap_vnode *vnode;
+
+	// Acquire Locks
+	for (i = 0; i < cnt; i++) {
+		vnode = INDEX_TO_VNODE(inodes[i]);
+		LOCK(&vnode->v_lock, LK_EXCLUSIVE);
+	}
+
+	// Checkpoint trees!
+
+
+	// Unlock Trees!
+	for (i = 0; i < cnt; i++) {
+		UNLOCK(&vnode->v_lock);
+	}
+
 	return;
 }
 
 static void
 objsnap_create(struct objsnap_create_args *args)
 {
-	int error;
-	osinode_t inode;
-
-	if ((error = allocate_inode(&inode)) == BADINDEX) {
+	osinode_t *inode;
+	if ((inode = allocate_inode()) == NULL) {
 		printf("Issue creating inode\n");
+		args->os_index = BADINDEX;
+		return;
 	}
 
-	args->os_index = inode.i_index;
+	args->os_index = inode->i_index;
 
 	return;
 }
@@ -136,16 +153,21 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 		return (error);
 	}
 
+	LOCK(&vnode->v_lock, LK_EXCLUSIVE);
+
 	page = usrptr_to_page(addr);
 	if (page == NULL) {
+		UNLOCK(&vnode->v_lock);
 		return EINVAL;
 	}
 
 	// SLOW LOOKUP
 	for (int i = 0; i < vnode->v_dirtycnt; i++) {
 		vm_page_t p = vnode->v_dirty_pageset[vnode->v_dirtycnt].page;
-		if (page == p)
+		if (page == p) {
+			UNLOCK(&vnode->v_lock);
 			return (0);
+		}
 	}
 
 	printf("Adding %lu to dirty set %d\n", IDX_TO_OFF(page->pindex), 
@@ -153,6 +175,8 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 
 	vnode->v_dirty_pageset[vnode->v_dirtycnt].page = page;
 	vnode->v_dirtycnt += 1;
+
+	UNLOCK(&vnode->v_lock);
 
 	return (0);
 }
@@ -221,8 +245,8 @@ objsnap_init(struct objsnap_init_args *args)
 	vref(vp);
 
 	osdata.os_vp = vp;
-	lockinit(&osdata.os_lock, PVFS, "objsnap_big_lock", 
-		VLKTIMEOUT, LK_NOSHARE);
+	lockinit(&osdata.os_lock, 0, "objsnap_big_lock", 
+		0, LK_NOSHARE);
 
 	superblock_init(vp);
 
@@ -293,6 +317,13 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 			M_OBJSNAP, M_WAITOK);
 
 		bzero(vnode_cache, sizeof(struct objsnap_vnode) * MAXINODES);
+
+		// Initialize Locks
+		for (int i = 0; i < MAXINODES; i++) {
+			lockinit(&vnode_cache[i].v_lock, 0, "objsnap node", 
+				0, 0);
+			
+		}
 	
 		break;
 	case MOD_UNLOAD:
@@ -327,6 +358,11 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 			if (vnode->v_tree.v_tree != NULL) {
 				free(vnode->v_tree.v_tree, M_OBJSNAP);
 				vnode->v_tree.v_tree = NULL;
+				
+			}
+
+			if (vnode->v_inode != NULL) {
+				free(vnode->v_inode, M_OBJSNAP);
 			}
 		}
 

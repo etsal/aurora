@@ -36,6 +36,11 @@ typedef struct {
 typedef struct {
 	index_t i_index;
   diskptr_t i_treeptr;
+
+  uint64_t i_version;
+  
+  int16_t i_cnt;
+  index_t i_checkpointed_with[];
 } osinode_t;
 
 struct objsnap_init_args {

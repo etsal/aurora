@@ -35,7 +35,7 @@ diskptr_t allocate_block()
 }
 
 static int 
-init_ondisk_inode(osinode_t *inode)
+write_ondisk_inode(osinode_t *inode)
 {
     int error;
     struct buf *ino_bp;
@@ -47,7 +47,7 @@ init_ondisk_inode(osinode_t *inode)
         printf("Error retrieving bread 1 %d\n", error);
         return error;
     }
-    memcpy(ino_bp->b_data, ino_bp, sizeof(osinode_t));
+    memcpy(ino_bp->b_data, ino_bp, BLOCKSIZE);
     bwrite(ino_bp);
 
     return (0);
@@ -60,14 +60,18 @@ init_ondisk_inode(osinode_t *inode)
 //
 // It should be noted that we assume object creation is rare and 
 // designing it this way means we keep things flat in the object store.
-int allocate_inode(osinode_t *newinode)
+osinode_t *allocate_inode()
 {
     struct buf *super_bp;
     int error = 0;
+    osinode_t *newinode = malloc(BLOCKSIZE, M_OBJSNAP, M_WAITOK);
     newinode->i_index = atomic_fetchadd_64(&superblock.super_next, 2);
     newinode->i_treeptr = allocate_block();
+    newinode->i_version = 0;
+    newinode->i_cnt = 0;
 
     struct objsnap_vnode *vnode = INDEX_TO_VNODE(newinode->i_index);
+    vnode->v_inode = newinode;
 
     // We must allocate the btree first and place it in our inode structures
     btree_t btree = malloc(sizeof(struct btree), M_OBJSNAP, M_WAITOK);
@@ -85,7 +89,7 @@ int allocate_inode(osinode_t *newinode)
     
     LOCK_SUPER();
 
-    if ((error = init_ondisk_inode(newinode)) != 0) {
+    if ((error = write_ondisk_inode(newinode)) != 0) {
         newinode->i_index = -1;
         goto allocate_inode_done;
     }
@@ -93,7 +97,7 @@ int allocate_inode(osinode_t *newinode)
     // Increment and write the sister tree
     newinode->i_index += 1;
 
-    if ((error = init_ondisk_inode(newinode)) != 0) {
+    if ((error = write_ondisk_inode(newinode)) != 0) {
         newinode->i_index = -1;
         goto allocate_inode_done;
     }
@@ -112,15 +116,19 @@ int allocate_inode(osinode_t *newinode)
 
     // Make sure to update our in-memory copy.
     superblock.super_blk = blk;
-
     // Decrement to original index.
     newinode->i_index -= 1;
-    vnode->v_inode = *newinode;
+
     vnode->v_magic = OBJMAGIC;
 
 allocate_inode_done:
 
     UNLOCK_SUPER();
+    if (error) {
+        free(newinode, M_OBJSNAP);
+        vnode->v_inode = NULL;
+        return NULL;
+    }
 
-    return (error);
+    return newinode;
 }
