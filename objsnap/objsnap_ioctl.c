@@ -80,6 +80,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	// Unlock Trees!
 	for (i = 0; i < cnt; i++) {
+		vnode = INDEX_TO_VNODE(inodes[i]);
 		UNLOCK(&vnode->v_lock);
 	}
 
