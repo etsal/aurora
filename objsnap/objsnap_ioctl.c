@@ -69,21 +69,29 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	int i;
 	struct objsnap_vnode *vnode;
 
-	// Acquire Locks
+	// Acquire Locks to copy over dirty lists, we need to worry about holding
+	// onto the commit lock for too long. so well need to let go of our locks
+	// and retry.
 	for (i = 0; i < cnt; i++) {
 		vnode = INDEX_TO_VNODE(inodes[i]);
 		LOCK(&vnode->v_lock, LK_EXCLUSIVE);
+		LOCK(&vnode->v_commit_lock, LK_EXCLUSIVE);
 	}
 
-	// Checkpoint trees!
 
-
-	// Unlock Trees!
+	// Unlock Node locks!
 	for (i = 0; i < cnt; i++) {
 		vnode = INDEX_TO_VNODE(inodes[i]);
 		UNLOCK(&vnode->v_lock);
 	}
 
+	// Checkpoint data and trees
+
+	// Unlock commit locks
+	for (i = 0; i < cnt; i++) {
+		vnode = INDEX_TO_VNODE(inodes[i]);
+		UNLOCK(&vnode->v_commit_lock);
+	}
 	return;
 }
 
@@ -321,7 +329,9 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		// Initialize Locks
 		for (int i = 0; i < MAXINODES; i++) {
-			lockinit(&vnode_cache[i].v_lock, 0, "objsnap node", 
+			lockinit(&vnode_cache[i].v_lock, 0, "objsnap node lock", 
+				0, 0);
+			lockinit(&vnode_cache[i].v_commit_lock, 0, "objsnap commit lock", 
 				0, 0);
 			
 		}

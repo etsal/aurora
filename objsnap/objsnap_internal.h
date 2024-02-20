@@ -43,6 +43,8 @@ struct objsnap_vnode {
 	uint64_t v_magic;
 	struct virtualtree v_tree;
 	struct lock v_lock;
+	struct lock v_commit_lock;
+	
 	int v_dirtycnt;
 	struct pageset v_dirty_pageset[MAXDRTYCNT];
 };
