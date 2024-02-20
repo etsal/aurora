@@ -75,14 +75,17 @@ objsnap_dirty(index_t fd, void *ptr)
 }
 
 int 
-objsnap_checkpoint(index_t *fds)
+objsnap_checkpoint(index_t *fds, int size)
 {
+    struct objsnap_checkpoint_args args;
     int error = 0;
     if ((error = objsnap_fd_check()) != 0) {
         return error;
     }
 
-    return (0);
+    memcpy(args.ckpt_inodes, fds, size * sizeof(index_t));
+    args.ckpt_cnt = size;
+    return ioctl(OS_FD, OBJSNAP_CHECKPOINT, &args);
 }
 
 

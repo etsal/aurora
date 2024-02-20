@@ -64,6 +64,8 @@ sls_sysctl_fini(void)
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
+	//int cnt = args->ckpt_cnt;
+	//index_t *inode_i = args->ckpt_inodes;
 	return;
 }
 
@@ -327,6 +329,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 				vnode->v_tree.v_tree = NULL;
 			}
 		}
+
 		free(vnode_cache, M_OBJSNAP);
 
     	break;

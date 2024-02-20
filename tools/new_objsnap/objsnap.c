@@ -182,7 +182,7 @@ int main()
     checkpointed[0] = inode1;
     checkpointed[1] = inode2;
 
-    error = objsnap_checkpoint(checkpointed);
+    error = objsnap_checkpoint(checkpointed, 2);
     if (error) {
         printf("Problem Checkpointing");
     }

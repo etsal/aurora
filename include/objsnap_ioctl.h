@@ -10,6 +10,8 @@ extern "C" {
 
 #define BLOCKSIZE (4096)
 #define MAXINODES (1024)
+#define CKPT_MAXINODES (64)
+
 #define NULLDISKPTR ((diskptr_t) -1)
 #define BADINDEX ((index_t)(-1))
 
@@ -41,7 +43,8 @@ struct objsnap_init_args {
 };
 
 struct objsnap_checkpoint_args {
-  epoch_t os_epoch;
+  int ckpt_cnt;
+  index_t ckpt_inodes[CKPT_MAXINODES];
 };
 
 struct objsnap_create_args {
