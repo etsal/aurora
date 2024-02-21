@@ -87,9 +87,8 @@ write_page(
 	bip->bio_ma_n = 1;
 	bip->bio_data = unmapped_buf;
 
-	// TODO: Check if this is dependent on lblkno and jazz
-	bip->bio_ma_offset = ptr;
-	bip->bio_offset = ptr;
+	bip->bio_ma_offset = ptr * BLOCKSIZE;
+	bip->bio_offset = ptr * BLOCKSIZE;
 
 	bip->bio_flags |= BIO_UNMAPPED;
 	bip->bio_done = objsnap_done;
@@ -243,8 +242,7 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 		}
 	}
 
-	printf("Adding %lu to dirty set %d\n", IDX_TO_OFF(page->pindex), 
-		vnode->v_dirty.d_cnt);
+	printf("Adding %lu to dirty set\n", IDX_TO_OFF(page->pindex));
 
 	vnode->v_dirty.d_pg[vnode->v_dirty.d_cnt].page = page;
 	vnode->v_dirty.d_cnt += 1;
