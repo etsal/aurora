@@ -48,6 +48,12 @@ MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
 struct objsnap_metadata osdata;
 super_t superblock;
 struct objsnap_vnode *vnode_cache = NULL;
+int pbufcnt = -1;
+
+struct checkpoint_data {
+	struct dirtyset cp_d;
+	index_t cp_inode;
+};
 
 static int
 objsnap_sysctl_init(void)
@@ -62,13 +68,46 @@ sls_sysctl_fini(void)
 }
 
 static void
+objsnap_done(struct bio *bip)
+{
+	g_destroy_bio(bip);
+}
+static void
+write_page(
+    vm_page_t page, diskptr_t ptr)
+{
+	struct bio *bip;
+
+	/* Read the global variable once here to prevent possible races. */
+	bip = g_alloc_bio();
+	bip->bio_cmd = BIO_WRITE;
+
+	bip->bio_length = BLOCKSIZE;
+	bip->bio_ma = &page;
+	bip->bio_ma_n = 1;
+	bip->bio_data = unmapped_buf;
+
+	// TODO: Check if this is dependent on lblkno and jazz
+	bip->bio_ma_offset = ptr;
+	bip->bio_offset = ptr;
+
+	bip->bio_flags |= BIO_UNMAPPED;
+	bip->bio_done = objsnap_done;
+	bip->bio_caller2 = NULL;
+	g_io_request(bip, osdata.os_consumer);
+
+	return;
+}
+
+
+static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
 	int cnt = args->ckpt_cnt;
 	index_t *inodes = args->ckpt_inodes;
 	int i;
 	struct objsnap_vnode *vnode;
-
+	struct checkpoint_data *sets;
 	// Acquire Locks to copy over dirty lists, we need to worry about holding
 	// onto the commit lock for too long. so well need to let go of our locks
 	// and retry.
@@ -78,6 +117,16 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		LOCK(&vnode->v_commit_lock, LK_EXCLUSIVE);
 	}
 
+	// Copy out the dirty sets
+	sets = malloc(sizeof(struct checkpoint_data) * cnt, M_OBJSNAP, M_WAITOK);
+	for (i = 0; i < cnt; i++) {
+		vnode = INDEX_TO_VNODE(inodes[i]);
+		memcpy(&sets[i].cp_d, &vnode->v_dirty, sizeof(struct dirtyset));
+		sets[i].cp_inode = inodes[i];
+
+		// Set the dirty cnt to zero!
+		vnode->v_dirty.d_cnt = 0;
+	}
 
 	// Unlock Node locks!
 	for (i = 0; i < cnt; i++) {
@@ -85,15 +134,30 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		UNLOCK(&vnode->v_lock);
 	}
 
-	// Checkpoint data and trees
-
+	
+	// Update data and trees
+	for (i = 0; i < cnt; i++) {
+		for (int t = 0; t < sets[i].cp_d.d_cnt; t++) {
+			// Update the tree
+			vm_page_t page = sets[i].cp_d.d_pg[t].page;
+			diskptr_t ptr = allocate_block();
+			printf("Inserting into tree %lu\n", IDX_TO_OFF(page->pindex));
+			VTREE_INSERT(&vnode->v_tree, IDX_TO_OFF(page->pindex), &ptr);
+			// Serialize
+			write_page(page, ptr);
+		}
+	}
 	// Unlock commit locks
 	for (i = 0; i < cnt; i++) {
 		vnode = INDEX_TO_VNODE(inodes[i]);
 		UNLOCK(&vnode->v_commit_lock);
 	}
+
+	free(sets, M_OBJSNAP);
+
 	return;
 }
+
 
 static void
 objsnap_create(struct objsnap_create_args *args)
@@ -171,8 +235,8 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 	}
 
 	// SLOW LOOKUP
-	for (int i = 0; i < vnode->v_dirtycnt; i++) {
-		vm_page_t p = vnode->v_dirty_pageset[vnode->v_dirtycnt].page;
+	for (int i = 0; i < vnode->v_dirty.d_cnt; i++) {
+		vm_page_t p = vnode->v_dirty.d_pg[i].page;
 		if (page == p) {
 			UNLOCK(&vnode->v_lock);
 			return (0);
@@ -180,10 +244,10 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 	}
 
 	printf("Adding %lu to dirty set %d\n", IDX_TO_OFF(page->pindex), 
-		vnode->v_dirtycnt);
+		vnode->v_dirty.d_cnt);
 
-	vnode->v_dirty_pageset[vnode->v_dirtycnt].page = page;
-	vnode->v_dirtycnt += 1;
+	vnode->v_dirty.d_pg[vnode->v_dirty.d_cnt].page = page;
+	vnode->v_dirty.d_cnt += 1;
 
 	UNLOCK(&vnode->v_lock);
 

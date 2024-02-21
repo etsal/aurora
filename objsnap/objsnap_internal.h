@@ -38,15 +38,18 @@ struct pageset {
 	vm_page_t page;
 };
 
+struct dirtyset {
+	int d_cnt;
+	struct pageset d_pg[MAXDRTYCNT];
+};
+
 struct objsnap_vnode {
 	osinode_t *v_inode;
 	uint64_t v_magic;
 	struct virtualtree v_tree;
 	struct lock v_lock;
 	struct lock v_commit_lock;
-	
-	int v_dirtycnt;
-	struct pageset v_dirty_pageset[MAXDRTYCNT];
+	struct dirtyset v_dirty;
 };
 
 
