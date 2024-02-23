@@ -872,8 +872,6 @@ btree_checkpoint(void* treep)
 
   BO_UNLOCK(bo);
 
-  /* TODO: Barrier writes or wait for all buffers to flush on the new root node
-   */
   return (ptr);
 }
 

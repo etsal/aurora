@@ -24,6 +24,7 @@
 #include <assert.h>
 #include <objsnap.h>
 #include <objsnap_ioctl.h>
+#include <rdtsc.h>
 
 int newfs(const char *path)
 {
@@ -244,5 +245,13 @@ random_write_load(int num_objs, int size_of_obj_in_blocks, int writes_per_iterat
 
 int main()
 {
-	random_write_load(1, 1024 * 1024, 16, 1000);	
+	//basicTest();
+	uint64_t clock = get_clock_speed_sleep();
+	int numCheckpoints = 500;
+	uint64_t before = rdtscp();	
+	random_write_load(1, 1024 * 1024, 16, numCheckpoints);	
+	uint64_t after = rdtscp();
+	uint64_t change = after - before;
+	change = cycles_to_ms(change, clock);
+	printf("Checkpoints[%d]: %lu\n", numCheckpoints, change);
 }

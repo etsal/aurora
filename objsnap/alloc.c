@@ -48,8 +48,7 @@ write_ondisk_inode(osinode_t *inode)
         return error;
     }
     memcpy(ino_bp->b_data, inode, sizeof(osinode_t));
-    bbarrierwrite(ino_bp);
-    printf("[Inode Write] Inode(%d), Treeptr(%lu), Version(%lu)\n", inode->i_index, inode->i_treeptr, inode->i_version);
+    bawrite(ino_bp);
 
     return (0);
 }
