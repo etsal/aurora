@@ -8,6 +8,8 @@
 #include <sys/mutex.h>
 #include <sys/uuid.h>
 #include <sys/buf.h>
+#include <sys/rwlock.h>
+#include <sys/bufobj.h>
 
 #include "objsnap_ioctl.h"
 #include "btree.h"
@@ -118,13 +120,14 @@ static void
 btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 {
   struct buf* bp = getblk(tree->tr_vp, ptr, BLOCKSIZE, 0, 0, 0);
-#ifdef DEBUG
-  printf("[Btnode init] %p\n", bp);
-#endif
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
   node->n_ptr = ptr;
+
+#ifdef DEBUG
+  printf("[Btnode init] %p COW(%d)\n", bp, BT_ISCOW(node));
+#endif
 }
 
 /* Node is locked exclusively on create */
@@ -145,11 +148,14 @@ path_getindex(bpath_t path)
 }
 
 /*
- * Will iterater through the path and perform COW on all entries within the path
+ * Will iterate through the path and perform COW on all entries within the path
  */
 static void
 path_cow(bpath_t path)
 {
+#ifdef DEBUG
+  printf("[PATH COW]\n");
+#endif
   btnode tmp;
   btnode_t parent = NULL;
   int idx;
@@ -164,7 +170,7 @@ path_cow(bpath_t path)
       if (i > 0) {
         parent = &path->p_nodes[i - 1];
         idx = path->p_indexes[i];
-        /* We are the root so lets update our own parent ptr as well as save the
+        /* We are not the root so lets update our own parent ptr as well as save the
          * old tree */
       } else {
         /* Init the old tree to be passed back to the user */
@@ -187,7 +193,7 @@ path_cow(bpath_t path)
       tmp.n_bp->b_flags |= B_INVAL;
       brelse(tmp.n_bp);
 
-      /* Turn of cow on the node and dirty the node */
+      /* Turn off cow on the node and dirty the node */
       BT_FRESH_COW(&path->p_nodes[i]);
       btnode_dirty(&path->p_nodes[i]);
     }
@@ -818,31 +824,40 @@ diskptr_t
 btree_checkpoint(void* treep)
 {
   btree_t tree = (btree_t)treep;
-  size_t size = 0;
-  struct buf** ds = NULL; // = get_dirty_set(&size);
   btnode node;
   diskptr_t ptr = tree->tr_ptr;
+  struct vnode *vp = tree->tr_vp;
+  struct bufobj *bo = &vp->v_bufobj;
+  struct buf *bp, *nbp;
+
+  BO_LOCK(bo);
 
 #ifdef DEBUG
   printf("[Checkpoint]\n");
 #endif
-
-  for (size_t i = 0; i < size; i++) {
+  TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, nbp) {
     /* Wrap our node */
-    btnode_wrap_bp(&node, tree, ds[i]);
+    if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_NOWAIT, NULL) == 0)
+ 		  BO_UNLOCK(bo);
+
+    
+    btnode_wrap_bp(&node, tree, bp);
 
     /* Node is dead - clean up */
-    if (node.n_len == 0) {
-      brelse(ds[i]);
-    }
+    // TODO: CLEAN UP DEAD BUFFERS (merged nodes)
 
     btnode_mark_cow(&node);
-    bawrite(ds[i]);
+    bremfree(bp);
+    bawrite(bp);
+
+    BO_LOCK(bo);
+    
   }
+
+  BO_UNLOCK(bo);
 
   /* TODO: Barrier writes or wait for all buffers to flush on the new root node
    */
-  free(ds, M_OBJSNAP);
   return (ptr);
 }
 

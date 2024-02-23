@@ -132,6 +132,7 @@ int newfs(const char *path)
 
 int main()
 {
+	osinode_t actualinode;
     
     int error = newfs("/dev/nvd0");
     if (error) {
@@ -158,32 +159,37 @@ int main()
 
     printf("Object created! %lu\n", inode1);
 
-  
-    index_t inode2 = objsnap_create();
+    index_t checkpointed[1];
+    checkpointed[0] = inode1;
 
-    printf("Object created! %lu\n", inode2);
+    error = objsnap_checkpoint(checkpointed, 1);
+    if (error) {
+        printf("Problem Checkpointing");
+    }
+
+	error = objsnap_stat(inode1, &actualinode);
+	if (error) {
+        printf("Problem Statting");
+    }
+
+	printf("Inode[%lu]: Tree(%lu), Version(%lu)\n", actualinode.i_index, actualinode.i_treeptr, actualinode.i_version);
+
 
     error = objsnap_dirty(inode1, addr);
     if (error) {
         printf("Could not dirty page");
     }
 
-    error = objsnap_dirty(inode1, (char *)addr + BLOCKSIZE);
-    if (error) {
-        printf("Could not dirty page");
-    }
-
-    error = objsnap_dirty(inode1, (char *)addr + (2 * BLOCKSIZE));
-    if (error) {
-        printf("Could not dirty page");
-    }
-
-    index_t checkpointed[2];
-    checkpointed[0] = inode1;
-    checkpointed[1] = inode2;
-
-    error = objsnap_checkpoint(checkpointed, 2);
+	
+    error = objsnap_checkpoint(checkpointed, 1);
     if (error) {
         printf("Problem Checkpointing");
     }
+
+	error = objsnap_stat(inode1, &actualinode);
+	if (error) {
+        printf("Problem Statting");
+    }
+
+	printf("Inode[%lu]: Tree(%lu), Version(%lu)\n", actualinode.i_index, actualinode.i_treeptr, actualinode.i_version);
 }

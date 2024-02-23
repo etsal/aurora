@@ -98,6 +98,7 @@ typedef btnode* btnode_t;
 
 typedef struct btree
 {
+  // tr_ptr must always be on top so the virtual tree can acquire it
   diskptr_t tr_ptr;
   size_t tr_vs;
   struct vnode *tr_vp;

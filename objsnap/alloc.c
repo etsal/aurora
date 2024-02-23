@@ -47,8 +47,9 @@ write_ondisk_inode(osinode_t *inode)
         printf("Error retrieving bread 1 %d\n", error);
         return error;
     }
-    memcpy(ino_bp->b_data, ino_bp, BLOCKSIZE);
-    bwrite(ino_bp);
+    memcpy(ino_bp->b_data, inode, sizeof(osinode_t));
+    bbarrierwrite(ino_bp);
+    printf("[Inode Write] Inode(%lu), Treeptr(%lu), Version(%lu)\n", inode->i_index, inode->i_treeptr, inode->i_version);
 
     return (0);
 }
@@ -64,7 +65,7 @@ osinode_t *allocate_inode()
 {
     struct buf *super_bp;
     int error = 0;
-    osinode_t *newinode = malloc(BLOCKSIZE, M_OBJSNAP, M_WAITOK);
+    osinode_t *newinode = malloc(sizeof(osinode_t), M_OBJSNAP, M_WAITOK);
     newinode->i_index = atomic_fetchadd_64(&superblock.super_next, 2);
     newinode->i_treeptr = allocate_block();
     newinode->i_version = 0;
@@ -82,10 +83,11 @@ osinode_t *allocate_inode()
     // Initialize ondisk root block
     error = bread(osdata.os_vp, DEVICE_BLOCK_NUM(newinode->i_treeptr), 
         BLOCKSIZE, NOCRED, &super_bp);
-
+    
+    // We just dirty, they have created but not checkpointed so don't need to write here.
     bzero(super_bp->b_data, BLOCKSIZE);
-
-    bwrite(super_bp);
+    bdirty(super_bp);
+    brelse(super_bp);
     
     LOCK_SUPER();
 
@@ -120,6 +122,7 @@ osinode_t *allocate_inode()
     newinode->i_index -= 1;
 
     vnode->v_magic = OBJMAGIC;
+    vnode->v_state = VALID;
 
 allocate_inode_done:
 
@@ -127,6 +130,7 @@ allocate_inode_done:
     if (error) {
         free(newinode, M_OBJSNAP);
         vnode->v_inode = NULL;
+        vnode->v_state = VNULL;
         return NULL;
     }
 

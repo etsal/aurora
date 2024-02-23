@@ -74,6 +74,23 @@ objsnap_dirty(index_t fd, void *ptr)
     return ioctl(OS_FD, OBJSNAP_DIRTYPAGE, &args);
 }
 
+int objsnap_stat(index_t fd, osinode_t *inode)
+{
+    int error = 0;
+    struct objsnap_stat_args args;
+
+    if ((error = objsnap_fd_check()) != 0) {
+        return error;
+    }
+
+    args.os_index = fd;
+
+    error = ioctl(OS_FD, OBJSNAP_STAT, &args);
+    *inode = args.os_inode;
+    
+    return (error);
+}
+
 int 
 objsnap_checkpoint(index_t *fds, int size)
 {

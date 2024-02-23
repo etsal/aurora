@@ -72,6 +72,7 @@ objsnap_done(struct bio *bip)
 {
 	g_destroy_bio(bip);
 }
+
 static void
 write_page(
     vm_page_t page, diskptr_t ptr)
@@ -143,14 +144,18 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 			// Update the tree
 			struct pageset *pinfo = &set->cp_d.d_pg[t];
 			diskptr_t ptr = allocate_block();
-			printf("Inserting into tree %lu\n", IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE);
 			VTREE_INSERT(&vnode->v_tree, IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &ptr);
 			// Serialize
 			write_page(pinfo->page, ptr);
+			
 		}
+
 		vnode = &vnode_cache[i]; 
 		inode = vnode->v_inode;
-		inode->i_treeptr = VTREE_CHECKPOINT(&vnode->v_tree);
+
+		// During inserting we likely COW faulted which means we need to update our treeptr;
+		inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
+		VTREE_CHECKPOINT(&vnode->v_tree);
 
 		// Update inodes to include checkpoint lists
 
@@ -162,10 +167,10 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		inode->i_version += 1;
 
 		// Get the sibling inode and write to that instead.
-		inode->i_index = inode->i_index % 2 ? inode->i_index + 1 : inode->i_index - 1;
+		inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
 
 		if ((error = write_ondisk_inode(inode))) {
-			printf("Issue printing inode!\n");
+			printf("Issue writing inode!\n");
 		}
 	}
 
@@ -243,7 +248,6 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 	int error = 0;
 
 	struct objsnap_vnode *vnode = &vnode_cache[inode_i];
-	printf("Adding to dirty set!\n");
 	if (vnode->v_magic != OBJMAGIC) {
 		printf("Invalid vnode\n");
 		return (error);
@@ -353,6 +357,21 @@ objsnap_init(struct objsnap_init_args *args)
 }
 
 static int
+objsnap_stat(struct objsnap_stat_args *args)
+{
+	struct objsnap_vnode *vnode = &vnode_cache[args->os_index];
+	// TODO: Do a get for an inode
+	if (vnode->v_state == VNULL) {
+		return -1;
+	}
+
+	args->os_inode = *vnode->v_inode;
+	printf("Inode[%lu] Tree(%lu)\n", vnode->v_inode->i_index, vnode->v_inode->i_treeptr);
+
+	return (0);
+}
+
+static int
 objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
     struct thread *td)
 {
@@ -376,6 +395,9 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 		error = objsnap_dirty_page((struct objsnap_dirty_page_args *)data);
 		break;
 
+	case OBJSNAP_STAT:
+		error = objsnap_stat((struct objsnap_stat_args *)data);
+		break;
 	}
 
 	return (error);

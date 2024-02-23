@@ -44,6 +44,11 @@ struct dirtyset {
 	struct pageset d_pg[MAXDRTYCNT];
 };
 
+enum VSTATE {
+	VNULL = 0,
+	VALID = 1,
+};
+
 struct objsnap_vnode {
 	osinode_t *v_inode;
 	uint64_t v_magic;
@@ -51,6 +56,7 @@ struct objsnap_vnode {
 	struct lock v_lock;
 	struct lock v_commit_lock;
 	struct dirtyset v_dirty;
+	enum VSTATE v_state;
 };
 
 

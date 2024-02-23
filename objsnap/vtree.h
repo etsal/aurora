@@ -73,6 +73,8 @@ struct vtreeops
   vtree_getkeysize vtree_getkeysize;
 };
 
+#define VTREE_GETROOT(v) (*(diskptr_t *)((v)->v_tree))
+
 #define VTREE_WALSIZE (64UL * 1024)
 #define VTREE_MAXWAL (VTREE_WALSIZE / sizeof(kvp))
 

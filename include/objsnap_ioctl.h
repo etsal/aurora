@@ -32,6 +32,7 @@ typedef struct {
   index_t super_freelist[];
 } super_t;
 
+#define INODE_MAX_BOUND (64)
 
 typedef struct {
 	index_t i_index;
@@ -40,7 +41,7 @@ typedef struct {
   uint64_t i_version;
   
   int16_t i_cnt;
-  index_t i_checkpointed_with[];
+  index_t i_checkpointed_with[INODE_MAX_BOUND];
 } osinode_t;
 
 struct objsnap_init_args {
@@ -62,10 +63,18 @@ struct objsnap_dirty_page_args {
   uintptr_t os_page;
 };
 
+struct objsnap_stat_args {
+  index_t os_index; /* IN: Inode to get*/
+  osinode_t os_inode; /* OUT: Inode structure */
+};
+
 #define OBJSNAP_CHECKPOINT _IOWR('d', 1, struct objsnap_checkpoint_args)
 #define OBJSNAP_CREATEOBJ _IOWR('d', 2, struct objsnap_create_args)
 #define OBJSNAP_DIRTYPAGE _IOWR('d', 3, struct objsnap_dirty_page_args)
 #define OBJSNAP_INIT _IOWR('d', 4, struct objsnap_init_args)
+
+
+#define OBJSNAP_STAT _IOWR('d', 5, struct objsnap_stat_args)
 
 #ifdef __cplusplus
 }
