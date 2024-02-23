@@ -11,9 +11,8 @@ struct allocator {
 };
 
 void allocator_init(void);
-
+int write_ondisk_inode(osinode_t *inode);
 diskptr_t allocate_block(void);
-
 osinode_t *allocate_inode(void);
 
 #endif

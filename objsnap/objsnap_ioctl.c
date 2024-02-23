@@ -106,7 +106,9 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	index_t *inodes = args->ckpt_inodes;
 	int i;
 	struct objsnap_vnode *vnode;
+	osinode_t *inode;
 	struct checkpoint_data *sets;
+	int error = 0;
 	// Acquire Locks to copy over dirty lists, we need to worry about holding
 	// onto the commit lock for too long. so well need to let go of our locks
 	// and retry.
@@ -146,17 +148,25 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 			// Serialize
 			write_page(pinfo->page, ptr);
 		}
-		vnode = &vnode_cache[i];
-		//diskptr_t newroot = 
-		VTREE_CHECKPOINT(&vnode->v_tree);
+		vnode = &vnode_cache[i]; 
+		inode = vnode->v_inode;
+		inode->i_treeptr = VTREE_CHECKPOINT(&vnode->v_tree);
 
 		// Update inodes to include checkpoint lists
-		osinode_t *inode = vnode->v_inode;
+
 		for (int t = 0; t < cnt; t++) {
 			inode->i_checkpointed_with[t] = sets[t].cp_inode;
 		}
+		
 		inode->i_cnt = cnt;
 		inode->i_version += 1;
+
+		// Get the sibling inode and write to that instead.
+		inode->i_index = inode->i_index % 2 ? inode->i_index + 1 : inode->i_index - 1;
+
+		if ((error = write_ondisk_inode(inode))) {
+			printf("Issue printing inode!\n");
+		}
 	}
 
 

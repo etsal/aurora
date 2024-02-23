@@ -34,7 +34,7 @@ diskptr_t allocate_block()
     return (diskptr_t)atomic_fetchadd_64(&alloc.alloc_next_block, 1);
 }
 
-static int 
+int 
 write_ondisk_inode(osinode_t *inode)
 {
     int error;
