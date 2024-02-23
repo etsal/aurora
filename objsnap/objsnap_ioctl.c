@@ -111,7 +111,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	// onto the commit lock for too long. so well need to let go of our locks
 	// and retry.
 	for (i = 0; i < cnt; i++) {
-		vnode = INDEX_TO_VNODE(inodes[i]);
+		vnode = &vnode_cache[i];
 		LOCK(&vnode->v_lock, LK_EXCLUSIVE);
 		LOCK(&vnode->v_commit_lock, LK_EXCLUSIVE);
 	}
@@ -119,7 +119,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	// Copy out the dirty sets
 	sets = malloc(sizeof(struct checkpoint_data) * cnt, M_OBJSNAP, M_WAITOK);
 	for (i = 0; i < cnt; i++) {
-		vnode = INDEX_TO_VNODE(inodes[i]);
+		vnode = &vnode_cache[i];
 		memcpy(&sets[i].cp_d, &vnode->v_dirty, sizeof(struct dirtyset));
 		sets[i].cp_inode = inodes[i];
 
@@ -129,26 +129,41 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	// Unlock Node locks!
 	for (i = 0; i < cnt; i++) {
-		vnode = INDEX_TO_VNODE(inodes[i]);
+		vnode = &vnode_cache[i];
 		UNLOCK(&vnode->v_lock);
 	}
 
 	
 	// Update data and trees
 	for (i = 0; i < cnt; i++) {
-		for (int t = 0; t < sets[i].cp_d.d_cnt; t++) {
+		struct checkpoint_data *set = &sets[i];
+		for (int t = 0; t < set->cp_d.d_cnt; t++) {
 			// Update the tree
-			vm_page_t page = sets[i].cp_d.d_pg[t].page;
+			struct pageset *pinfo = &set->cp_d.d_pg[t];
 			diskptr_t ptr = allocate_block();
-			printf("Inserting into tree %lu\n", IDX_TO_OFF(page->pindex));
-			VTREE_INSERT(&vnode->v_tree, IDX_TO_OFF(page->pindex), &ptr);
+			printf("Inserting into tree %lu\n", IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE);
+			VTREE_INSERT(&vnode->v_tree, IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &ptr);
 			// Serialize
-			write_page(page, ptr);
+			write_page(pinfo->page, ptr);
 		}
+		vnode = &vnode_cache[i];
+		//diskptr_t newroot = 
+		VTREE_CHECKPOINT(&vnode->v_tree);
+
+		// Update inodes to include checkpoint lists
+		osinode_t *inode = vnode->v_inode;
+		for (int t = 0; t < cnt; t++) {
+			inode->i_checkpointed_with[t] = sets[t].cp_inode;
+		}
+		inode->i_cnt = cnt;
+		inode->i_version += 1;
 	}
+
+
+
 	// Unlock commit locks
 	for (i = 0; i < cnt; i++) {
-		vnode = INDEX_TO_VNODE(inodes[i]);
+		vnode = &vnode_cache[i];
 		UNLOCK(&vnode->v_commit_lock);
 	}
 
@@ -168,13 +183,13 @@ objsnap_create(struct objsnap_create_args *args)
 		return;
 	}
 
-	args->os_index = inode->i_index;
+	args->os_index = inode->i_index / 2;
 
 	return;
 }
 
-static struct vm_page * 
-usrptr_to_page(vm_offset_t ptr) {
+static int
+usrptr_to_page(vm_offset_t ptr, struct pageset *pinfo) {
 	vm_map_entry_t entry;
 	vm_object_t obj;
 	vm_pindex_t pindex;
@@ -188,16 +203,13 @@ usrptr_to_page(vm_offset_t ptr) {
 
 	// Check if page is valid range
 	if (!vm_map_range_valid(&vms->vm_map, ptr, ptr + BLOCKSIZE))
-		return NULL;
+		return (-1);
 
 	if (vm_map_lookup(&map, ptr, VM_PROT_READ | VM_PROT_WRITE, 
 		&entry, &obj, &pindex, &out_prot, &wired) != KERN_SUCCESS) {
 		// Error handling
-		return NULL;
-	}
-
-	vm_map_unlock_read(map);
-	
+		return (-1);
+	}	
 
 	// Convert the KVA to a physical address (PA)
 	vm_paddr_t pa = vtophys(entry);
@@ -205,8 +217,10 @@ usrptr_to_page(vm_offset_t ptr) {
 	// Obtain the vm_page structure corresponding to the physical address
 	struct vm_page *page = PHYS_TO_VM_PAGE(pa);
 
-	
-	return page;
+	vm_map_unlock_read(map);
+	pinfo->page = page;
+	pinfo->pindex = pindex;
+	return (0);
 }
 
 
@@ -215,11 +229,11 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 {
 	vm_offset_t addr = args->os_page;
 	index_t inode_i = args->os_index;
-	struct vm_page *page;
+	struct pageset pageinfo;
 	int error = 0;
 
-	struct objsnap_vnode *vnode = INDEX_TO_VNODE(inode_i);
-
+	struct objsnap_vnode *vnode = &vnode_cache[inode_i];
+	printf("Adding to dirty set!\n");
 	if (vnode->v_magic != OBJMAGIC) {
 		printf("Invalid vnode\n");
 		return (error);
@@ -227,24 +241,24 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 
 	LOCK(&vnode->v_lock, LK_EXCLUSIVE);
 
-	page = usrptr_to_page(addr);
-	if (page == NULL) {
+	error = usrptr_to_page(addr, &pageinfo);
+	if (error) {
 		UNLOCK(&vnode->v_lock);
 		return EINVAL;
 	}
 
 	// SLOW LOOKUP
 	for (int i = 0; i < vnode->v_dirty.d_cnt; i++) {
-		vm_page_t p = vnode->v_dirty.d_pg[i].page;
-		if (page == p) {
+		vm_pindex_t p = vnode->v_dirty.d_pg[i].pindex;
+		if (pageinfo.pindex == p) {
 			UNLOCK(&vnode->v_lock);
 			return (0);
 		}
 	}
 
-	printf("Adding %lu to dirty set\n", IDX_TO_OFF(page->pindex));
+	printf("Adding %lu to dirty set\n", IDX_TO_OFF(pageinfo.pindex));
 
-	vnode->v_dirty.d_pg[vnode->v_dirty.d_cnt].page = page;
+	vnode->v_dirty.d_pg[vnode->v_dirty.d_cnt] = pageinfo;
 	vnode->v_dirty.d_cnt += 1;
 
 	UNLOCK(&vnode->v_lock);

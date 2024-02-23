@@ -36,6 +36,7 @@ struct objsnap_metadata {
 
 struct pageset {
 	vm_page_t page;
+	vm_pindex_t pindex;
 };
 
 struct dirtyset {
@@ -57,6 +58,7 @@ extern struct objsnap_metadata osdata;
 extern struct allocator alloc;
 extern super_t superblock;
 extern struct objsnap_vnode *vnode_cache;
+
 #define LOCK(lock, type) (lockmgr(lock, type, NULL))
 #define UNLOCK(lock) (lockmgr(lock, LK_RELEASE, NULL))
 
