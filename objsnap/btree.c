@@ -15,7 +15,7 @@
 #include "btree.h"
 #include "alloc.h"
 
-#define DEBUG
+//#define DEBUG
 
 #define INDEX_NULL ((uint16_t)-1)
 
@@ -38,7 +38,7 @@ binary_search(uint64_t* arr, size_t size, uint64_t key)
   /* In many cases linear search is faster then binary as it
    * can take advantage of streaming prefetching so have a cut
    * off where we switch to linear search */
-  if (size <= BINARY_SEARCH_CUTOFF) {
+  //if (size <= BINARY_SEARCH_CUTOFF) {
     for (int i = 0; i < size; i++) {
       if (arr[i] >= key) {
         return i;
@@ -46,7 +46,7 @@ binary_search(uint64_t* arr, size_t size, uint64_t key)
     }
 
     return size;
-  }
+  //}
 
   size_t low = 0;
   size_t high = size;
@@ -68,7 +68,7 @@ binary_search(uint64_t* arr, size_t size, uint64_t key)
 static void
 btnode_print(btnode_t node)
 {
-  printf("\nNode %lx %u\n", node->n_ptr, BLOCKSIZE);
+  printf("\nNode %lu %lu\n", node->n_ptr, BLOCKSIZE);
   for (int i = 0; i < node->n_len; i += 10) {
     printf("%d: ", i);
     for (int j = i; j < i + 10 && j < node->n_len; j++) {
@@ -81,7 +81,7 @@ btnode_print(btnode_t node)
     for (int i = 0; i < (node->n_len + 1); i += 10) {
       printf("%d: ", i);
       for (int j = i; j < i + 10 && (j < (node->n_len + 1)); j++) {
-        printf(" %lx |", (*(diskptr_t*)(&node->n_ch[j])));
+        printf(" %lu |", node->n_ch[j]);
       }
       printf("\n");
     }
@@ -119,14 +119,15 @@ btnode_wrap_bp(btnode_t node, btree_t tree, struct buf* bp)
 static void
 btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 {
-  struct buf* bp = getblk(tree->tr_vp, ptr, BLOCKSIZE, 0, 0, 0);
+  struct buf *bp;
+  int error = 0;
+  error = bread(tree->tr_vp, DEVICE_BLOCK_NUM(ptr), BLOCKSIZE, NOCRED, &bp);
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
   node->n_ptr = ptr;
-
 #ifdef DEBUG
-  printf("[Btnode init] %p COW(%d)\n", bp, BT_ISCOW(node));
+  printf("[Btnode Init] %p COW(%d) PTR(%lu) Size(%u) Datap(%p) MAX(%lu) Device(%lu)\n", bp, BT_ISCOW(node), ptr, node->n_len, bp->b_data, BT_MAX_KEYS, DEVICE_BLOCK_NUM(ptr));
 #endif
 }
 
@@ -135,9 +136,19 @@ static void
 btnode_create(btnode_t node, btree_t tree, uint8_t type)
 {
   diskptr_t ptr = allocate_block();
-  btnode_init(node, tree, ptr, LK_EXCLUSIVE);
+
+  struct buf *bp = getblk(tree->tr_vp, DEVICE_BLOCK_NUM(ptr), BLOCKSIZE, 0, 0, 0);
+  bzero(bp->b_data, BLOCKSIZE);
+  node->n_bp = bp;
+  node->n_data = (btdata_t)bp->b_data;
+  node->n_tree = tree;
+  node->n_ptr = ptr;
   node->n_type = type;
   node->n_len = 0;
+
+#ifdef DEBUG
+  printf("[Btnode Create] %p COW(%d) PTR(%lu) Size(%u) Datap(%p) MAX(%lu) Device(%lu)\n", bp, BT_ISCOW(node), ptr, node->n_len, bp->b_data, BT_MAX_KEYS, DEVICE_BLOCK_NUM(ptr));
+#endif
 }
 
 /* Caller must check to see if parent */
@@ -179,7 +190,7 @@ path_cow(bpath_t path)
 
       btnode_create(&path->p_nodes[i], tmp.n_tree, tmp.n_type);
       /* Perform the copy of data or however we choose to transfer it over */
-      memcpy(path->p_nodes[i].n_data, tmp.n_data, BLOCKSIZE);
+      memcpy(path->p_nodes[i].n_bp->b_data, tmp.n_bp->b_data, BLOCKSIZE);
 
       /* Update our parent to know of the change */
       if (i > 0) {
@@ -188,6 +199,10 @@ path_cow(bpath_t path)
         /* Make sure we update our root ptr in our main tree datastructure */
         path->p_nodes[i].n_tree->tr_ptr = path->p_nodes[i].n_ptr;
       }
+
+#ifdef DEF
+      printf("[Btnode COW] %p -> %p)\n", tmp.n_bp, path->p_nodes[i].n_bp);
+#endif
 
       /* We must invalidate the buffer to insure it never writes */
       tmp.n_bp->b_flags |= B_INVAL;
@@ -219,7 +234,7 @@ static inline void
 path_unacquire(bpath_t path, int acquire_as)
 {
   for (int i = 0; i < path->p_len; i++) {
-    brelse(path->p_nodes[i].n_bp);
+    bdwrite(path->p_nodes[i].n_bp);
   }
 }
 
@@ -351,8 +366,12 @@ btnode_inner_insert(btnode_t node, int idx, uint64_t key, diskptr_t value)
             num_to_move * BT_MAX_VALUE_SIZE);
   }
 
+#ifdef DEBUG
+  printf("[Internal Insert] %lu at %d in node %lu, Size %u\n", key, idx, node->n_ptr, node->n_len);
+#endif
+  
   node->n_keys[idx] = key;
-  memcpy(&node->n_ch[idx + 1], &value, sizeof(value));
+  node->n_ch[idx + 1] = value;
   node->n_len += 1;
 
   btnode_dirty(node);
@@ -367,23 +386,24 @@ btnode_split(bpath_t path)
   btnode parent;
   btnode right_child;
 
-#ifdef DEBUG
-  printf("[Split]\n");
-#endif
 
   /* We are the root */
   if (pptr == NULL) {
+#ifdef DEBUG
+    printf("[Parent Split]\n");
+#endif
     btnode_create(&parent, node->n_tree, BT_INNER);
     /* Set our current node to the child of our new parent */
-    memcpy(&parent.n_ch[0], &node->n_ptr, sizeof(diskptr_t));
-
+    parent.n_ch[0] = node->n_ptr;
     node = path_fixup_cur_parent(path, &parent);
-
     /* Fixup root parent ptr in the tree */
     node->n_tree->tr_ptr = parent.n_ptr;
-
     idx = 0;
   } else {
+#ifdef DEBUG
+    printf("[Split]\n");
+#endif
+
     parent = *pptr;
     idx = path_getindex(path);
   }
@@ -391,7 +411,6 @@ btnode_split(bpath_t path)
   btnode_create(&right_child, node->n_tree, node->n_type);
 
   right_child.n_len = SPLIT_KEYS;
-
   if (BT_ISLEAF(node)) {
     node->n_len = SPLIT_KEYS;
   } else {
@@ -400,21 +419,16 @@ btnode_split(bpath_t path)
 
   uint64_t split_key = node->n_keys[SPLIT_KEYS - 1];
 
-  memcpy(&right_child.n_keys[0],
+  memcpy(right_child.n_keys,
          &node->n_keys[SPLIT_KEYS],
          SPLIT_KEYS * sizeof(uint64_t));
-  if (BT_ISLEAF(node))
-    memcpy(&right_child.n_ch[0],
-           &node->n_ch[SPLIT_KEYS],
-           (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
-  else
-    memcpy(&right_child.n_ch[0],
-           &node->n_ch[SPLIT_KEYS],
-           (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
-
+  memcpy(right_child.n_ch,
+          &node->n_ch[SPLIT_KEYS],
+          (SPLIT_KEYS + 1) * BT_MAX_VALUE_SIZE);
   /* Setting the pivot key here, with SPLIT_KEYS - 1, means elements to the
    * right must be strictly greater
    */
+
   btnode_inner_insert(&parent, idx, split_key, right_child.n_ptr);
 
   /* Unlock the right child and dirty the children*/
@@ -436,6 +450,11 @@ btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
   KASSERT(BT_ISLEAF(node), ("MUST BE LEAF"));
   KASSERT(!BT_ISCOW(node), ("MUST NOT BE COW"));
   int num_to_move = node->n_len - idx;
+
+#ifdef DEBUG
+  printf("[Insert] %lu at %d in node %lu, Size %u\n", key, idx, node->n_ptr, node->n_len);
+  printf("[Insert Extra] base(%p), insert_at(%p), num(%d)\n", node->n_data, &node->n_ch[idx + 2], num_to_move);
+#endif
   if (num_to_move > 0) {
     memmove(
       &node->n_keys[idx + 1], &node->n_keys[idx], num_to_move * sizeof(key));
@@ -447,12 +466,9 @@ btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
             num_to_move * BT_MAX_VALUE_SIZE);
   }
 
-#ifdef DEBUG
-  printf("[Insert] %lu at %d in node %lu\n", key, idx, node->n_ptr);
-#endif
 
   node->n_keys[idx] = key;
-  memcpy(&node->n_ch[idx + 1], value, BT_VALSZ(node));
+  memcpy(&node->n_ch[idx + 1], value, sizeof(diskptr_t));
   node->n_len += 1;
 
   bdirty(node->n_bp);
@@ -471,7 +487,6 @@ static int
 btnode_insert(bpath_t path, uint64_t key, void* value)
 {
   int idx;
-
   btnode_find_child(path, key, LK_EXCLUSIVE);
   btnode_t node = path_getcur(path);
   idx = binary_search(node->n_keys, node->n_len, key);
@@ -496,6 +511,7 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
 
   return 0;
 }
+
 static void
 btnode_leaf_delete(btnode_t node, int idx, void* value)
 {

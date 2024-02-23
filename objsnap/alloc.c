@@ -49,7 +49,7 @@ write_ondisk_inode(osinode_t *inode)
     }
     memcpy(ino_bp->b_data, inode, sizeof(osinode_t));
     bbarrierwrite(ino_bp);
-    printf("[Inode Write] Inode(%lu), Treeptr(%lu), Version(%lu)\n", inode->i_index, inode->i_treeptr, inode->i_version);
+    printf("[Inode Write] Inode(%d), Treeptr(%lu), Version(%lu)\n", inode->i_index, inode->i_treeptr, inode->i_version);
 
     return (0);
 }
@@ -65,8 +65,9 @@ osinode_t *allocate_inode()
 {
     struct buf *super_bp;
     int error = 0;
+
     osinode_t *newinode = malloc(sizeof(osinode_t), M_OBJSNAP, M_WAITOK);
-    newinode->i_index = atomic_fetchadd_64(&superblock.super_next, 2);
+    newinode->i_index = atomic_fetchadd_int(&superblock.super_next, 2);
     newinode->i_treeptr = allocate_block();
     newinode->i_version = 0;
     newinode->i_cnt = 0;
@@ -83,12 +84,11 @@ osinode_t *allocate_inode()
     // Initialize ondisk root block
     error = bread(osdata.os_vp, DEVICE_BLOCK_NUM(newinode->i_treeptr), 
         BLOCKSIZE, NOCRED, &super_bp);
-    
+
     // We just dirty, they have created but not checkpointed so don't need to write here.
     bzero(super_bp->b_data, BLOCKSIZE);
     bdirty(super_bp);
     brelse(super_bp);
-    
     LOCK_SUPER();
 
     if ((error = write_ondisk_inode(newinode)) != 0) {

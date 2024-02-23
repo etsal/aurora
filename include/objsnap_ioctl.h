@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define BLOCKSIZE (4096)
+#define BLOCKSIZE (4096UL)
 #define MAXINODES (1024)
 #define CKPT_MAXINODES (64)
 
@@ -16,7 +16,7 @@ extern "C" {
 #define BADINDEX ((index_t)(-1))
 
 typedef uint64_t epoch_t;
-typedef uint64_t index_t;
+typedef int index_t;
 typedef uint64_t diskptr_t;
 
 typedef struct {

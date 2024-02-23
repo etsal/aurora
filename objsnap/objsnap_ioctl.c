@@ -110,6 +110,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	osinode_t *inode;
 	struct checkpoint_data *sets;
 	int error = 0;
+
 	// Acquire Locks to copy over dirty lists, we need to worry about holding
 	// onto the commit lock for too long. so well need to let go of our locks
 	// and retry.
@@ -173,8 +174,6 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 			printf("Issue writing inode!\n");
 		}
 	}
-
-
 
 	// Unlock commit locks
 	for (i = 0; i < cnt; i++) {
@@ -270,8 +269,6 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 		}
 	}
 
-	printf("Adding %lu to dirty set\n", IDX_TO_OFF(pageinfo.pindex));
-
 	vnode->v_dirty.d_pg[vnode->v_dirty.d_cnt] = pageinfo;
 	vnode->v_dirty.d_cnt += 1;
 
@@ -366,8 +363,6 @@ objsnap_stat(struct objsnap_stat_args *args)
 	}
 
 	args->os_inode = *vnode->v_inode;
-	printf("Inode[%lu] Tree(%lu)\n", vnode->v_inode->i_index, vnode->v_inode->i_treeptr);
-
 	return (0);
 }
 
@@ -381,6 +376,11 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 
 	case OBJSNAP_INIT:
 		objsnap_init((struct objsnap_init_args *)data);
+
+		// We did not create the FS!
+		if (superblock.super_bsize == 0) {
+			error = -1;
+		}
 		break;
 
 	case OBJSNAP_CHECKPOINT:

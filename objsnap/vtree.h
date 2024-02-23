@@ -28,7 +28,7 @@ MALLOC_DECLARE(M_OBJSNAP);
  */
 
 /* Max value size for tree in bytes */
-#define BT_MAX_VALUE_SIZE (32)
+#define BT_MAX_VALUE_SIZE (sizeof(diskptr_t))
 
 typedef struct kvp
 {

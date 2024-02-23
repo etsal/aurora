@@ -72,7 +72,7 @@ extern struct objsnap_vnode *vnode_cache;
 #define UNLOCK_SUPER() (UNLOCK(&osdata.os_lock))
 
 #define INDEX_TO_VNODE(i) (&vnode_cache[(i) / 2])
-#define DEVICE_BLOCK_NUM(blki) ((blki) * (BLOCKSIZE / superblock.super_bsize))
+#define DEVICE_BLOCK_NUM(blki) ((blki) * ((uint64_t)BLOCKSIZE / superblock.super_bsize))
 
 
 #endif

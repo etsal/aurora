@@ -19,7 +19,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <uuid.h>
+#include <stdlib.h>
 
+#include <assert.h>
 #include <objsnap.h>
 #include <objsnap_ioctl.h>
 
@@ -79,7 +81,7 @@ int newfs(const char *path)
 		 * block size.
 		 */
 		ssize = 4 * 1024;
-		bsize = 64 * 1024;
+		bsize = 4 * 1024;
 	} else {
 		fprintf(
 		    stderr, "You can only create an OSD on a device or file\n");
@@ -98,7 +100,7 @@ int newfs(const char *path)
     super_t *sb = (super_t *)malloc(BLOCKSIZE);
 	memset(sb, 0, ssize);
 	sb->super_ssize = ssize;
-	sb->super_bsize = bsize;
+	sb->super_bsize = 512;
 	sb->super_size = size;
 	sb->super_asize = bsize;
     sb->super_max_inodes = MAXINODES;
@@ -129,67 +131,118 @@ int newfs(const char *path)
 	return (0);
 }
 
-
-int main()
+int 
+setup()
 {
-	osinode_t actualinode;
-    
-    int error = newfs("/dev/nvd0");
-    if (error) {
-        printf("Problem creating new objsnap device");
-        return -1;
-    }
+ 	int error = newfs("/dev/nvd0");
+	if (error) {
+		printf("Problem creating new objsnap device");
+		return error;
+	}
 
-    error = objsnap_init("/dev/nvd0");
-    if (error) {
-        printf("Error with objsnap init\n");
-        return -1;
-    }
+	error = objsnap_init("/dev/nvd0");
+	if (error) {
+		printf("Error with objsnap init\n");
+		return error;
+	}
 
-    char *addr = mmap(NULL, BLOCKSIZE * 100, PROT_READ | PROT_WRITE, 
+	return (0);
+}
+
+
+struct mapping {
+	index_t inode;
+	char *map;
+};
+
+int
+setup_map(struct mapping *map, size_t size_in_blocks)
+{
+	map->inode = objsnap_create();
+	map->map = mmap(NULL, BLOCKSIZE * size_in_blocks, PROT_READ | PROT_WRITE, 
         MAP_ANON, -1, 0);
-    if (addr == MAP_FAILED) {
+    if (map->map == MAP_FAILED) {
         printf("MMAP FAILED\n");
         return -1;
     }
 
-    printf("Init good!\n");
+	return (0);
+}
 
-    index_t inode1 = objsnap_create();
+int dirty_map(struct mapping *map, off_t offset) 
+{
+	return objsnap_dirty(map->inode, map->map + (offset * BLOCKSIZE));
+}
 
-    printf("Object created! %lu\n", inode1);
+int checkpoint_maps(struct mapping *maps, size_t cnt)
+{
+	index_t indexes[1024];
+	for (int i = 0; i < cnt; i++) {
+		indexes[i] = maps[i].inode;
+	}
+    return objsnap_checkpoint(indexes, cnt);
+}
 
-    index_t checkpointed[1];
-    checkpointed[0] = inode1;
-
-    error = objsnap_checkpoint(checkpointed, 1);
-    if (error) {
-        printf("Problem Checkpointing");
+void
+basicTest()
+{
+	struct mapping map;
+	int error = 0;
+	if ((error = setup())) {
+        printf("Problem in Setup!");
+		return;
     }
 
-	error = objsnap_stat(inode1, &actualinode);
-	if (error) {
-        printf("Problem Statting");
+	if ((error = setup_map(&map, 1024))) {
+		printf("Error in setting up mapping\n");
+	}
+
+	if ((error = dirty_map(&map, 0))) {
+		printf("Problem dirtying mapping\n");
+	}
+
+	if ((error = checkpoint_maps(&map, 1))) {
+		printf("Problem Checkpointing mappings\n");
+	}
+}
+
+void
+random_write_load(int num_objs, int size_of_obj_in_blocks, int writes_per_iteration, int times)
+{
+	int error = 0;
+	if ((error = setup())) {
+        printf("Problem in Setup!");
+		return;
     }
 
-	printf("Inode[%lu]: Tree(%lu), Version(%lu)\n", actualinode.i_index, actualinode.i_treeptr, actualinode.i_version);
+	srand(time(NULL));
+
+	struct mapping *maps = (struct mapping *)malloc(sizeof(struct mapping) * num_objs);
+	for (int i = 0; i < num_objs; i++) {
+		setup_map(&maps[i], size_of_obj_in_blocks);
+	}
 
 
-    error = objsnap_dirty(inode1, addr);
-    if (error) {
-        printf("Could not dirty page");
-    }
+	// Do writes
+	for (int times_i = 0; times_i < times; times_i++) {
+		for (int obj_i = 0; obj_i < num_objs; obj_i++ ) {
+			for (int writes_i = 0; writes_i < writes_per_iteration; writes_i++) {
+				int rand_offset = rand() % size_of_obj_in_blocks;
+				dirty_map(&maps[obj_i], rand_offset);
+			}
+		}
+		checkpoint_maps(maps, num_objs);
+	}
 
-	
-    error = objsnap_checkpoint(checkpointed, 1);
-    if (error) {
-        printf("Problem Checkpointing");
-    }
 
-	error = objsnap_stat(inode1, &actualinode);
-	if (error) {
-        printf("Problem Statting");
-    }
+	for (int i = 0; i < num_objs; i++) {
+		munmap(maps[i].map, BLOCKSIZE * size_of_obj_in_blocks);
+	}
 
-	printf("Inode[%lu]: Tree(%lu), Version(%lu)\n", actualinode.i_index, actualinode.i_treeptr, actualinode.i_version);
+	free(maps);
+}
+
+int main()
+{
+	random_write_load(1, 1024 * 1024, 16, 1000);	
 }

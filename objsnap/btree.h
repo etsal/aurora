@@ -21,9 +21,9 @@
 
 #include "vtree.h"
 
-#define BT_MAX_KEY_SIZE (8)
-#define BT_MAX_HDR_SIZE (64)
-#define BT_MAX_PATH_SIZE (10)
+#define BT_MAX_KEY_SIZE (8L)
+#define BT_MAX_HDR_SIZE (64L)
+#define BT_MAX_PATH_SIZE (10L)
 
 #define BT_LEAF (0)
 #define BT_INNER (1)
@@ -32,9 +32,10 @@
  * (BLKSZ - BT_MAX_HDR_SIZE - BT_MAX_VALUE_SIZE) /
  *  (BT_MAX_KEY_SIZE + BT_MAX_VALUE_SIZE)
  */
-#define TOP (BLOCKSIZE - sizeof(btnodehdr) - sizeof(diskptr_t))
-#define BOT (sizeof(diskptr_t) + sizeof(uint64_t))
-#define BT_MAX_KEYS (TOP / BOT)
+#define TOP (BLOCKSIZE - BT_MAX_HDR_SIZE - BT_MAX_VALUE_SIZE)
+#define BOT (BT_MAX_KEY_SIZE + BT_MAX_VALUE_SIZE)
+#define PADDING (10)
+#define BT_MAX_KEYS ((TOP / BOT))
 #define SPLIT_KEYS (BT_MAX_KEYS / 2)
 
 #define BT_COW (1)
@@ -70,7 +71,7 @@ typedef struct btdata
   uint64_t bt_keys[BT_MAX_KEYS];
 
   /* Make sure to add one child for inner nodes */
-  ct bt_children[BT_MAX_KEYS + 1];
+  diskptr_t bt_children[BT_MAX_KEYS + 1];
 } btdata;
 
 typedef btdata* btdata_t;
