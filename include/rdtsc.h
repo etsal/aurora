@@ -12,10 +12,7 @@
  *
  */
 
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <unistd.h>
+#include <sys/types.h>
 
 #define cycles_to_ns(cycles, clock_freq)                                       \
   ((double)((double)(cycles) / (clock_freq / 1e9)))
@@ -31,6 +28,10 @@
 
 #define rdtsc() (rdtsc_cycles())
 #define rdtscp() (rdtscp_cycles())
+
+#ifdef _KERNEL
+#define asm __asm__
+#endif
 
 /*
  * Read System Clock
@@ -72,7 +73,7 @@ rdtscp_cycles()
   return ret;
 }
 
-double
+static double
 rdtsc_average()
 {
   uint64_t iterations = 10000000;
@@ -87,7 +88,7 @@ rdtsc_average()
   return cost / iterations;
 }
 
-double
+static double
 rdtscp_average()
 {
   uint64_t iterations = 10000000;
@@ -112,7 +113,9 @@ rdtscp_average()
  * constant at the start of a program initialization phase and just reuse this
  * constant throughout.
  */
-uint64_t
+
+#ifndef _KERNEL 
+static uint64_t
 get_clock_speed_sleep()
 {
   uint64_t start, end;
@@ -121,5 +124,48 @@ get_clock_speed_sleep()
   end = rdtscp();
   return end - start;
 }
+#endif
 
+struct cycletimer {
+  uint64_t ct_before;
+  uint64_t ct_sum;
+  uint64_t ct_cnt;
+};
+
+struct timerstat {
+  char name[256];
+  uint64_t avg;
+  uint64_t cnt;
+  uint64_t sum;
+};
+
+static void 
+ctstart(struct cycletimer *ct) {
+  ct->ct_before = rdtscp();
+}
+
+static void 
+ctstop(struct cycletimer *ct) {
+  ct->ct_sum += rdtscp() - ct->ct_before;
+  ct->ct_cnt += 1;
+  ct->ct_before = 0;
+}
+
+static void 
+ctreset(struct cycletimer *ct) {
+  ct->ct_sum = 0;
+  ct->ct_cnt = 0;
+  ct->ct_before = 0;
+}
+
+static struct timerstat 
+ctstat(char *name, struct cycletimer *ct) {
+  struct timerstat st;
+  st.avg = ct->ct_sum / ct->ct_cnt;
+  st.cnt = ct->ct_cnt;
+  st.sum = ct->ct_sum;
+  strcpy(st.name, name);
+
+  return st;
+}
 #endif

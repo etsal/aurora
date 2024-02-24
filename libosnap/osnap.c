@@ -91,6 +91,22 @@ int objsnap_stat(index_t fd, osinode_t *inode)
     return (error);
 }
 
+int objsnap_systemstats(statblock *stats, int *cnt)
+{
+    int error = 0;
+    struct objsnap_systemstats_args args;
+
+    if ((error = objsnap_fd_check()) != 0) {
+        return error;
+    }
+
+    error = ioctl(OS_FD, OBJSNAP_SYSTEMSTATS, &args);
+    memcpy(stats, args.os_stats, sizeof(statblock));
+    *cnt = args.os_cnt;
+
+    return (error);
+}
+
 int 
 objsnap_checkpoint(index_t *fds, int size)
 {

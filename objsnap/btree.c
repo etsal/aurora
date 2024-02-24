@@ -11,7 +11,7 @@
 #include <sys/rwlock.h>
 #include <sys/bufobj.h>
 
-#include "objsnap_ioctl.h"
+#include "objsnap_internal.h"
 #include "btree.h"
 #include "alloc.h"
 
@@ -167,15 +167,16 @@ path_cow(bpath_t path)
 #ifdef DEBUG
   printf("[PATH COW]\n");
 #endif
-  btnode tmp;
+  btnode_t tmp;
   btnode_t parent = NULL;
+  struct bufobj *bo;
   int idx;
   /* We hold all the locks of the path exclusively so we can change the parent
    */
   for (int i = 0; i < path->p_len; i++) {
     /* Check if node is not already COWed */
-    tmp = path->p_nodes[i];
-    if (!BT_ALREADY_COW(&tmp)) {
+    tmp = &path->p_nodes[i];
+    if (!BT_ALREADY_COW(tmp)) {
 
       /* Grab our index in our parent */
       if (i > 0) {
@@ -188,29 +189,42 @@ path_cow(bpath_t path)
         /* TODO: Update any consumer that this root has changed */
       }
 
-      btnode_create(&path->p_nodes[i], tmp.n_tree, tmp.n_type);
+      bo = &tmp->n_tree->tr_vp->v_bufobj;
+      diskptr_t newptr = allocate_block();
+
+      // Release the buffer from its mapping
+      brelvp(tmp->n_bp);
+
+      // Assign our new pointer
+      tmp->n_ptr = newptr;
+
+      BO_LOCK(bo);
+
+      tmp->n_bp->b_lblkno = DEVICE_BLOCK_NUM(tmp->n_ptr);
+      tmp->n_bp->b_blkno = DEVICE_BLOCK_NUM(tmp->n_ptr);
+
+      // Place buffer back onto parent
+      bgetvp(tmp->n_tree->tr_vp, tmp->n_bp);
+
+      BO_UNLOCK(bo);
+
       /* Perform the copy of data or however we choose to transfer it over */
-      memcpy(path->p_nodes[i].n_bp->b_data, tmp.n_bp->b_data, BLOCKSIZE);
 
       /* Update our parent to know of the change */
       if (i > 0) {
-        memcpy(&parent->n_ch[idx], &path->p_nodes[i].n_ptr, sizeof(diskptr_t));
+        memcpy(&parent->n_ch[idx], &tmp->n_ptr, sizeof(diskptr_t));
       } else {
         /* Make sure we update our root ptr in our main tree datastructure */
-        path->p_nodes[i].n_tree->tr_ptr = path->p_nodes[i].n_ptr;
+        tmp->n_tree->tr_ptr = tmp->n_ptr;
       }
 
-#ifdef DEF
+#ifdef DEBUG
       printf("[Btnode COW] %p -> %p)\n", tmp.n_bp, path->p_nodes[i].n_bp);
 #endif
 
-      /* We must invalidate the buffer to insure it never writes */
-      tmp.n_bp->b_flags |= B_INVAL;
-      brelse(tmp.n_bp);
-
       /* Turn off cow on the node and dirty the node */
-      BT_FRESH_COW(&path->p_nodes[i]);
-      btnode_dirty(&path->p_nodes[i]);
+      BT_FRESH_COW(tmp);
+      btnode_dirty(tmp);
     }
   }
 }
@@ -486,19 +500,23 @@ btnode_leaf_update(btnode_t node, int idx, void* value)
 static int
 btnode_insert(bpath_t path, uint64_t key, void* value)
 {
+  OS_START(BTFIND);
   int idx;
   btnode_find_child(path, key, LK_EXCLUSIVE);
   btnode_t node = path_getcur(path);
   idx = binary_search(node->n_keys, node->n_len, key);
-
+  OS_STOP(BTFIND);
   /*
    * If node is COW'd this means the entire path leading
    * to this node must be COW'd
    * */
   if (BT_ISCOW(node)) {
+    OS_START(BTCOW);
     path_cow(path);
+    OS_STOP(BTCOW);
   }
 
+  OS_START(BTINSERT);
   /* Update over insert */
   if (node->n_keys[idx] == key && node->n_len) {
     btnode_leaf_update(node, idx, value);
@@ -508,6 +526,7 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
       btnode_split(path);
     }
   }
+  OS_STOP(BTINSERT);
 
   return 0;
 }

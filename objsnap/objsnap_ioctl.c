@@ -99,6 +99,19 @@ write_page(
 	return;
 }
 
+static int
+objsnap_systemstats(struct objsnap_systemstats_args *args) {
+	STAT_TO_ARGS(args, LOCKANDCOPY);
+	STAT_TO_ARGS(args, SERIALIZE);
+	STAT_TO_ARGS(args, UNLOCK);
+	STAT_TO_ARGS(args, INSERTPLUSPAGE);
+	STAT_TO_ARGS(args, INODE);
+	STAT_TO_ARGS(args, BTFIND);
+	STAT_TO_ARGS(args, BTCOW);
+	STAT_TO_ARGS(args, BTINSERT);
+	args->os_cnt = OS_STAT_LAST;
+	return (0);
+}
 
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
@@ -114,6 +127,9 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	// Acquire Locks to copy over dirty lists, we need to worry about holding
 	// onto the commit lock for too long. so well need to let go of our locks
 	// and retry.
+
+	OS_START(LOCKANDCOPY);
+
 	for (i = 0; i < cnt; i++) {
 		vnode = &vnode_cache[i];
 		LOCK(&vnode->v_lock, LK_EXCLUSIVE);
@@ -137,20 +153,27 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		UNLOCK(&vnode->v_lock);
 	}
 
+	OS_STOP(LOCKANDCOPY);
 	
+	OS_START(SERIALIZE);
 	// Update data and trees
 	for (i = 0; i < cnt; i++) {
 		struct checkpoint_data *set = &sets[i];
 		for (int t = 0; t < set->cp_d.d_cnt; t++) {
 			// Update the tree
+			
 			struct pageset *pinfo = &set->cp_d.d_pg[t];
 			diskptr_t ptr = allocate_block();
-			VTREE_INSERT(&vnode->v_tree, IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &ptr);
+			OS_START(INSERTPLUSPAGE);
+			VTREE_INSERT(&vnode->v_tree, 
+				IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &ptr);
+			OS_STOP(INSERTPLUSPAGE);
 			// Serialize
 			write_page(pinfo->page, ptr);
-			
+		
 		}
 
+		OS_START(INODE);
 		vnode = &vnode_cache[i]; 
 		inode = vnode->v_inode;
 
@@ -169,12 +192,16 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 		// Get the sibling inode and write to that instead.
 		inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
-
+		
 		if ((error = write_ondisk_inode(inode))) {
 			printf("Issue writing inode!\n");
 		}
+		OS_STOP(INODE);
 	}
 
+	OS_STOP(SERIALIZE);
+
+	OS_START(UNLOCK);
 	// Unlock commit locks
 	for (i = 0; i < cnt; i++) {
 		vnode = &vnode_cache[i];
@@ -182,6 +209,8 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	}
 
 	free(sets, M_OBJSNAP);
+
+	OS_STOP(UNLOCK);
 
 	return;
 }
@@ -366,6 +395,7 @@ objsnap_stat(struct objsnap_stat_args *args)
 	return (0);
 }
 
+
 static int
 objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
     struct thread *td)
@@ -397,6 +427,9 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 
 	case OBJSNAP_STAT:
 		error = objsnap_stat((struct objsnap_stat_args *)data);
+		break;
+	case OBJSNAP_SYSTEMSTATS:
+		error = objsnap_systemstats((struct objsnap_systemstats_args *)data);
 		break;
 	}
 
