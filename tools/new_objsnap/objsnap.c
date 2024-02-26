@@ -266,7 +266,7 @@ int main()
 	uint64_t clock = get_clock_speed_sleep();
 	int numCheckpoints = 5000;
 	uint64_t before = rdtscp();	
-	random_write_load(1, 1024 * 1024 * 1024, 16, numCheckpoints);	
+	random_write_load(1, 1024, 16, numCheckpoints);	
 	uint64_t after = rdtscp();
 	uint64_t change = after - before;
 	change = cycles_to_ms(change, clock);

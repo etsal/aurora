@@ -70,8 +70,10 @@ flush() {
 
         if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_NOWAIT, NULL) == 0)
             BO_UNLOCK(bo);
-        bremfree(bp);
-        bwrite(bp);
+        if (bp->b_flags & B_DELWRI) {
+            bremfree(bp);
+        }
+        bawrite(bp);
 
         BO_LOCK(bo);
     }

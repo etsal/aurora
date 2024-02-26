@@ -253,7 +253,7 @@ static inline void
 path_unacquire(bpath_t path, int acquire_as)
 {
   for (int i = 0; i < path->p_len; i++) {
-    bdwrite(path->p_nodes[i].n_bp);
+    brelse(path->p_nodes[i].n_bp);
   }
 }
 
@@ -455,7 +455,8 @@ btnode_split(bpath_t path)
   btnode_dirty(&right_child);
   btnode_dirty(&parent);
 
-  bawrite(right_child.n_bp);
+  bdirty(right_child.n_bp);
+  brelse(right_child.n_bp);
 
   if (parent.n_len == BT_MAX_KEYS) {
     printf("DOUBLE SPLIT\n");
@@ -860,7 +861,8 @@ btree_find(void* treep, uint64_t key, void* value)
   return 0;
 }
 
-// TODO FIXUP CHECKPOINT
+// You still need to flush the buffers after this, this will only mark 
+// Btrees as COW.
 diskptr_t
 btree_checkpoint(void* treep)
 {
@@ -883,16 +885,10 @@ btree_checkpoint(void* treep)
 
     
     btnode_wrap_bp(&node, tree, bp);
-
-    /* Node is dead - clean up */
-    // TODO: CLEAN UP DEAD BUFFERS (merged nodes)
-
     btnode_mark_cow(&node);
-    bremfree(bp);
-    bawrite(bp);
+    BUF_UNLOCK(bp);
 
     BO_LOCK(bo);
-    
   }
 
   BO_UNLOCK(bo);

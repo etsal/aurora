@@ -169,8 +169,8 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 			struct pageset *pinfo = &set->cp_d.d_pg[t];
 			diskptr_t ptr = allocate_block();
 			OS_START(INSERTPLUSPAGE);
-			//VTREE_INSERT(&vnode->v_tree, 
-			//	IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &ptr);
+			VTREE_INSERT(&vnode->v_tree, 
+				IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &ptr);
 			OS_STOP(INSERTPLUSPAGE);
 			write_page(pinfo, ptr);
 		}
