@@ -171,8 +171,8 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 			OS_START(INSERTPLUSPAGE);
 			VTREE_INSERT(&vnode->v_tree, 
 				IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &ptr);
-			OS_STOP(INSERTPLUSPAGE);
 			write_page(pinfo, ptr);
+			OS_STOP(INSERTPLUSPAGE);
 		}
 
 		OS_START(INODE);
@@ -214,6 +214,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	flush();
 
+	//VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
 	OS_STOP(UNLOCK);
 	OS_STOP(CHECKPOINT);
 

@@ -61,23 +61,10 @@ write_ondisk_inode(osinode_t *inode)
 
 int 
 flush() {
-    struct buf *bp, *nbp;
+    struct buf *bp = NULL; // *nbp;
     struct bufobj *bo = &osdata.os_vp->v_bufobj;
 
-    BO_LOCK(bo);
-
-    TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, nbp) {
-
-        if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_NOWAIT, NULL) == 0)
-            BO_UNLOCK(bo);
-        if (bp->b_flags & B_DELWRI) {
-            bremfree(bp);
-        }
-        bwrite(bp);
-        BO_LOCK(bo);
-    }
-
-    BO_UNLOCK(bo);
+    BO_BDFLUSH(bo, bp);
 
     return (0);
 }
