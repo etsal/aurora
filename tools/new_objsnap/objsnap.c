@@ -208,7 +208,8 @@ basicTest()
 }
 
 void
-random_write_load(int num_objs, int size_of_obj_in_blocks, int writes_per_iteration, int times)
+random_write_load(int num_objs, int size_of_obj_in_blocks, 
+	int writes_per_iteration, int times)
 {
 	int error = 0;
 	if ((error = setup())) {
@@ -243,15 +244,33 @@ random_write_load(int num_objs, int size_of_obj_in_blocks, int writes_per_iterat
 	free(maps);
 }
 
+void 
+printstats(uint64_t clock) {
+	statblock stats;
+	int cnt = 0;
+	printf("Stat Blocks\n");
+	objsnap_systemstats(&stats, &cnt);
+	for (int i = 0; i < cnt; i++) {
+		struct timerstat *t = &stats[i];
+		uint64_t sum = cycles_to_us(t->sum, clock);
+		uint64_t avg = cycles_to_us(t->avg, clock);
+		printf("[%s] Sum: %lu us, Count: %lu, Avg: %lu us\n",
+			t->name, sum, t->cnt, avg);
+	}
+}
+
+
 int main()
 {
 	//basicTest();
 	uint64_t clock = get_clock_speed_sleep();
-	int numCheckpoints = 500;
+	int numCheckpoints = 5000;
 	uint64_t before = rdtscp();	
-	random_write_load(1, 1024 * 1024, 16, numCheckpoints);	
+	random_write_load(1, 1024 * 1024 * 1024, 16, numCheckpoints);	
 	uint64_t after = rdtscp();
 	uint64_t change = after - before;
 	change = cycles_to_ms(change, clock);
 	printf("Checkpoints[%d]: %lu\n", numCheckpoints, change);
+
+	printstats(clock);
 }

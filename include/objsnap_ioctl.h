@@ -4,6 +4,8 @@
 #include <sys/ioccom.h>
 #include <sys/sbuf.h>
 
+#include "rdtsc.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -11,13 +13,16 @@ extern "C" {
 #define BLOCKSIZE (4096UL)
 #define MAXINODES (1024)
 #define CKPT_MAXINODES (64)
+#define OS_STAT_MAX	(16)
 
 #define NULLDISKPTR ((diskptr_t) -1)
 #define BADINDEX ((index_t)(-1))
 
+
 typedef uint64_t epoch_t;
 typedef int index_t;
 typedef uint64_t diskptr_t;
+typedef struct timerstat statblock[OS_STAT_MAX];
 
 typedef struct {
   size_t super_max_inodes;
@@ -68,13 +73,19 @@ struct objsnap_stat_args {
   osinode_t os_inode; /* OUT: Inode structure */
 };
 
+struct objsnap_systemstats_args {
+  statblock os_stats;
+  int os_cnt;
+};
+
 #define OBJSNAP_CHECKPOINT _IOWR('d', 1, struct objsnap_checkpoint_args)
-#define OBJSNAP_CREATEOBJ _IOWR('d', 2, struct objsnap_create_args)
-#define OBJSNAP_DIRTYPAGE _IOWR('d', 3, struct objsnap_dirty_page_args)
-#define OBJSNAP_INIT _IOWR('d', 4, struct objsnap_init_args)
+#define OBJSNAP_CREATEOBJ _IOR('d', 2, struct objsnap_create_args)
+#define OBJSNAP_DIRTYPAGE _IOW('d', 3, struct objsnap_dirty_page_args)
+#define OBJSNAP_INIT _IOW('d', 4, struct objsnap_init_args)
 
 
 #define OBJSNAP_STAT _IOWR('d', 5, struct objsnap_stat_args)
+#define OBJSNAP_SYSTEMSTATS _IOR('d', 6, struct objsnap_systemstats_args)
 
 #ifdef __cplusplus
 }

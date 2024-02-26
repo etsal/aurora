@@ -7,12 +7,16 @@
 #include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/uuid.h>
+#include <sys/rwlock.h>
+#include <sys/bufobj.h>
 #include <sys/buf.h>
 #include <machine/atomic.h>
 
 #include <vm/vm.h>
 #include <vm/uma.h>
 #include <vm/vm_object.h>
+#include <geom/geom.h>
+#include <geom/geom_vfs.h>
 
 #include "alloc.h"
 #include "objsnap_internal.h"
@@ -34,21 +38,45 @@ diskptr_t allocate_block()
     return (diskptr_t)atomic_fetchadd_64(&alloc.alloc_next_block, 1);
 }
 
+
 int 
 write_ondisk_inode(osinode_t *inode)
 {
-    int error;
-    struct buf *ino_bp;
 
-    // We don't need to hold the locks for VCHR vnodes.
-    error = bread(osdata.os_vp, DEVICE_BLOCK_NUM(inode->i_index), 
-        BLOCKSIZE, NOCRED, &ino_bp);
-    if (error) {
-        printf("Error retrieving bread 1 %d\n", error);
-        return error;
+    struct buf *ino_bp;
+    // We don't need to hold the locks for VCHR vnodes. 
+    ino_bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(inode->i_index), 
+        BLOCKSIZE, 0, 0, 0);
+
+    ino_bp->b_blkno = DEVICE_BLOCK_NUM(inode->i_index);
+    ino_bp->b_lblkno = DEVICE_BLOCK_NUM(inode->i_index);
+	ino_bp->b_iooffset = dbtob(ino_bp->b_blkno);
+
+    memcpy(ino_bp->b_data, inode, BLOCKSIZE);
+    bdirty(ino_bp);
+    brelse(ino_bp);
+
+    return (0);
+}
+
+int 
+flush() {
+    struct buf *bp, *nbp;
+    struct bufobj *bo = &osdata.os_vp->v_bufobj;
+
+    BO_LOCK(bo);
+
+    TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, nbp) {
+
+        if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_NOWAIT, NULL) == 0)
+            BO_UNLOCK(bo);
+        bremfree(bp);
+        bwrite(bp);
+
+        BO_LOCK(bo);
     }
-    memcpy(ino_bp->b_data, inode, sizeof(osinode_t));
-    bawrite(ino_bp);
+
+    BO_UNLOCK(bo);
 
     return (0);
 }
@@ -113,15 +141,22 @@ osinode_t *allocate_inode()
         goto allocate_inode_done;
     }
 
-    bwrite(super_bp);
-
     // Make sure to update our in-memory copy.
     superblock.super_blk = blk;
+
+    memcpy(super_bp->b_data, &superblock, sizeof(superblock));
+
+    bdirty(super_bp);
+    brelse(super_bp);
+
+    flush();
+
     // Decrement to original index.
     newinode->i_index -= 1;
 
     vnode->v_magic = OBJMAGIC;
     vnode->v_state = VALID;
+
 
 allocate_inode_done:
 

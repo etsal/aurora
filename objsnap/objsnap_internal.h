@@ -24,19 +24,44 @@
 #include "objsnap_ioctl.h"
 #include "vtree.h"
 
+
 #define OBJMAGIC (0xdeadbeef)
 #define MAXDRTYCNT (64)
+
+#define LOCK(lock, type) (lockmgr(lock, type, NULL))
+#define UNLOCK(lock) (lockmgr(lock, LK_RELEASE, NULL))
+#define LOCK_SUPER() (LOCK(&osdata.os_lock, LK_EXCLUSIVE))
+#define UNLOCK_SUPER() (UNLOCK(&osdata.os_lock))
+#define INDEX_TO_VNODE(i) (&vnode_cache[(i) / 2])
+#define DEVICE_BLOCK_NUM(blki) ((blki) * ((uint64_t)BLOCKSIZE >> DEV_BSHIFT))
+
+#define OS_STAT_DEFINE(name, num) \
+	static int OS_STAT_##name = num; \
+	static char *OS_STAT_NAME_##name = #name; \
+	static struct cycletimer *OS_STAT_GET_##name(void) { \
+		return &osdata.os_stats[OS_STAT_##name]; \
+	} \
+	static struct timerstat OS_TOSTAT_##name() { \
+		return ctstat(#name, OS_STAT_GET_##name()); \
+	}
+
+#define OS_START(name) ctstart(OS_STAT_GET_##name())
+#define OS_STOP(name) ctstop(OS_STAT_GET_##name())
+
+
 
 struct objsnap_metadata {
 	struct cdev *os_cdev;	/* The cdev that exposes the SLS ops */
 	struct vnode *os_vp;
 	struct g_consumer *os_consumer;
 	struct lock os_lock;
+	struct cycletimer os_stats[OS_STAT_MAX];
 };
 
 struct pageset {
 	vm_page_t page;
 	vm_pindex_t pindex;
+	vm_offset_t offset;
 };
 
 struct dirtyset {
@@ -65,14 +90,17 @@ extern struct allocator alloc;
 extern super_t superblock;
 extern struct objsnap_vnode *vnode_cache;
 
-#define LOCK(lock, type) (lockmgr(lock, type, NULL))
-#define UNLOCK(lock) (lockmgr(lock, LK_RELEASE, NULL))
+OS_STAT_DEFINE(LOCKANDCOPY, 0);
+OS_STAT_DEFINE(SERIALIZE, 1);
+OS_STAT_DEFINE(UNLOCK, 2);
+OS_STAT_DEFINE(INSERTPLUSPAGE, 3);
+OS_STAT_DEFINE(INODE, 4);
+OS_STAT_DEFINE(BTFIND, 5);
+OS_STAT_DEFINE(BTCOW, 6);
+OS_STAT_DEFINE(BTINSERT, 7);
+OS_STAT_DEFINE(CHECKPOINT, 8);
+#define OS_STAT_LAST (9)
 
-#define LOCK_SUPER() (LOCK(&osdata.os_lock, LK_EXCLUSIVE))
-#define UNLOCK_SUPER() (UNLOCK(&osdata.os_lock))
-
-#define INDEX_TO_VNODE(i) (&vnode_cache[(i) / 2])
-#define DEVICE_BLOCK_NUM(blki) ((blki) * ((uint64_t)BLOCKSIZE / superblock.super_bsize))
-
+#define STAT_TO_ARGS(args, name) ((args)->os_stats[OS_STAT_##name]) = OS_TOSTAT_##name()
 
 #endif

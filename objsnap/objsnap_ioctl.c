@@ -75,30 +75,45 @@ objsnap_done(struct bio *bip)
 
 static void
 write_page(
-    vm_page_t page, diskptr_t ptr)
+    struct pageset *pg, diskptr_t ptr)
 {
-	struct bio *bip;
+	struct uio uio;
+	struct iovec aiov;
+	
+	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(ptr), BLOCKSIZE, 
+		0, 0, GB_UNMAPPED);
 
-	/* Read the global variable once here to prevent possible races. */
-	bip = g_alloc_bio();
-	bip->bio_cmd = BIO_WRITE;
-
-	bip->bio_length = BLOCKSIZE;
-	bip->bio_ma = &page;
-	bip->bio_ma_n = 1;
-	bip->bio_data = unmapped_buf;
-
-	bip->bio_ma_offset = ptr * BLOCKSIZE;
-	bip->bio_offset = ptr * BLOCKSIZE;
-
-	bip->bio_flags |= BIO_UNMAPPED;
-	bip->bio_done = objsnap_done;
-	bip->bio_caller2 = NULL;
-	g_io_request(bip, osdata.os_consumer);
+	aiov.iov_base = (void *)(uintptr_t)(pg->offset);
+	aiov.iov_len = BLOCKSIZE;
+	uio.uio_iov = &aiov;
+	uio.uio_iovcnt = 1;
+	uio.uio_resid = BLOCKSIZE;
+	uio.uio_segflg = UIO_USERSPACE;
+	uio.uio_rw = UIO_WRITE;
+	uio.uio_td = curthread;
+	uio.uio_offset = 0;
+	vn_io_fault_pgmove(bp->b_pages, 
+		0, (int)BLOCKSIZE, 
+		&uio);
+	bawrite(bp);
 
 	return;
 }
 
+static int
+objsnap_systemstats(struct objsnap_systemstats_args *args) {
+	STAT_TO_ARGS(args, LOCKANDCOPY);
+	STAT_TO_ARGS(args, SERIALIZE);
+	STAT_TO_ARGS(args, UNLOCK);
+	STAT_TO_ARGS(args, INSERTPLUSPAGE);
+	STAT_TO_ARGS(args, INODE);
+	STAT_TO_ARGS(args, BTFIND);
+	STAT_TO_ARGS(args, BTCOW);
+	STAT_TO_ARGS(args, BTINSERT);
+	STAT_TO_ARGS(args, CHECKPOINT);
+	args->os_cnt = OS_STAT_LAST;
+	return (0);
+}
 
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
@@ -114,6 +129,10 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	// Acquire Locks to copy over dirty lists, we need to worry about holding
 	// onto the commit lock for too long. so well need to let go of our locks
 	// and retry.
+	OS_START(CHECKPOINT);
+
+	OS_START(LOCKANDCOPY);
+
 	for (i = 0; i < cnt; i++) {
 		vnode = &vnode_cache[i];
 		LOCK(&vnode->v_lock, LK_EXCLUSIVE);
@@ -137,20 +156,26 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		UNLOCK(&vnode->v_lock);
 	}
 
+	OS_STOP(LOCKANDCOPY);
 	
+	OS_START(SERIALIZE);
 	// Update data and trees
 	for (i = 0; i < cnt; i++) {
 		struct checkpoint_data *set = &sets[i];
+		
 		for (int t = 0; t < set->cp_d.d_cnt; t++) {
 			// Update the tree
+			
 			struct pageset *pinfo = &set->cp_d.d_pg[t];
 			diskptr_t ptr = allocate_block();
-			VTREE_INSERT(&vnode->v_tree, IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &ptr);
-			// Serialize
-			write_page(pinfo->page, ptr);
-			
+			OS_START(INSERTPLUSPAGE);
+			//VTREE_INSERT(&vnode->v_tree, 
+			//	IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &ptr);
+			OS_STOP(INSERTPLUSPAGE);
+			write_page(pinfo, ptr);
 		}
 
+		OS_START(INODE);
 		vnode = &vnode_cache[i]; 
 		inode = vnode->v_inode;
 
@@ -169,12 +194,16 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 		// Get the sibling inode and write to that instead.
 		inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
-
+		
 		if ((error = write_ondisk_inode(inode))) {
 			printf("Issue writing inode!\n");
 		}
+		OS_STOP(INODE);
 	}
 
+	OS_STOP(SERIALIZE);
+
+	OS_START(UNLOCK);
 	// Unlock commit locks
 	for (i = 0; i < cnt; i++) {
 		vnode = &vnode_cache[i];
@@ -183,6 +212,11 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	free(sets, M_OBJSNAP);
 
+	flush();
+
+	OS_STOP(UNLOCK);
+
+	OS_STOP(CHECKPOINT);
 	return;
 }
 
@@ -234,6 +268,7 @@ usrptr_to_page(vm_offset_t ptr, struct pageset *pinfo) {
 	vm_map_unlock_read(map);
 	pinfo->page = page;
 	pinfo->pindex = pindex;
+	pinfo->offset = ptr;
 	return (0);
 }
 
@@ -330,12 +365,11 @@ objsnap_init(struct objsnap_init_args *args)
 	if (error != 0) {
 		printf("Error opening geom devvp: %p %d\n", vp->v_rdev, error);
 		vput(vp);
-
+	
 		g_topology_unlock();
 
 		return;
 	}
-
 	g_topology_unlock();
 
 	vref(vp);
@@ -365,6 +399,7 @@ objsnap_stat(struct objsnap_stat_args *args)
 	args->os_inode = *vnode->v_inode;
 	return (0);
 }
+
 
 static int
 objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
@@ -397,6 +432,9 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 
 	case OBJSNAP_STAT:
 		error = objsnap_stat((struct objsnap_stat_args *)data);
+		break;
+	case OBJSNAP_SYSTEMSTATS:
+		error = objsnap_systemstats((struct objsnap_systemstats_args *)data);
 		break;
 	}
 
@@ -435,6 +473,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		bzero(vnode_cache, sizeof(struct objsnap_vnode) * MAXINODES);
 
+		bzero(osdata.os_stats, sizeof(struct cycletimer) * OS_STAT_MAX);
 		// Initialize Locks
 		for (int i = 0; i < MAXINODES; i++) {
 			lockinit(&vnode_cache[i].v_lock, 0, "objsnap node lock", 
