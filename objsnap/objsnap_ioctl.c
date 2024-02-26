@@ -215,8 +215,8 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	flush();
 
 	OS_STOP(UNLOCK);
-
 	OS_STOP(CHECKPOINT);
+
 	return;
 }
 

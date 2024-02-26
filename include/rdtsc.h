@@ -170,7 +170,6 @@ ctstat(char *name, struct cycletimer *ct) {
     st.cnt = 0;
     st.sum = 0;
   }
-  
   strcpy(st.name, name);
 
   return st;
