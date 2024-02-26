@@ -73,8 +73,7 @@ flush() {
         if (bp->b_flags & B_DELWRI) {
             bremfree(bp);
         }
-        bawrite(bp);
-
+        bwrite(bp);
         BO_LOCK(bo);
     }
 
