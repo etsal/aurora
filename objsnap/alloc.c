@@ -33,9 +33,9 @@ allocator_init()
 	alloc.alloc_next_block = superblock.super_max_inodes + 2;
 };
 
-diskptr_t allocate_block()
+diskptr_t allocate_block(int i)
 {
-    return (diskptr_t)atomic_fetchadd_64(&alloc.alloc_next_block, 1);
+    return (diskptr_t)atomic_fetchadd_64(&alloc.alloc_next_block, i);
 }
 
 
@@ -83,7 +83,7 @@ osinode_t *allocate_inode()
 
     osinode_t *newinode = malloc(sizeof(osinode_t), M_OBJSNAP, M_WAITOK);
     newinode->i_index = atomic_fetchadd_int(&superblock.super_next, 2);
-    newinode->i_treeptr = allocate_block();
+    newinode->i_treeptr = allocate_block(1);
     newinode->i_version = 0;
     newinode->i_cnt = 0;
 

@@ -138,7 +138,7 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 static void
 btnode_create(btnode_t node, btree_t tree, uint8_t type)
 {
-  diskptr_t ptr = allocate_block();
+  diskptr_t ptr = allocate_block(1);
 
   struct buf *bp = getblk(tree->tr_vp, DEVICE_BLOCK_NUM(ptr), BLOCKSIZE, 0, 0, 0);
   bzero(bp->b_data, BLOCKSIZE);
@@ -195,7 +195,7 @@ path_cow(bpath_t path)
       }
 
       bo = &tmp->n_tree->tr_vp->v_bufobj;
-      diskptr_t newptr = allocate_block();
+      diskptr_t newptr = allocate_block(1);
 
       // Release the buffer from its mapping
       brelvp(tmp->n_bp);

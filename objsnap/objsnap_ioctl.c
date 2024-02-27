@@ -73,33 +73,6 @@ objsnap_done(struct bio *bip)
 	g_destroy_bio(bip);
 }
 
-static void
-write_page(
-    struct pageset *pg, diskptr_t ptr)
-{
-	struct uio uio;
-	struct iovec aiov;
-	
-	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(ptr), BLOCKSIZE, 
-		0, 0, GB_UNMAPPED);
-
-	aiov.iov_base = (void *)(uintptr_t)(pg->offset);
-	aiov.iov_len = BLOCKSIZE;
-	uio.uio_iov = &aiov;
-	uio.uio_iovcnt = 1;
-	uio.uio_resid = BLOCKSIZE;
-	uio.uio_segflg = UIO_USERSPACE;
-	uio.uio_rw = UIO_WRITE;
-	uio.uio_td = curthread;
-	uio.uio_offset = 0;
-	vn_io_fault_pgmove(bp->b_pages, 
-		0, (int)BLOCKSIZE, 
-		&uio);
-	bawrite(bp);
-
-	return;
-}
-
 static int
 objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	STAT_TO_ARGS(args, LOCKANDCOPY);
@@ -162,18 +135,40 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	// Update data and trees
 	for (i = 0; i < cnt; i++) {
 		struct checkpoint_data *set = &sets[i];
-		
-		for (int t = 0; t < set->cp_d.d_cnt; t++) {
-			// Update the tree
-			
+		int pagecnt = set->cp_d.d_cnt;
+		diskptr_t ptr = allocate_block(pagecnt);
+		struct uio uio;
+		struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
+
+
+		OS_START(INSERTPLUSPAGE);
+		struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(ptr), BLOCKSIZE * pagecnt, 
+			0, 0, GB_UNMAPPED);
+
+		for (int t = 0; t < pagecnt; t++) {
+			diskptr_t tmpptr = ptr + t;
 			struct pageset *pinfo = &set->cp_d.d_pg[t];
-			diskptr_t ptr = allocate_block();
-			OS_START(INSERTPLUSPAGE);
 			VTREE_INSERT(&vnode->v_tree, 
-				IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &ptr);
-			write_page(pinfo, ptr);
-			OS_STOP(INSERTPLUSPAGE);
+					IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &tmpptr);
+			aiov[t].iov_base = (void *)(uintptr_t)(pinfo->offset);
+			aiov[t].iov_len = BLOCKSIZE;
 		}
+
+		uio.uio_iov = aiov;
+		uio.uio_iovcnt = cnt;
+		uio.uio_resid = BLOCKSIZE * pagecnt;
+		uio.uio_segflg = UIO_USERSPACE;
+		uio.uio_rw = UIO_WRITE;
+		uio.uio_td = curthread;
+		uio.uio_offset = 0;
+
+		vn_io_fault_pgmove(bp->b_pages, 
+			0, (int)BLOCKSIZE * pagecnt, 
+			&uio);
+		bawrite(bp);
+
+		free(aiov, M_OBJSNAP);
+		OS_STOP(INSERTPLUSPAGE);
 
 		OS_START(INODE);
 		vnode = &vnode_cache[i]; 
