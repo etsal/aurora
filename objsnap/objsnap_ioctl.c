@@ -209,7 +209,6 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	flush();
 
-	//VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
 	OS_STOP(UNLOCK);
 	OS_STOP(CHECKPOINT);
 

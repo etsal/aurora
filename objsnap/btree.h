@@ -38,22 +38,18 @@
 #define BT_MAX_KEYS ((TOP / BOT))
 #define SPLIT_KEYS (BT_MAX_KEYS / 2)
 
-#define BT_COW (1)
-#define BT_FRESHCOPY (2)
-
 #define BT_ISLEAF(node) ((node)->n_type == BT_LEAF)
 #define BT_ISINNER(node) ((node)->n_type == BT_INNER)
 #define BT_VALSZ(node) ((node)->n_tree->tr_vs)
-#define BT_ISCOW(node) ((node)->n_hdr.hdr_flags == BT_COW)
-#define BT_FRESH_COW(node) ((node)->n_hdr.hdr_flags = BT_FRESHCOPY)
-#define BT_ALREADY_COW(node) ((node)->n_hdr.hdr_flags == BT_FRESHCOPY)
+#define BT_COWCHECK(node) ((node)->n_hdr.hdr_version < (node)->n_tree->tr_version)
+#define BT_BUMPVERSION(node) ((node)->n_hdr.hdr_version = (node)->n_tree->tr_version)
 
 /* Header object that is apart of every on disk node */
 typedef struct btnodehdr
 {
   uint32_t hdr_len;
   uint8_t hdr_type;
-  uint8_t hdr_flags;
+  uint64_t hdr_version;
 } btnodehdr;
 
 typedef btnodehdr* btnodehdr_t;
@@ -91,7 +87,7 @@ typedef struct btnode
 #define n_keys n_data->bt_keys
 #define n_ch n_data->bt_children
 #define n_len n_data->bt_hdr.hdr_len
-#define n_flags n_data->bt_hdr.hdr_flag
+#define n_version n_data->bt_hdr.hdr_version
 #define n_type n_data->bt_hdr.hdr_type
 } btnode;
 
@@ -102,6 +98,7 @@ typedef struct btree
   // tr_ptr must always be on top so the virtual tree can acquire it
   diskptr_t tr_ptr;
   size_t tr_vs;
+  uint64_t tr_version;
   struct vnode *tr_vp;
 } btree;
 
@@ -119,6 +116,12 @@ int
 btree_find(void* tree, uint64_t key, void* value);
 int
 btree_greater_equal(void* tree, uint64_t* key, void* value);
+
+void
+btree_bumpversion(void* tree);
+
+uint64_t
+btree_getversion(void* tree);
 
 int
 btree_rangequery(void* tree,

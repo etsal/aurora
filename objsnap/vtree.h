@@ -54,7 +54,10 @@ typedef int (*vtree_rangequery_t)(void* tree,
                                   size_t results_max);
 
 typedef diskptr_t (*vtree_checkpoint_t)(void* tree);
-typedef size_t (*vtree_getkeysize)(void* tree);
+typedef size_t (*vtree_getkeysize_t)(void* tree);
+
+typedef void (*vtree_bumpversion_t)(void* tree);
+typedef uint64_t (*vtree_getversion_t)(void* tree);
 
 struct vtreeops
 {
@@ -70,7 +73,7 @@ struct vtreeops
 
   vtree_checkpoint_t vtree_checkpoint;
 
-  vtree_getkeysize vtree_getkeysize;
+  vtree_getkeysize_t vtree_getkeysize;
 };
 
 #define VTREE_GETROOT(v) (*(diskptr_t *)((v)->v_tree))

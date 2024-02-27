@@ -181,7 +181,7 @@ path_cow(bpath_t path)
   for (int i = 0; i < path->p_len; i++) {
     /* Check if node is not already COWed */
     tmp = &path->p_nodes[i];
-    if (!BT_ALREADY_COW(tmp)) {
+    if (!BT_COWCHECK(tmp)) {
 
       /* Grab our index in our parent */
       if (i > 0) {
@@ -228,7 +228,7 @@ path_cow(bpath_t path)
 #endif
 
       /* Turn off cow on the node and dirty the node */
-      BT_FRESH_COW(tmp);
+      BT_BUMPVERSION(tmp);
       btnode_dirty(tmp);
     }
   }
@@ -469,7 +469,6 @@ static void
 btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
 {
   KASSERT(BT_ISLEAF(node), ("MUST BE LEAF"));
-  KASSERT(!BT_ISCOW(node), ("MUST NOT BE COW"));
   int num_to_move = node->n_len - idx;
 
 #ifdef DEBUG
@@ -499,7 +498,6 @@ static void
 btnode_leaf_update(btnode_t node, int idx, void* value)
 {
   KASSERT(BT_ISLEAF(node), ("MUST BE LEAF"));
-  KASSERT(!BT_ISCOW(node), ("MUST NOT BE COW"));
   memcpy(&node->n_ch[idx + 1], value, BT_VALSZ(node));
   btnode_dirty(node);
 }
@@ -517,7 +515,7 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
    * If node is COW'd this means the entire path leading
    * to this node must be COW'd
    * */
-  if (BT_ISCOW(node)) {
+  if (BT_COWCHECK(node)) {
     OS_START(BTCOW);
     path_cow(path);
     OS_STOP(BTCOW);
@@ -629,12 +627,6 @@ btnode_delete(bpath_t path, uint64_t key, void* value)
   return 0;
 }
 
-static inline void
-btnode_mark_cow(btnode_t node)
-{
-  node->n_hdr.hdr_flags = BT_COW;
-}
-
 static int
 btnode_leaf_bulkinsert(btnode_t node,
                        kvp* keyvalues,
@@ -642,7 +634,6 @@ btnode_leaf_bulkinsert(btnode_t node,
                        int64_t max_key)
 {
   KASSERT(BT_ISLEAF(node), ("MUST BE LEAF"));
-  KASSERT(!BT_ISCOW(node), ("MUST NOT BE COW"));
   int keys_i = 0;
   int node_i = 0;
   int inserted = 0;
@@ -733,7 +724,7 @@ btnode_bulkinsert(bpath_t path, kvp** keyvalues, size_t* len, uint64_t max_key)
 
     /* Function will update len for us and tell us by how much
      * through the returned inserted variable */
-    if (BT_ISCOW(cur)) {
+    if (BT_COWCHECK(cur)) {
       path_cow(path);
     }
 
@@ -867,33 +858,9 @@ diskptr_t
 btree_checkpoint(void* treep)
 {
   btree_t tree = (btree_t)treep;
-  btnode node;
-  diskptr_t ptr = tree->tr_ptr;
-  struct vnode *vp = tree->tr_vp;
-  struct bufobj *bo = &vp->v_bufobj;
-  struct buf *bp, *nbp;
+  btree_bumpversion(treep);
 
-  BO_LOCK(bo);
-
-#ifdef DEBUG
-  printf("[Checkpoint]\n");
-#endif
-  TAILQ_FOREACH_SAFE(bp, &bo->bo_dirty.bv_hd, b_bobufs, nbp) {
-    /* Wrap our node */
-    if (BUF_LOCK(bp, LK_EXCLUSIVE | LK_NOWAIT, NULL) == 0)
- 		  BO_UNLOCK(bo);
-
-    
-    btnode_wrap_bp(&node, tree, bp);
-    btnode_mark_cow(&node);
-    BUF_UNLOCK(bp);
-
-    BO_LOCK(bo);
-  }
-
-  BO_UNLOCK(bo);
-
-  return (ptr);
+  return (tree->tr_ptr);
 }
 
 /*
@@ -965,6 +932,18 @@ btree_getkeysize(void* treep)
   btree_t tree = (btree_t)treep;
   return tree->tr_vs;
 }
+
+void 
+btree_bumpversion(void *treep) {
+  btree_t tree = (btree_t)treep;
+  tree->tr_version += 1;
+}
+
+uint64_t btree_getversion(void *treep) {
+  btree_t tree = (btree_t)treep;
+  return tree->tr_version;
+}
+
 
 struct vtreeops btreeops = { .vtree_init = &btree_init,
 
