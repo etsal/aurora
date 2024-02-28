@@ -16,6 +16,7 @@
 #include <sys/syscallsubr.h>
 #include <sys/sysctl.h>
 #include <sys/vnode.h>
+#include <sys/taskqueue.h>
 
 #include <vm/vm.h>
 #include <vm/uma.h>
@@ -53,10 +54,11 @@
 struct objsnap_metadata {
 	struct cdev *os_cdev;	/* The cdev that exposes the SLS ops */
 	struct vnode *os_vp;
+	struct taskqueue *os_tq;
 	struct g_consumer *os_consumer;
 	struct g_provider *os_provider;
 	struct lock os_lock;
-	struct cycletimer os_stats[OS_STAT_MAX];
+	struct cycletimer os_stats[32];
 };
 
 struct pageset {

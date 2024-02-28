@@ -53,6 +53,7 @@ int pbufcnt = -1;
 struct checkpoint_data {
 	struct dirtyset cp_d;
 	index_t cp_inode;
+	diskptr_t ptr;
 };
 
 static int
@@ -63,8 +64,62 @@ objsnap_sysctl_init(void)
 }
 
 static void
-sls_sysctl_fini(void)
+objsnap_sysctl_fini(void)
 {
+}
+
+static void
+objsnap_task_fn(void *ctx, int pending)
+{
+	OS_START(INSERTPLUSPAGE);
+	struct checkpoint_data *set = (struct checkpoint_data *)(ctx);
+	struct uio uio;
+	int pagecnt = set->cp_d.d_cnt;
+	diskptr_t ptr = set->ptr;
+
+	struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
+
+	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(ptr), BLOCKSIZE * pagecnt, 
+		0, 0, GB_UNMAPPED);
+
+	for (int t = 0; t < pagecnt; t++) {
+		struct pageset *pinfo = &set->cp_d.d_pg[t];
+		aiov[t].iov_base = (void *)(uintptr_t)(pinfo->offset);
+		aiov[t].iov_len = BLOCKSIZE;
+	}
+
+	uio.uio_iov = aiov;
+	uio.uio_iovcnt = pagecnt;
+	uio.uio_resid = BLOCKSIZE * pagecnt;
+	uio.uio_segflg = UIO_USERSPACE;
+	uio.uio_rw = UIO_WRITE;
+	uio.uio_td = curthread;
+	uio.uio_offset = 0;
+	vn_io_fault_pgmove(bp->b_pages, 
+		0, (int)BLOCKSIZE * pagecnt, 
+		&uio);
+
+	bwrite(bp);
+
+	free(aiov, M_OBJSNAP);
+
+	OS_STOP(INSERTPLUSPAGE);
+}
+
+static void
+objsnap_flush_inode_fn(void *ctx, int pending)
+{
+	struct objsnap_vnode *vnode = (struct objsnap_vnode *)(ctx);
+	osinode_t *inode = vnode->v_inode;
+	// During inserting we likely COW faulted which means we need to update our treeptr;
+	inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
+	VTREE_CHECKPOINT(&vnode->v_tree);
+
+	if (write_ondisk_inode(inode)) {
+		printf("Issue writing inode!\n");
+	}
+
+	flush();
 }
 
 static void
@@ -96,10 +151,8 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	index_t *inodes = args->ckpt_inodes;
 	int i;
 	struct objsnap_vnode *vnode;
-	struct uio uio;
 	osinode_t *inode;
 	struct checkpoint_data *sets;
-	int error = 0;
 
 	// Acquire Locks to copy over dirty lists, we need to worry about holding
 	// onto the commit lock for too long. so well need to let go of our locks
@@ -137,39 +190,26 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	for (i = 0; i < cnt; i++) {
 		struct checkpoint_data *set = &sets[i];
 		int pagecnt = set->cp_d.d_cnt;
+		struct task task;
+
+
 		diskptr_t ptr = allocate_block(pagecnt);
-		struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
 
-		OS_START(INSERTPLUSPAGE);
+		// Set the pointer so the task knows where to flush the io
+		set->ptr = ptr;
 
+		TASK_INIT(&task, 0, &objsnap_task_fn, set);
+
+		taskqueue_enqueue(osdata.os_tq, &task);
 		for (int t = 0; t < pagecnt; t++) {
-			diskptr_t tmpptr = ptr + t;
 			struct pageset *pinfo = &set->cp_d.d_pg[t];
+			diskptr_t tmpptr = ptr + t;
 			VTREE_INSERT(&vnode->v_tree, 
 					IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &tmpptr);
-			aiov[t].iov_base = (void *)(uintptr_t)(pinfo->offset);
-			aiov[t].iov_len = BLOCKSIZE;
 		}
 
-		uio.uio_iov = aiov;
-		uio.uio_iovcnt = cnt;
-		uio.uio_resid = BLOCKSIZE * pagecnt;
-		uio.uio_segflg = UIO_USERSPACE;
-		uio.uio_rw = UIO_WRITE;
-		uio.uio_td = curthread;
-		uio.uio_offset = 0;
-		physio(osdata.os_cdev, &uio, 0);
-
-		free(aiov, M_OBJSNAP);
-		OS_STOP(INSERTPLUSPAGE);
-
-		OS_START(INODE);
 		vnode = &vnode_cache[i]; 
 		inode = vnode->v_inode;
-
-		// During inserting we likely COW faulted which means we need to update our treeptr;
-		inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
-		VTREE_CHECKPOINT(&vnode->v_tree);
 
 		// Update inodes to include checkpoint lists
 
@@ -183,10 +223,11 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		// Get the sibling inode and write to that instead.
 		inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
 		
-		if ((error = write_ondisk_inode(inode))) {
-			printf("Issue writing inode!\n");
-		}
+		OS_START(INODE);
+		TASK_INIT(&task, 0, &objsnap_flush_inode_fn, vnode);
+		taskqueue_enqueue(osdata.os_tq, &task);
 		OS_STOP(INODE);
+
 	}
 
 	OS_STOP(SERIALIZE);
@@ -200,7 +241,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	free(sets, M_OBJSNAP);
 
-	flush();
+	taskqueue_quiesce(osdata.os_tq);
 
 	OS_STOP(UNLOCK);
 	OS_STOP(CHECKPOINT);
@@ -248,7 +289,6 @@ usrptr_to_page(vm_offset_t ptr, struct pageset *pinfo) {
 	}	
 
 	vm_map_unlock_read(map);
-
 	pinfo->obj = obj;
 	pinfo->pindex = pindex;
 	pinfo->offset = ptr;
@@ -469,6 +509,11 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 			
 		}
 
+		osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
+			taskqueue_thread_enqueue, &osdata.os_tq);
+
+		taskqueue_start_threads(&osdata.os_tq, 2, PI_DISK, "objsnap taskqueue");
+
 		break;
 	case MOD_UNLOAD:
 		if (osdata.os_consumer != NULL) {
@@ -509,6 +554,10 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 				free(vnode->v_inode, M_OBJSNAP);
 			}
 		}
+
+		taskqueue_quiesce(osdata.os_tq);
+		taskqueue_free(osdata.os_tq);
+		osdata.os_tq = NULL;
 
 		free(vnode_cache, M_OBJSNAP);
 
