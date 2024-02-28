@@ -54,12 +54,13 @@ struct objsnap_metadata {
 	struct cdev *os_cdev;	/* The cdev that exposes the SLS ops */
 	struct vnode *os_vp;
 	struct g_consumer *os_consumer;
+	struct g_provider *os_provider;
 	struct lock os_lock;
 	struct cycletimer os_stats[OS_STAT_MAX];
 };
 
 struct pageset {
-	vm_page_t page;
+	vm_object_t obj;
 	vm_pindex_t pindex;
 	vm_offset_t offset;
 };

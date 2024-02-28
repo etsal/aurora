@@ -88,6 +88,7 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	return (0);
 }
 
+
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
@@ -95,6 +96,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	index_t *inodes = args->ckpt_inodes;
 	int i;
 	struct objsnap_vnode *vnode;
+	struct uio uio;
 	osinode_t *inode;
 	struct checkpoint_data *sets;
 	int error = 0;
@@ -132,18 +134,13 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	OS_STOP(LOCKANDCOPY);
 	
 	OS_START(SERIALIZE);
-	// Update data and trees
 	for (i = 0; i < cnt; i++) {
 		struct checkpoint_data *set = &sets[i];
 		int pagecnt = set->cp_d.d_cnt;
 		diskptr_t ptr = allocate_block(pagecnt);
-		struct uio uio;
 		struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
 
-
 		OS_START(INSERTPLUSPAGE);
-		struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(ptr), BLOCKSIZE * pagecnt, 
-			0, 0, GB_UNMAPPED);
 
 		for (int t = 0; t < pagecnt; t++) {
 			diskptr_t tmpptr = ptr + t;
@@ -161,11 +158,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		uio.uio_rw = UIO_WRITE;
 		uio.uio_td = curthread;
 		uio.uio_offset = 0;
-
-		vn_io_fault_pgmove(bp->b_pages, 
-			0, (int)BLOCKSIZE * pagecnt, 
-			&uio);
-		bawrite(bp);
+		physio(osdata.os_cdev, &uio, 0);
 
 		free(aiov, M_OBJSNAP);
 		OS_STOP(INSERTPLUSPAGE);
@@ -254,14 +247,9 @@ usrptr_to_page(vm_offset_t ptr, struct pageset *pinfo) {
 		return (-1);
 	}	
 
-	// Convert the KVA to a physical address (PA)
-	vm_paddr_t pa = vtophys(entry);
-
-	// Obtain the vm_page structure corresponding to the physical address
-	struct vm_page *page = PHYS_TO_VM_PAGE(pa);
-
 	vm_map_unlock_read(map);
-	pinfo->page = page;
+
+	pinfo->obj = obj;
 	pinfo->pindex = pindex;
 	pinfo->offset = ptr;
 	return (0);
@@ -365,6 +353,9 @@ objsnap_init(struct objsnap_init_args *args)
 
 		return;
 	}
+
+	osdata.os_provider = osdata.os_consumer->provider;
+
 	g_topology_unlock();
 
 	vref(vp);
@@ -477,7 +468,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 				0, 0);
 			
 		}
-	
+
 		break;
 	case MOD_UNLOAD:
 		if (osdata.os_consumer != NULL) {
