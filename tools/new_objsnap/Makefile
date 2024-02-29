@@ -1,9 +1,9 @@
 PROG= new_objsnap
-SRCS= objsnap.c
+SRCS= objsnap.cc
 MAN=
 
-LDADD = -losnap
+LDADD = -losnap -lpthread
 LDFLAGS= -L../../libosnap
-CFLAGS= -I../../include
+CFLAGS= -I../../include -lstdc++
 
 .include <bsd.prog.mk>

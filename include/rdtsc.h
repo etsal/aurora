@@ -13,6 +13,9 @@
  */
 
 #include <sys/types.h>
+#ifdef _KERNEL
+#include <machine/atomic.h>
+#endif
 
 #define cycles_to_ns(cycles, clock_freq)                                       \
   ((double)((double)(cycles) / (clock_freq / 1e9)))
@@ -140,15 +143,16 @@ struct timerstat {
 };
 
 static void 
-ctstart(struct cycletimer *ct) {
-  ct->ct_before = rdtscp();
+ctstart(struct cycletimer *ct, uint64_t *b) {
+  *b = rdtscp();
 }
 
 static void 
-ctstop(struct cycletimer *ct) {
-  ct->ct_sum += rdtscp() - ct->ct_before;
-  ct->ct_cnt += 1;
-  ct->ct_before = 0;
+ctstop(struct cycletimer *ct, uint64_t *before) {
+#ifdef _KERNEL
+  atomic_fetchadd_64(&ct->ct_sum, rdtscp() - *before);
+  atomic_fetchadd_64(&ct->ct_cnt, 1);
+#endif
 }
 
 static void 

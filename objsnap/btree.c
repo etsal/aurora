@@ -505,23 +505,24 @@ btnode_leaf_update(btnode_t node, int idx, void* value)
 static int
 btnode_insert(bpath_t path, uint64_t key, void* value)
 {
-  OS_START(BTFIND);
+  uint64_t before;
+  OS_START(BTFIND, &before);
   int idx;
   btnode_find_child(path, key, LK_EXCLUSIVE);
   btnode_t node = path_getcur(path);
   idx = binary_search(node->n_keys, node->n_len, key);
-  OS_STOP(BTFIND);
+  OS_STOP(BTFIND, &before);
   /*
    * If node is COW'd this means the entire path leading
    * to this node must be COW'd
    * */
   if (BT_COWCHECK(node)) {
-    OS_START(BTCOW);
+    OS_START(BTCOW, &before);
     path_cow(path);
-    OS_STOP(BTCOW);
+    OS_STOP(BTCOW, &before);
   }
 
-  OS_START(BTINSERT);
+  OS_START(BTINSERT, &before);
   /* Update over insert */
   if (node->n_keys[idx] == key && node->n_len) {
     btnode_leaf_update(node, idx, value);
@@ -531,7 +532,7 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
       btnode_split(path);
     }
   }
-  OS_STOP(BTINSERT);
+  OS_STOP(BTINSERT, &before);
 
   return 0;
 }

@@ -47,8 +47,8 @@
 		return ctstat(#name, OS_STAT_GET_##name()); \
 	}
 
-#define OS_START(name) ctstart(OS_STAT_GET_##name())
-#define OS_STOP(name) ctstop(OS_STAT_GET_##name())
+#define OS_START(name, before) ctstart(OS_STAT_GET_##name(), before)
+#define OS_STOP(name, before) ctstop(OS_STAT_GET_##name(), before)
 
 
 
@@ -106,9 +106,9 @@ extern super_t superblock;
 extern struct objsnap_vnode *vnode_cache;
 
 OS_STAT_DEFINE(LOCKANDCOPY, 0);
-OS_STAT_DEFINE(SERIALIZE, 1);
+OS_STAT_DEFINE(DATAWRITE, 1);
 OS_STAT_DEFINE(UNLOCK, 2);
-OS_STAT_DEFINE(INSERTPLUSPAGE, 3);
+OS_STAT_DEFINE(VNFAULTMOVE, 3);
 OS_STAT_DEFINE(INODE, 4);
 OS_STAT_DEFINE(BTFIND, 5);
 OS_STAT_DEFINE(BTCOW, 6);

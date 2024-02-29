@@ -69,9 +69,9 @@ objsnap_sysctl_fini(void)
 }
 
 static void
-objsnap_task_fn(void *ctx, int pending)
+objsnap_data_flush(void *ctx, int pending)
 {
-	OS_START(INSERTPLUSPAGE);
+	uint64_t before;
 	struct checkpoint_data *set = (struct checkpoint_data *)(ctx);
 	struct uio uio;
 	int pagecnt = set->cp_d->d_cnt;
@@ -95,15 +95,19 @@ objsnap_task_fn(void *ctx, int pending)
 	uio.uio_rw = UIO_WRITE;
 	uio.uio_td = curthread;
 	uio.uio_offset = 0;
+	OS_START(VNFAULTMOVE, &before);
+
 	vn_io_fault_pgmove(bp->b_pages, 
 		0, (int)BLOCKSIZE * pagecnt, 
 		&uio);
+	OS_STOP(VNFAULTMOVE, &before);
 
+	OS_START(DATAWRITE, &before);
 	bwrite(bp);
+	OS_STOP(DATAWRITE, &before);
 
 	free(aiov, M_OBJSNAP);
 
-	OS_STOP(INSERTPLUSPAGE);
 }
 
 static void
@@ -129,9 +133,9 @@ objsnap_done(struct bio *bip)
 static int
 objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	STAT_TO_ARGS(args, LOCKANDCOPY);
-	STAT_TO_ARGS(args, SERIALIZE);
+	STAT_TO_ARGS(args, DATAWRITE);
 	STAT_TO_ARGS(args, UNLOCK);
-	STAT_TO_ARGS(args, INSERTPLUSPAGE);
+	STAT_TO_ARGS(args, VNFAULTMOVE);
 	STAT_TO_ARGS(args, INODE);
 	STAT_TO_ARGS(args, BTFIND);
 	STAT_TO_ARGS(args, BTCOW);
@@ -145,9 +149,11 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
+	uint64_t before;
+	OS_START(CHECKPOINT, &before);
 	struct dirtyset *set = &threadsets[args->tid];
 	struct threadcheckpoint tckpt;
-	struct task task;
+	struct checkpoint_data data;
 
 	tckpt.tckpt_cnt = set->d_cnt;
 	diskptr_t ptr = allocate_block(set->d_cnt);
@@ -158,18 +164,21 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		tckpt.tckpt_ptrs[i].ptr = ptr + i;
 	}
 
-	TASK_INIT(&task, 0, &objsnap_task_fn, set);
-
-	taskqueue_enqueue(osdata.os_tq, &task);
-
 	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock), 
 		BLOCKSIZE, 0, 0, 0);
 
 	memcpy(bp->b_data, &tckpt, sizeof(struct threadcheckpoint));
-	bwrite(bp);
+	bawrite(bp);
 
-	taskqueue_quiesce(osdata.os_tq);
 
+	data.cp_d = set;
+	data.ptr = ptr;
+
+	objsnap_data_flush(&data, 0);
+
+	set->d_cnt = 0;
+
+	OS_STOP(CHECKPOINT, &before);
 
 
 	// // Old Checkpoint path
@@ -356,6 +365,11 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 		}
 	}
 
+	if (set->d_cnt > MAXDRTYCNT) {
+		printf("TRYING TO OVERLOAD THE THREAD %d\n", set->d_cnt);
+		return (0);
+	}
+
 	set->d_pg[set->d_cnt] = pageinfo;
 	set->d_cnt += 1;
 
@@ -539,6 +553,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		bzero(osdata.os_stats, sizeof(struct cycletimer) * OS_STAT_MAX);
 		bzero(threadsets, sizeof(struct dirtyset) * MAXTHREADS);
+
 		// Initialize Locks
 		for (int i = 0; i < MAXINODES; i++) {
 			lockinit(&vnode_cache[i].v_lock, 0, "objsnap node lock", 
@@ -551,7 +566,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
 			taskqueue_thread_enqueue, &osdata.os_tq);
 
-		taskqueue_start_threads(&osdata.os_tq, 2, PI_DISK, "objsnap taskqueue");
+		taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
 
 		break;
 	case MOD_UNLOAD:

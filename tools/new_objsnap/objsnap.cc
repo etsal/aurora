@@ -1,3 +1,7 @@
+#include <iostream>
+#include <thread>
+#include <vector>
+
 #include <sys/types.h>
 #include <sys/disk.h>
 #include <sys/ioctl.h>
@@ -25,6 +29,8 @@
 #include <objsnap.h>
 #include <objsnap_ioctl.h>
 #include <rdtsc.h>
+
+uint64_t clock_cycles;
 
 int newfs(const char *path)
 {
@@ -160,7 +166,7 @@ int
 setup_map(struct mapping *map, size_t size_in_blocks)
 {
 	map->inode = objsnap_create();
-	map->map = mmap(NULL, BLOCKSIZE * size_in_blocks, PROT_READ | PROT_WRITE, 
+	map->map = (char *)mmap(NULL, BLOCKSIZE * size_in_blocks, PROT_READ | PROT_WRITE, 
         MAP_ANON, -1, 0);
     if (map->map == MAP_FAILED) {
         printf("MMAP FAILED\n");
@@ -198,9 +204,31 @@ basicTest()
 	}
 }
 
+uint64_t
+random_write_task(struct mapping *maps, 
+	int num_objs, int size_of_obj_in_blocks, 
+	int writes_per_iteration, int times, int tid) {
+	uint64_t cnt = 0;
+	uint64_t sum = 0;
+	for (int times_i = 0; times_i < times; times_i++) {
+		for (int obj_i = 0; obj_i < num_objs; obj_i++ ) {
+			for (int writes_i = 0; writes_i < writes_per_iteration; writes_i++) {
+				int rand_offset = rand() % size_of_obj_in_blocks;
+				dirty_map(&maps[obj_i], tid, rand_offset);
+			}
+		}
+		uint64_t before = rdtscp();	
+		objsnap_checkpoint(tid);
+		uint64_t after = rdtscp();
+		sum += (after - before);
+		cnt += 1;
+	}
+	return sum / cnt;
+}
+
 void
 random_write_load(int num_objs, int size_of_obj_in_blocks, 
-	int writes_per_iteration, int times)
+	int writes_per_iteration, int times, int tid)
 {
 	int error = 0;
 	if ((error = setup())) {
@@ -216,17 +244,10 @@ random_write_load(int num_objs, int size_of_obj_in_blocks,
 	}
 
 
-	// Do writes
-	for (int times_i = 0; times_i < times; times_i++) {
-		for (int obj_i = 0; obj_i < num_objs; obj_i++ ) {
-			for (int writes_i = 0; writes_i < writes_per_iteration; writes_i++) {
-				int rand_offset = rand() % size_of_obj_in_blocks;
-				dirty_map(&maps[obj_i], 0, rand_offset);
-			}
-		}
-		objsnap_checkpoint(0);
-	}
-
+	random_write_task(maps, num_objs, 
+		size_of_obj_in_blocks,
+	 	writes_per_iteration, 
+		times, tid);
 
 	for (int i = 0; i < num_objs; i++) {
 		munmap(maps[i].map, BLOCKSIZE * size_of_obj_in_blocks);
@@ -250,18 +271,64 @@ printstats(uint64_t clock) {
 	}
 }
 
+void threadedTest(int numthreads, int num_objs, 
+	int size_of_obj_in_blocks,
+	int writes_per_iteration, int times) {
+
+    // Vector to hold thread objects
+    std::vector<std::thread> threads;
+	uint64_t *avgs = (uint64_t *)malloc(sizeof(uint64_t)* numthreads);
+	int error = 0;
+	if ((error = setup())) {
+        printf("Problem in Setup!");
+		return;
+    }
+
+	srand(time(NULL));
+
+	struct mapping *maps = (struct mapping *)malloc(sizeof(struct mapping) * num_objs);
+	for (int i = 0; i < num_objs; i++) {
+		setup_map(&maps[i], size_of_obj_in_blocks);
+	}
+
+    for (int i = 0; i < numthreads; ++i) {
+        // Using a lambda function for the thread's task
+        threads.emplace_back([avgs, maps, num_objs, 
+			size_of_obj_in_blocks, writes_per_iteration, times, i](){
+
+			uint64_t avg =  random_write_task(maps, num_objs, 
+			size_of_obj_in_blocks,
+			writes_per_iteration, 
+			times, i);
+			avgs[i] = avg;
+
+        });
+    }
+
+    // Join all threads to wait for them to finish
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+	for (int i = 0; i < numthreads; i++) {
+		std::cout << i << ": "<< cycles_to_us(avgs[i], clock_cycles) << std::endl;
+	}
+}
+
 
 int main()
 {
-	basicTest();
-	uint64_t clock = get_clock_speed_sleep();
-	// int numCheckpoints = 5000;
-	// uint64_t before = rdtscp();	
-	// random_write_load(1, 1024, 16, numCheckpoints);	
-	// uint64_t after = rdtscp();
-	// uint64_t change = after - before;
-	// change = cycles_to_ms(change, clock);
-	// printf("Checkpoints[%d]: %lu\n", numCheckpoints, change);
+	//basicTest();
+	clock_cycles = get_clock_speed_sleep();
+	int numCheckpoints = 5000;
+	int numthreads = 4;
+	uint64_t before = rdtscp();	
+	threadedTest(numthreads, 1, 2048, 4, numCheckpoints);
+	uint64_t after = rdtscp();
+	uint64_t change = after - before;
+	change = cycles_to_ms(change, clock_cycles);
+	printf("Checkpoints[%d]: %lu\n", numCheckpoints * numthreads, change);
+	printf("Avg Ckpts/ms: %lu\n", numCheckpoints * numthreads / change);
 
-	printstats(clock);
+	printstats(clock_cycles);
 }
