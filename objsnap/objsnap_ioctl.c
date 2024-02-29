@@ -118,8 +118,6 @@ objsnap_flush_inode_fn(void *ctx, int pending)
 	if (write_ondisk_inode(inode)) {
 		printf("Issue writing inode!\n");
 	}
-
-	flush();
 }
 
 static void
@@ -192,7 +190,6 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		int pagecnt = set->cp_d.d_cnt;
 		struct task task;
 
-
 		diskptr_t ptr = allocate_block(pagecnt);
 
 		// Set the pointer so the task knows where to flush the io
@@ -201,6 +198,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		TASK_INIT(&task, 0, &objsnap_task_fn, set);
 
 		taskqueue_enqueue(osdata.os_tq, &task);
+
 		for (int t = 0; t < pagecnt; t++) {
 			struct pageset *pinfo = &set->cp_d.d_pg[t];
 			diskptr_t tmpptr = ptr + t;
@@ -224,10 +222,19 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
 		
 		OS_START(INODE);
-		TASK_INIT(&task, 0, &objsnap_flush_inode_fn, vnode);
-		taskqueue_enqueue(osdata.os_tq, &task);
+		osinode_t *inode = vnode->v_inode;
+		// During inserting we likely COW faulted which means we need to update our treeptr;
+		inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
+		VTREE_CHECKPOINT(&vnode->v_tree);
+
+		if (write_ondisk_inode(inode)) {
+			printf("Issue writing inode!\n");
+		}
+		// TASK_INIT(&tasks[1], 0, &objsnap_flush_inode_fn, vnode);
+		// taskqueue_enqueue(osdata.os_tq, &tasks[1]);
 		OS_STOP(INODE);
 
+		taskqueue_quiesce(osdata.os_tq);
 	}
 
 	OS_STOP(SERIALIZE);
@@ -241,7 +248,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	free(sets, M_OBJSNAP);
 
-	taskqueue_quiesce(osdata.os_tq);
+	flush();
 
 	OS_STOP(UNLOCK);
 	OS_STOP(CHECKPOINT);
