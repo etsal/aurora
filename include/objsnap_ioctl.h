@@ -54,8 +54,7 @@ struct objsnap_init_args {
 };
 
 struct objsnap_checkpoint_args {
-  int ckpt_cnt;
-  index_t ckpt_inodes[CKPT_MAXINODES];
+  int tid;
 };
 
 struct objsnap_create_args {

@@ -175,15 +175,6 @@ int dirty_map(struct mapping *map, int tid, off_t offset)
 	return objsnap_dirty(map->inode, tid, map->map + (offset * BLOCKSIZE));
 }
 
-int checkpoint_maps(struct mapping *maps, size_t cnt)
-{
-	index_t indexes[1024];
-	for (int i = 0; i < cnt; i++) {
-		indexes[i] = maps[i].inode;
-	}
-    return objsnap_checkpoint(indexes, cnt);
-}
-
 void
 basicTest()
 {
@@ -202,7 +193,7 @@ basicTest()
 		printf("Problem dirtying mapping\n");
 	}
 
-	if ((error = checkpoint_maps(&map, 1))) {
+	if ((error = objsnap_checkpoint(0))) {
 		printf("Problem Checkpointing mappings\n");
 	}
 }
@@ -233,7 +224,7 @@ random_write_load(int num_objs, int size_of_obj_in_blocks,
 				dirty_map(&maps[obj_i], 0, rand_offset);
 			}
 		}
-		checkpoint_maps(maps, num_objs);
+		objsnap_checkpoint(0);
 	}
 
 
@@ -262,15 +253,15 @@ printstats(uint64_t clock) {
 
 int main()
 {
-	//basicTest();
+	basicTest();
 	uint64_t clock = get_clock_speed_sleep();
-	int numCheckpoints = 5000;
-	uint64_t before = rdtscp();	
-	random_write_load(1, 1024, 16, numCheckpoints);	
-	uint64_t after = rdtscp();
-	uint64_t change = after - before;
-	change = cycles_to_ms(change, clock);
-	printf("Checkpoints[%d]: %lu\n", numCheckpoints, change);
+	// int numCheckpoints = 5000;
+	// uint64_t before = rdtscp();	
+	// random_write_load(1, 1024, 16, numCheckpoints);	
+	// uint64_t after = rdtscp();
+	// uint64_t change = after - before;
+	// change = cycles_to_ms(change, clock);
+	// printf("Checkpoints[%d]: %lu\n", numCheckpoints, change);
 
 	printstats(clock);
 }

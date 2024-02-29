@@ -8,12 +8,14 @@ struct allocator {
   size_t alloc_size_total_blocks;
   size_t alloc_bsize;
   volatile size_t alloc_next_block;
+  volatile size_t alloc_walptr;
 };
 
 void allocator_init(void);
 int write_ondisk_inode(osinode_t *inode);
 int flush(void);
 diskptr_t allocate_block(int num);
+diskptr_t allocate_threadwal(void);
 osinode_t *allocate_inode(void);
 
 #endif

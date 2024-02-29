@@ -49,10 +49,10 @@ struct objsnap_metadata osdata;
 super_t superblock;
 struct objsnap_vnode *vnode_cache = NULL;
 int pbufcnt = -1;
+static struct dirtyset threadsets[MAXTHREADS];
 
 struct checkpoint_data {
-	struct dirtyset cp_d;
-	index_t cp_inode;
+	struct dirtyset *cp_d;
 	diskptr_t ptr;
 };
 
@@ -74,7 +74,7 @@ objsnap_task_fn(void *ctx, int pending)
 	OS_START(INSERTPLUSPAGE);
 	struct checkpoint_data *set = (struct checkpoint_data *)(ctx);
 	struct uio uio;
-	int pagecnt = set->cp_d.d_cnt;
+	int pagecnt = set->cp_d->d_cnt;
 	diskptr_t ptr = set->ptr;
 
 	struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
@@ -83,7 +83,7 @@ objsnap_task_fn(void *ctx, int pending)
 		0, 0, GB_UNMAPPED);
 
 	for (int t = 0; t < pagecnt; t++) {
-		struct pageset *pinfo = &set->cp_d.d_pg[t];
+		struct pageset *pinfo = &set->cp_d->d_pg[t];
 		aiov[t].iov_base = (void *)(uintptr_t)(pinfo->offset);
 		aiov[t].iov_len = BLOCKSIZE;
 	}
@@ -145,113 +145,141 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
-	int cnt = args->ckpt_cnt;
-	index_t *inodes = args->ckpt_inodes;
-	int i;
-	struct objsnap_vnode *vnode;
-	osinode_t *inode;
-	struct checkpoint_data *sets;
+	struct dirtyset *set = &threadsets[args->tid];
+	struct threadcheckpoint tckpt;
+	struct task task;
 
-	// Acquire Locks to copy over dirty lists, we need to worry about holding
-	// onto the commit lock for too long. so well need to let go of our locks
-	// and retry.
-	OS_START(CHECKPOINT);
-
-	OS_START(LOCKANDCOPY);
-
-	for (i = 0; i < cnt; i++) {
-		vnode = &vnode_cache[i];
-		LOCK(&vnode->v_lock, LK_EXCLUSIVE);
-		LOCK(&vnode->v_commit_lock, LK_EXCLUSIVE);
+	tckpt.tckpt_cnt = set->d_cnt;
+	diskptr_t ptr = allocate_block(set->d_cnt);
+	diskptr_t threadblock = allocate_threadwal();
+	for (int i = 0; i < set->d_cnt; i++) {
+		tckpt.tckpt_ptrs[i].w_inode = set->d_pg[i].inode;
+		tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(set->d_pg[i].offset);
+		tckpt.tckpt_ptrs[i].ptr = ptr + i;
 	}
 
-	// Copy out the dirty sets
-	sets = malloc(sizeof(struct checkpoint_data) * cnt, M_OBJSNAP, M_WAITOK);
-	for (i = 0; i < cnt; i++) {
-		vnode = &vnode_cache[i];
-		memcpy(&sets[i].cp_d, &vnode->v_dirty, sizeof(struct dirtyset));
-		sets[i].cp_inode = inodes[i];
+	TASK_INIT(&task, 0, &objsnap_task_fn, set);
 
-		// Set the dirty cnt to zero!
-		vnode->v_dirty.d_cnt = 0;
-	}
+	taskqueue_enqueue(osdata.os_tq, &task);
 
-	// Unlock Node locks!
-	for (i = 0; i < cnt; i++) {
-		vnode = &vnode_cache[i];
-		UNLOCK(&vnode->v_lock);
-	}
+	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock), 
+		BLOCKSIZE, 0, 0, 0);
 
-	OS_STOP(LOCKANDCOPY);
+	memcpy(bp->b_data, &tckpt, sizeof(struct threadcheckpoint));
+	bwrite(bp);
+
+	taskqueue_quiesce(osdata.os_tq);
+
+
+
+	// // Old Checkpoint path
+	// int cnt = args->ckpt_cnt;
+	// index_t *inodes = args->ckpt_inodes;
+	// int i;
+	// struct objsnap_vnode *vnode;
+	// osinode_t *inode;
+	// struct checkpoint_data *sets;
+
+	// // Acquire Locks to copy over dirty lists, we need to worry about holding
+	// // onto the commit lock for too long. so well need to let go of our locks
+	// // and retry.
+	// OS_START(CHECKPOINT);
+
+	// OS_START(LOCKANDCOPY);
+
+	// for (i = 0; i < cnt; i++) {
+	// 	vnode = &vnode_cache[i];
+	// 	LOCK(&vnode->v_lock, LK_EXCLUSIVE);
+	// 	LOCK(&vnode->v_commit_lock, LK_EXCLUSIVE);
+	// }
+
+	// // Copy out the dirty sets
+	// sets = malloc(sizeof(struct checkpoint_data) * cnt, M_OBJSNAP, M_WAITOK);
+	// for (i = 0; i < cnt; i++) {
+	// 	vnode = &vnode_cache[i];
+	// 	memcpy(&sets[i].cp_d, &vnode->v_dirty, sizeof(struct dirtyset));
+	// 	sets[i].cp_inode = inodes[i];
+
+	// 	// Set the dirty cnt to zero!
+	// 	vnode->v_dirty.d_cnt = 0;
+	// }
+
+	// // Unlock Node locks!
+	// for (i = 0; i < cnt; i++) {
+	// 	vnode = &vnode_cache[i];
+	// 	UNLOCK(&vnode->v_lock);
+	// }
+
+	// OS_STOP(LOCKANDCOPY);
 	
-	OS_START(SERIALIZE);
-	for (i = 0; i < cnt; i++) {
-		struct checkpoint_data *set = &sets[i];
-		int pagecnt = set->cp_d.d_cnt;
-		struct task task;
+	// OS_START(SERIALIZE);
+	// for (i = 0; i < cnt; i++) {
+	// 	struct checkpoint_data *set = &sets[i];
+	// 	int pagecnt = set->cp_d.d_cnt;
+	// 	struct task task;
 
-		diskptr_t ptr = allocate_block(pagecnt);
+	// 	diskptr_t ptr = allocate_block(pagecnt);
 
-		// Set the pointer so the task knows where to flush the io
-		set->ptr = ptr;
+	// 	// Set the pointer so the task knows where to flush the io
+	// 	set->ptr = ptr;
 
-		TASK_INIT(&task, 0, &objsnap_task_fn, set);
+	// 	TASK_INIT(&task, 0, &objsnap_task_fn, set);
 
-		taskqueue_enqueue(osdata.os_tq, &task);
+	// 	taskqueue_enqueue(osdata.os_tq, &task);
 
-		for (int t = 0; t < pagecnt; t++) {
-			struct pageset *pinfo = &set->cp_d.d_pg[t];
-			diskptr_t tmpptr = ptr + t;
-			VTREE_INSERT(&vnode->v_tree, 
-					IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &tmpptr);
-		}
+	// 	for (int t = 0; t < pagecnt; t++) {
+	// 		struct pageset *pinfo = &set->cp_d.d_pg[t];
+	// 		diskptr_t tmpptr = ptr + t;
+	// 		VTREE_INSERT(&vnode->v_tree, 
+	// 				IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &tmpptr);
+	// 	}
 
-		vnode = &vnode_cache[i]; 
-		inode = vnode->v_inode;
+	// 	vnode = &vnode_cache[i]; 
+	// 	inode = vnode->v_inode;
 
-		// Update inodes to include checkpoint lists
+	// 	// Update inodes to include checkpoint lists
 
-		for (int t = 0; t < cnt; t++) {
-			inode->i_checkpointed_with[t] = sets[t].cp_inode;
-		}
+	// 	for (int t = 0; t < cnt; t++) {
+	// 		inode->i_checkpointed_with[t] = sets[t].cp_inode;
+	// 	}
 		
-		inode->i_cnt = cnt;
-		inode->i_version += 1;
+	// 	inode->i_cnt = cnt;
+	// 	inode->i_version += 1;
 
-		// Get the sibling inode and write to that instead.
-		inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
+	// 	// Get the sibling inode and write to that instead.
+	// 	inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
 		
-		OS_START(INODE);
-		osinode_t *inode = vnode->v_inode;
-		// During inserting we likely COW faulted which means we need to update our treeptr;
-		inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
-		VTREE_CHECKPOINT(&vnode->v_tree);
+	// 	OS_START(INODE);
+	// 	osinode_t *inode = vnode->v_inode;
+	// 	// During inserting we likely COW faulted which means we need to update our treeptr;
+	// 	inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
+	// 	VTREE_CHECKPOINT(&vnode->v_tree);
 
-		if (write_ondisk_inode(inode)) {
-			printf("Issue writing inode!\n");
-		}
-		// TASK_INIT(&tasks[1], 0, &objsnap_flush_inode_fn, vnode);
-		// taskqueue_enqueue(osdata.os_tq, &tasks[1]);
-		OS_STOP(INODE);
+	// 	if (write_ondisk_inode(inode)) {
+	// 		printf("Issue writing inode!\n");
+	// 	}
+	// 	// TASK_INIT(&tasks[1], 0, &objsnap_flush_inode_fn, vnode);
+	// 	// taskqueue_enqueue(osdata.os_tq, &tasks[1]);
+	// 	OS_STOP(INODE);
 
-		taskqueue_quiesce(osdata.os_tq);
-	}
+	// 	taskqueue_quiesce(osdata.os_tq);
+	// }
 
-	OS_STOP(SERIALIZE);
+	// OS_STOP(SERIALIZE);
 
-	OS_START(UNLOCK);
-	// Unlock commit locks
-	for (i = 0; i < cnt; i++) {
-		vnode = &vnode_cache[i];
-		UNLOCK(&vnode->v_commit_lock);
-	}
+	// OS_START(UNLOCK);
+	// // Unlock commit locks
+	// for (i = 0; i < cnt; i++) {
+	// 	vnode = &vnode_cache[i];
+	// 	UNLOCK(&vnode->v_commit_lock);
+	// }
 
-	free(sets, M_OBJSNAP);
+	// free(sets, M_OBJSNAP);
 
-	flush();
+	// flush();
 
-	OS_STOP(UNLOCK);
-	OS_STOP(CHECKPOINT);
+	// OS_STOP(UNLOCK);
+	// OS_STOP(CHECKPOINT);
 
 	return;
 }
@@ -289,7 +317,7 @@ usrptr_to_page(vm_offset_t ptr, struct pageset *pinfo) {
 	if (!vm_map_range_valid(&vms->vm_map, ptr, ptr + BLOCKSIZE))
 		return (-1);
 
-	if (vm_map_lookup(&map, ptr, VM_PROT_READ | VM_PROT_WRITE, 
+	if (vm_map_lookup(&map, ptr, VM_PROT_READ, 
 		&entry, &obj, &pindex, &out_prot, &wired) != KERN_SUCCESS) {
 		// Error handling
 		return (-1);
@@ -308,36 +336,28 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 {
 	vm_offset_t addr = args->os_page;
 	index_t inode_i = args->os_index;
+	int tid = args->os_tid;
+
 	struct pageset pageinfo;
+	pageinfo.inode = inode_i;
+	struct dirtyset *set = &threadsets[tid];
 	int error = 0;
-
-	struct objsnap_vnode *vnode = &vnode_cache[inode_i];
-	if (vnode->v_magic != OBJMAGIC) {
-		printf("Invalid vnode\n");
-		return (error);
-	}
-
-	LOCK(&vnode->v_lock, LK_EXCLUSIVE);
-
+	
 	error = usrptr_to_page(addr, &pageinfo);
 	if (error) {
-		UNLOCK(&vnode->v_lock);
 		return EINVAL;
 	}
 
 	// SLOW LOOKUP
-	for (int i = 0; i < vnode->v_dirty.d_cnt; i++) {
-		vm_pindex_t p = vnode->v_dirty.d_pg[i].pindex;
+	for (int i = 0; i < set->d_cnt; i++) {
+		vm_pindex_t p = set->d_pg[i].pindex;
 		if (pageinfo.pindex == p) {
-			UNLOCK(&vnode->v_lock);
 			return (0);
 		}
 	}
 
-	vnode->v_dirty.d_pg[vnode->v_dirty.d_cnt] = pageinfo;
-	vnode->v_dirty.d_cnt += 1;
-
-	UNLOCK(&vnode->v_lock);
+	set->d_pg[set->d_cnt] = pageinfo;
+	set->d_cnt += 1;
 
 	return (0);
 }
@@ -408,12 +428,23 @@ objsnap_init(struct objsnap_init_args *args)
 	vref(vp);
 
 	osdata.os_vp = vp;
+
 	lockinit(&osdata.os_lock, 0, "objsnap_big_lock", 
 		0, LK_NOSHARE);
 
 	superblock_init(vp);
 
 	allocator_init();
+
+	// Init per thread dirty lists
+	for (int x = alloc.alloc_walptr;
+			x < alloc.alloc_walptr + MAXTHREADS;
+			x++) {
+    	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(x), 
+        	BLOCKSIZE, 0, 0, 0);
+		bzero(bp->b_data, BLOCKSIZE);
+		bwrite(bp);
+	}
 
 	vput(vp);
 
@@ -507,6 +538,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		bzero(vnode_cache, sizeof(struct objsnap_vnode) * MAXINODES);
 
 		bzero(osdata.os_stats, sizeof(struct cycletimer) * OS_STAT_MAX);
+		bzero(threadsets, sizeof(struct dirtyset) * MAXTHREADS);
 		// Initialize Locks
 		for (int i = 0; i < MAXINODES; i++) {
 			lockinit(&vnode_cache[i].v_lock, 0, "objsnap node lock", 

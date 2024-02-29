@@ -28,6 +28,7 @@
 
 #define OBJMAGIC (0xdeadbeef)
 #define MAXDRTYCNT (64)
+#define MAXTHREADS (64)
 
 #define LOCK(lock, type) (lockmgr(lock, type, NULL))
 #define UNLOCK(lock) (lockmgr(lock, LK_RELEASE, NULL))
@@ -65,6 +66,18 @@ struct pageset {
 	vm_object_t obj;
 	vm_pindex_t pindex;
 	vm_offset_t offset;
+	index_t inode;
+};
+
+struct walptr {
+	index_t w_inode; // Object being modified
+	index_t	w_index;  // Index into the object the modification occurs
+	diskptr_t ptr; // Ptr to the data holding the modified page
+};
+
+struct threadcheckpoint {
+	int tckpt_cnt;	
+	struct walptr tckpt_ptrs[MAXDRTYCNT];
 };
 
 struct dirtyset {
@@ -83,7 +96,6 @@ struct objsnap_vnode {
 	struct virtualtree v_tree;
 	struct lock v_lock;
 	struct lock v_commit_lock;
-	struct dirtyset v_dirty;
 	enum VSTATE v_state;
 };
 

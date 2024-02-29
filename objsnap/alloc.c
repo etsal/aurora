@@ -25,17 +25,37 @@
 
 struct allocator alloc;
 
+
+
+// We need to allocate inodes and jazz in a SSD block size (256 MB), or rather 
+// the WALs should definately be allocated serially
 void
 allocator_init()
 {
 	alloc.alloc_size_total_blocks = (superblock.super_size / BLOCKSIZE);
 	alloc.alloc_bsize = BLOCKSIZE;
-	alloc.alloc_next_block = superblock.super_max_inodes + 2;
+	alloc.alloc_next_block = superblock.super_max_inodes + MAXTHREADS + 2;
+    alloc.alloc_walptr = superblock.super_max_inodes + 2;
 };
+
+diskptr_t
+allocate_threadwal()
+{
+    size_t n = atomic_load_64(&alloc.alloc_walptr);
+    size_t try = (n + 1) % MAXTHREADS;
+    while (!atomic_cmpset_64(&alloc.alloc_walptr, n, (n + 1) % MAXTHREADS)) {
+        n = atomic_load_64(&alloc.alloc_walptr);
+        try = (n + 1) % MAXTHREADS;
+    }
+
+    return try;
+}
 
 diskptr_t allocate_block(int i)
 {
-    return (diskptr_t)atomic_fetchadd_64(&alloc.alloc_next_block, i);
+    return (diskptr_t)atomic_fetchadd_64(
+        &alloc.alloc_next_block, i);
+
 }
 
 

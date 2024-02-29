@@ -109,7 +109,7 @@ int objsnap_systemstats(statblock *stats, int *cnt)
 }
 
 int 
-objsnap_checkpoint(index_t *fds, int size)
+objsnap_checkpoint(int tid)
 {
     struct objsnap_checkpoint_args args;
     int error = 0;
@@ -117,8 +117,7 @@ objsnap_checkpoint(index_t *fds, int size)
         return error;
     }
 
-    memcpy(args.ckpt_inodes, fds, size * sizeof(index_t));
-    args.ckpt_cnt = size;
+    args.tid = tid;
     return ioctl(OS_FD, OBJSNAP_CHECKPOINT, &args);
 }
 
