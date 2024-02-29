@@ -170,9 +170,9 @@ setup_map(struct mapping *map, size_t size_in_blocks)
 	return (0);
 }
 
-int dirty_map(struct mapping *map, off_t offset) 
+int dirty_map(struct mapping *map, int tid, off_t offset) 
 {
-	return objsnap_dirty(map->inode, map->map + (offset * BLOCKSIZE));
+	return objsnap_dirty(map->inode, tid, map->map + (offset * BLOCKSIZE));
 }
 
 int checkpoint_maps(struct mapping *maps, size_t cnt)
@@ -198,7 +198,7 @@ basicTest()
 		printf("Error in setting up mapping\n");
 	}
 
-	if ((error = dirty_map(&map, 0))) {
+	if ((error = dirty_map(&map, 0, 0))) {
 		printf("Problem dirtying mapping\n");
 	}
 
@@ -230,7 +230,7 @@ random_write_load(int num_objs, int size_of_obj_in_blocks,
 		for (int obj_i = 0; obj_i < num_objs; obj_i++ ) {
 			for (int writes_i = 0; writes_i < writes_per_iteration; writes_i++) {
 				int rand_offset = rand() % size_of_obj_in_blocks;
-				dirty_map(&maps[obj_i], rand_offset);
+				dirty_map(&maps[obj_i], 0, rand_offset);
 			}
 		}
 		checkpoint_maps(maps, num_objs);

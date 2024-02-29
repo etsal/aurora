@@ -10,7 +10,7 @@ extern "C" {
 
 int objsnap_init(char *path);
 index_t objsnap_create();
-int objsnap_dirty(index_t fd, void *ptr);
+int objsnap_dirty(index_t fd, int tid, void *ptr);
 int objsnap_stat(index_t fd, osinode_t *inode);
 int objsnap_checkpoint(index_t *fds, int size);
 int objsnap_systemstats(statblock *stats, int *cnt);

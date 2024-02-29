@@ -64,6 +64,7 @@ struct objsnap_create_args {
 };
 
 struct objsnap_dirty_page_args {
+  int os_tid;
   index_t os_index;
   uintptr_t os_page;
 };
