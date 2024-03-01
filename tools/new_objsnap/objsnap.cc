@@ -271,7 +271,8 @@ printstats(uint64_t clock) {
 	}
 }
 
-void threadedTest(int numthreads, int num_objs, 
+uint64_t
+threadedTest(int numthreads, int num_objs, 
 	int size_of_obj_in_blocks,
 	int writes_per_iteration, int times) {
 
@@ -279,10 +280,6 @@ void threadedTest(int numthreads, int num_objs,
     std::vector<std::thread> threads;
 	uint64_t *avgs = (uint64_t *)malloc(sizeof(uint64_t)* numthreads);
 	int error = 0;
-	if ((error = setup())) {
-        printf("Problem in Setup!");
-		return;
-    }
 
 	srand(time(NULL));
 
@@ -290,6 +287,7 @@ void threadedTest(int numthreads, int num_objs,
 	for (int i = 0; i < num_objs; i++) {
 		setup_map(&maps[i], size_of_obj_in_blocks);
 	}
+
 
     for (int i = 0; i < numthreads; ++i) {
         // Using a lambda function for the thread's task
@@ -310,25 +308,37 @@ void threadedTest(int numthreads, int num_objs,
         thread.join();
     }
 
+	uint64_t sum_avg = 0;
 	for (int i = 0; i < numthreads; i++) {
-		std::cout << i << ": "<< cycles_to_us(avgs[i], clock_cycles) << std::endl;
+		printf("[%d] %f\n", i, cycles_to_us(avgs[i], clock_cycles));
+		sum_avg += cycles_to_us(avgs[i], clock_cycles);
 	}
+
+	return sum_avg / numthreads;
 }
 
 
 int main()
 {
+	int error = 0;
+	if ((error = setup())) {
+        printf("Problem in Setup!");
+		return (-1);
+    }
+
 	//basicTest();
 	clock_cycles = get_clock_speed_sleep();
-	int numCheckpoints = 5000;
-	int numthreads = 4;
-	uint64_t before = rdtscp();	
-	threadedTest(numthreads, 1, 2048, 4, numCheckpoints);
-	uint64_t after = rdtscp();
-	uint64_t change = after - before;
-	change = cycles_to_ms(change, clock_cycles);
-	printf("Checkpoints[%d]: %lu\n", numCheckpoints * numthreads, change);
-	printf("Avg Ckpts/ms: %lu\n", numCheckpoints * numthreads / change);
+	int numCheckpoints = 2000;
+	int numthreads = 16;
+	int numblocks_per_ckpt = 8;
+	for (int i = 1; i < numthreads; i++) {
+		uint64_t before = rdtscp();	
+		uint64_t avglat = threadedTest(i, 1, 2048, numblocks_per_ckpt, numCheckpoints);
+		uint64_t after = rdtscp();
+		uint64_t change = after - before;
+		change = cycles_to_ms(change, clock_cycles);
+		printf("[%d] Ckpts/ms(%lu), latency(%lu) \n", i, (numCheckpoints * i) / change, avglat);
+	}
 
 	printstats(clock_cycles);
 }

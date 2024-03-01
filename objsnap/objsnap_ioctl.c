@@ -46,6 +46,8 @@
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
 
 struct objsnap_metadata osdata;
+static uint64_t epoch;
+
 super_t superblock;
 struct objsnap_vnode *vnode_cache = NULL;
 int pbufcnt = -1;

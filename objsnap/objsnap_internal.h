@@ -77,6 +77,7 @@ struct walptr {
 
 struct threadcheckpoint {
 	int tckpt_cnt;	
+	uint64_t ckptid;
 	struct walptr tckpt_ptrs[MAXDRTYCNT];
 };
 
