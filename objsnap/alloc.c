@@ -36,8 +36,9 @@ allocator_init()
 	mtx_init(&alloc.alloc_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
 	alloc.alloc_bsize = BLOCKSIZE;
 	alloc.alloc_next_block = superblock.super_max_inodes + MAXTHREADS + 2;
-    alloc.alloc_walptr_head = superblock.super_max_inodes + 2;
-    alloc.alloc_walptr_tail = superblock.super_max_inodes + 2;
+    alloc.alloc_base = superblock.super_max_inodes + 2;
+    alloc.alloc_walptr_head = 0; 
+    alloc.alloc_walptr_tail = 0;
 };
 
 diskptr_t
@@ -58,13 +59,13 @@ allocate_threadwal()
         pause("Waiting on Syncer", hz / 10);
     }
     
-    alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAXTHREADS;
-
     ptr = alloc.alloc_walptr_head;
+
+    alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAXTHREADS;
 
     mtx_unlock(&alloc.alloc_lk);
 
-    return ptr;
+    return ptr + alloc.alloc_base;
 }
 
 diskptr_t allocate_block(int i)

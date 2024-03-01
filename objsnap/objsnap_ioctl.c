@@ -175,7 +175,6 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(set->d_pg[i].offset);
 		tckpt.tckpt_ptrs[i].ptr = ptr + i;
 	}
-
 	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock), 
 		BLOCKSIZE, 0, 0, 0);
 
@@ -191,8 +190,6 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	set->d_cnt = 0;
 
 	OS_STOP(CHECKPOINT, &before);
-
-
 
 	return;
 }
@@ -434,7 +431,7 @@ objsnap_sync_dirtylist(int threadlist_at)
 {
 	struct buf *bp;
 	struct threadcheckpoint set;
-	index_t inode_i[MAXINODES];
+	index_t inode_i[64];
 	int inode_cnt = 0;
 
 	int error;
@@ -449,7 +446,7 @@ objsnap_sync_dirtylist(int threadlist_at)
 
 	memcpy(&set, bp->b_data, sizeof(struct threadcheckpoint));
 	brelse(bp);
-	
+
 	// Create out list of inode objects
 	for (int i = 0; i < set.tckpt_cnt; i++) {
 		struct walptr *ptr = &set.tckpt_ptrs[i];
@@ -505,57 +502,7 @@ objsnap_sync_dirtylist(int threadlist_at)
 		}
 	}
 
-	printf("Found set %lu with %d writes\n", set.tckpt_txnid, set.tckpt_cnt);
 	return (0);
-	
-
-
-	// 	vnode = &vnode_cache[i]; 
-	// 	inode = vnode->v_inode;
-
-	// 	// Update inodes to include checkpoint lists
-
-	// 	for (int t = 0; t < cnt; t++) {
-	// 		inode->i_checkpointed_with[t] = sets[t].cp_inode;
-	// 	}
-		
-	// 	inode->i_cnt = cnt;
-	// 	inode->i_version += 1;
-
-	// 	// Get the sibling inode and write to that instead.
-	// 	inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
-		
-	// 	OS_START(INODE);
-	// 	osinode_t *inode = vnode->v_inode;
-	// 	// During inserting we likely COW faulted which means we need to update our treeptr;
-	// 	inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
-	// 	VTREE_CHECKPOINT(&vnode->v_tree);
-
-	// 	if (write_ondisk_inode(inode)) {
-	// 		printf("Issue writing inode!\n");
-	// 	}
-	// 	// TASK_INIT(&tasks[1], 0, &objsnap_flush_inode_fn, vnode);
-	// 	// taskqueue_enqueue(osdata.os_tq, &tasks[1]);
-	// 	OS_STOP(INODE);
-
-	// 	taskqueue_quiesce(osdata.os_tq);
-	// }
-
-	// OS_STOP(SERIALIZE);
-
-	// OS_START(UNLOCK);
-	// // Unlock commit locks
-	// for (i = 0; i < cnt; i++) {
-	// 	vnode = &vnode_cache[i];
-	// 	UNLOCK(&vnode->v_commit_lock);
-	// }
-
-	// free(sets, M_OBJSNAP);
-
-	// flush();
-
-	// OS_STOP(UNLOCK);
-	// OS_STOP(CHECKPOINT);
 }
 
 
@@ -571,12 +518,10 @@ objsnap_wal_syncer(void *ctx)
 		// If the head ptr outpaces us we just keep staying in the while look clearing
 		// stuff out
 		while (alloc.alloc_walptr_tail != alloc.alloc_walptr_head) {
-			objsnap_sync_dirtylist(alloc.alloc_walptr_tail);
+			objsnap_sync_dirtylist(alloc.alloc_walptr_tail + alloc.alloc_base);
 			// Ring buffer logic
 			alloc.alloc_walptr_tail = (alloc.alloc_walptr_tail + 1) % MAXTHREADS;
 		}
-
-
 
 		mtx_lock(&osdata.os_syncer_lk);
 		msleep_sbt(&osdata.os_syncer_wakeup, &osdata.os_syncer_lk,

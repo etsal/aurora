@@ -21,6 +21,7 @@ struct allocator {
   volatile size_t alloc_next_block;
   volatile size_t alloc_walptr_head;
   volatile size_t alloc_walptr_tail;
+  volatile size_t alloc_base;
 };
 
 void allocator_init(void);
