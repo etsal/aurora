@@ -60,6 +60,12 @@ struct objsnap_metadata {
 	struct g_provider *os_provider;
 	struct lock os_lock;
 	struct cycletimer os_stats[32];
+
+	struct cv os_syncer_cv;
+	struct mtx os_syncer_lk;
+	struct thread *os_syncertd;
+	int os_syncer_wakeup;
+	int os_syncer_exit;
 };
 
 struct pageset {
@@ -77,7 +83,7 @@ struct walptr {
 
 struct threadcheckpoint {
 	int tckpt_cnt;	
-	uint64_t ckptid;
+	uint64_t tckpt_txnid;
 	struct walptr tckpt_ptrs[MAXDRTYCNT];
 };
 

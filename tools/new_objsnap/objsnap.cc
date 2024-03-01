@@ -329,7 +329,7 @@ int main()
 	//basicTest();
 	clock_cycles = get_clock_speed_sleep();
 	int numCheckpoints = 2000;
-	int numthreads = 16;
+	int numthreads = 8;
 	int numblocks_per_ckpt = 8;
 	for (int i = 1; i < numthreads; i++) {
 		uint64_t before = rdtscp();	

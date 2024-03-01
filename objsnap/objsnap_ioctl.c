@@ -46,7 +46,7 @@
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
 
 struct objsnap_metadata osdata;
-static uint64_t epoch;
+static uint64_t global_txnid;
 
 super_t superblock;
 struct objsnap_vnode *vnode_cache = NULL;
@@ -57,6 +57,16 @@ struct checkpoint_data {
 	struct dirtyset *cp_d;
 	diskptr_t ptr;
 };
+
+static uint64_t get_txn_id() {
+	return atomic_fetchadd_64(&global_txnid, 1);
+}
+
+static void
+objsnap_wakeup_syncer()
+{
+	wakeup(&osdata.os_syncer_wakeup);
+}
 
 static int
 objsnap_sysctl_init(void)
@@ -71,10 +81,9 @@ objsnap_sysctl_fini(void)
 }
 
 static void
-objsnap_data_flush(void *ctx, int pending)
+objsnap_threadwal_flush(struct checkpoint_data *set)
 {
 	uint64_t before;
-	struct checkpoint_data *set = (struct checkpoint_data *)(ctx);
 	struct uio uio;
 	int pagecnt = set->cp_d->d_cnt;
 	diskptr_t ptr = set->ptr;
@@ -109,7 +118,6 @@ objsnap_data_flush(void *ctx, int pending)
 	OS_STOP(DATAWRITE, &before);
 
 	free(aiov, M_OBJSNAP);
-
 }
 
 static void
@@ -158,6 +166,8 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	struct checkpoint_data data;
 
 	tckpt.tckpt_cnt = set->d_cnt;
+	tckpt.tckpt_txnid = get_txn_id();
+
 	diskptr_t ptr = allocate_block(set->d_cnt);
 	diskptr_t threadblock = allocate_threadwal();
 	for (int i = 0; i < set->d_cnt; i++) {
@@ -176,121 +186,13 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	data.cp_d = set;
 	data.ptr = ptr;
 
-	objsnap_data_flush(&data, 0);
+	objsnap_threadwal_flush(&data);
 
 	set->d_cnt = 0;
 
 	OS_STOP(CHECKPOINT, &before);
 
 
-	// // Old Checkpoint path
-	// int cnt = args->ckpt_cnt;
-	// index_t *inodes = args->ckpt_inodes;
-	// int i;
-	// struct objsnap_vnode *vnode;
-	// osinode_t *inode;
-	// struct checkpoint_data *sets;
-
-	// // Acquire Locks to copy over dirty lists, we need to worry about holding
-	// // onto the commit lock for too long. so well need to let go of our locks
-	// // and retry.
-	// OS_START(CHECKPOINT);
-
-	// OS_START(LOCKANDCOPY);
-
-	// for (i = 0; i < cnt; i++) {
-	// 	vnode = &vnode_cache[i];
-	// 	LOCK(&vnode->v_lock, LK_EXCLUSIVE);
-	// 	LOCK(&vnode->v_commit_lock, LK_EXCLUSIVE);
-	// }
-
-	// // Copy out the dirty sets
-	// sets = malloc(sizeof(struct checkpoint_data) * cnt, M_OBJSNAP, M_WAITOK);
-	// for (i = 0; i < cnt; i++) {
-	// 	vnode = &vnode_cache[i];
-	// 	memcpy(&sets[i].cp_d, &vnode->v_dirty, sizeof(struct dirtyset));
-	// 	sets[i].cp_inode = inodes[i];
-
-	// 	// Set the dirty cnt to zero!
-	// 	vnode->v_dirty.d_cnt = 0;
-	// }
-
-	// // Unlock Node locks!
-	// for (i = 0; i < cnt; i++) {
-	// 	vnode = &vnode_cache[i];
-	// 	UNLOCK(&vnode->v_lock);
-	// }
-
-	// OS_STOP(LOCKANDCOPY);
-	
-	// OS_START(SERIALIZE);
-	// for (i = 0; i < cnt; i++) {
-	// 	struct checkpoint_data *set = &sets[i];
-	// 	int pagecnt = set->cp_d.d_cnt;
-	// 	struct task task;
-
-	// 	diskptr_t ptr = allocate_block(pagecnt);
-
-	// 	// Set the pointer so the task knows where to flush the io
-	// 	set->ptr = ptr;
-
-	// 	TASK_INIT(&task, 0, &objsnap_task_fn, set);
-
-	// 	taskqueue_enqueue(osdata.os_tq, &task);
-
-	// 	for (int t = 0; t < pagecnt; t++) {
-	// 		struct pageset *pinfo = &set->cp_d.d_pg[t];
-	// 		diskptr_t tmpptr = ptr + t;
-	// 		VTREE_INSERT(&vnode->v_tree, 
-	// 				IDX_TO_OFF(pinfo->pindex) / BLOCKSIZE, &tmpptr);
-	// 	}
-
-	// 	vnode = &vnode_cache[i]; 
-	// 	inode = vnode->v_inode;
-
-	// 	// Update inodes to include checkpoint lists
-
-	// 	for (int t = 0; t < cnt; t++) {
-	// 		inode->i_checkpointed_with[t] = sets[t].cp_inode;
-	// 	}
-		
-	// 	inode->i_cnt = cnt;
-	// 	inode->i_version += 1;
-
-	// 	// Get the sibling inode and write to that instead.
-	// 	inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
-		
-	// 	OS_START(INODE);
-	// 	osinode_t *inode = vnode->v_inode;
-	// 	// During inserting we likely COW faulted which means we need to update our treeptr;
-	// 	inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
-	// 	VTREE_CHECKPOINT(&vnode->v_tree);
-
-	// 	if (write_ondisk_inode(inode)) {
-	// 		printf("Issue writing inode!\n");
-	// 	}
-	// 	// TASK_INIT(&tasks[1], 0, &objsnap_flush_inode_fn, vnode);
-	// 	// taskqueue_enqueue(osdata.os_tq, &tasks[1]);
-	// 	OS_STOP(INODE);
-
-	// 	taskqueue_quiesce(osdata.os_tq);
-	// }
-
-	// OS_STOP(SERIALIZE);
-
-	// OS_START(UNLOCK);
-	// // Unlock commit locks
-	// for (i = 0; i < cnt; i++) {
-	// 	vnode = &vnode_cache[i];
-	// 	UNLOCK(&vnode->v_commit_lock);
-	// }
-
-	// free(sets, M_OBJSNAP);
-
-	// flush();
-
-	// OS_STOP(UNLOCK);
-	// OS_STOP(CHECKPOINT);
 
 	return;
 }
@@ -453,8 +355,8 @@ objsnap_init(struct objsnap_init_args *args)
 	allocator_init();
 
 	// Init per thread dirty lists
-	for (int x = alloc.alloc_walptr;
-			x < alloc.alloc_walptr + MAXTHREADS;
+	for (int x = alloc.alloc_walptr_head;
+			x < alloc.alloc_walptr_head + MAXTHREADS;
 			x++) {
     	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(x), 
         	BLOCKSIZE, 0, 0, 0);
@@ -528,6 +430,168 @@ static struct cdevsw objsnap_cdevsw = {
 };
 
 static int
+objsnap_sync_dirtylist(int threadlist_at) 
+{
+	struct buf *bp;
+	struct threadcheckpoint set;
+	index_t inode_i[MAXINODES];
+	int inode_cnt = 0;
+
+	int error;
+
+	// These won't be actual reads, if system is under load, these will
+	// almost always be in the cache.
+	if ((error = bread(osdata.os_vp, 
+			DEVICE_BLOCK_NUM(threadlist_at), 
+			BLOCKSIZE, NOCRED, &bp)) != 0) {
+		return error;
+	}
+
+	memcpy(&set, bp->b_data, sizeof(struct threadcheckpoint));
+	brelse(bp);
+	
+	// Create out list of inode objects
+	for (int i = 0; i < set.tckpt_cnt; i++) {
+		struct walptr *ptr = &set.tckpt_ptrs[i];
+		int found = false;
+		for (int t = 0; t < inode_cnt; t++) {
+			if (inode_i[t] == ptr->w_inode) {
+				found = true;
+			}
+		}
+
+		if (!found) {
+			inode_i[inode_cnt] = ptr->w_inode;
+			inode_cnt += 1;
+		}
+	}
+
+	// We now go through every write it owns and update the tree
+	for (int i = 0; i < inode_cnt; i++) {
+		// Grab our vnode
+		struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
+		osinode_t *inode = vnode->v_inode;
+
+		for (int t = 0; t < set.tckpt_cnt; t++) {
+			struct walptr *ptr = &set.tckpt_ptrs[t];
+			if (ptr->w_inode == inode_i[i]) {
+				VTREE_INSERT(&vnode->v_tree, 
+					IDX_TO_OFF(ptr->w_index) / BLOCKSIZE, &ptr->ptr);
+			}
+		}
+
+		inode = vnode->v_inode;
+
+		// Update inodes to include checkpoint lists
+
+		for (int t = 0; t < inode_cnt; t++) {
+			inode->i_checkpointed_with[t] = inode_i[t];
+		}
+		
+		inode->i_cnt = inode_cnt;
+
+		// Set our inode to the correct value
+		inode->i_version = set.tckpt_txnid;
+
+		// Get the sibling inode and write to that instead.
+		inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
+		
+		// During inserting we likely COW faulted which means we need to update our treeptr;
+		inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
+		VTREE_CHECKPOINT(&vnode->v_tree);
+
+		if (write_ondisk_inode(inode)) {
+			printf("Issue writing inode!\n");
+		}
+	}
+
+	printf("Found set %lu with %d writes\n", set.tckpt_txnid, set.tckpt_cnt);
+	return (0);
+	
+
+
+	// 	vnode = &vnode_cache[i]; 
+	// 	inode = vnode->v_inode;
+
+	// 	// Update inodes to include checkpoint lists
+
+	// 	for (int t = 0; t < cnt; t++) {
+	// 		inode->i_checkpointed_with[t] = sets[t].cp_inode;
+	// 	}
+		
+	// 	inode->i_cnt = cnt;
+	// 	inode->i_version += 1;
+
+	// 	// Get the sibling inode and write to that instead.
+	// 	inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
+		
+	// 	OS_START(INODE);
+	// 	osinode_t *inode = vnode->v_inode;
+	// 	// During inserting we likely COW faulted which means we need to update our treeptr;
+	// 	inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
+	// 	VTREE_CHECKPOINT(&vnode->v_tree);
+
+	// 	if (write_ondisk_inode(inode)) {
+	// 		printf("Issue writing inode!\n");
+	// 	}
+	// 	// TASK_INIT(&tasks[1], 0, &objsnap_flush_inode_fn, vnode);
+	// 	// taskqueue_enqueue(osdata.os_tq, &tasks[1]);
+	// 	OS_STOP(INODE);
+
+	// 	taskqueue_quiesce(osdata.os_tq);
+	// }
+
+	// OS_STOP(SERIALIZE);
+
+	// OS_START(UNLOCK);
+	// // Unlock commit locks
+	// for (i = 0; i < cnt; i++) {
+	// 	vnode = &vnode_cache[i];
+	// 	UNLOCK(&vnode->v_commit_lock);
+	// }
+
+	// free(sets, M_OBJSNAP);
+
+	// flush();
+
+	// OS_STOP(UNLOCK);
+	// OS_STOP(CHECKPOINT);
+}
+
+
+
+static void
+objsnap_wal_syncer(void *ctx)
+{
+	mtx_lock(&osdata.os_syncer_lk);
+	while (!osdata.os_syncer_exit) {
+		mtx_unlock(&osdata.os_syncer_lk);
+
+		// Clear out current tail to head of Wal entrys, no need for a lock
+		// If the head ptr outpaces us we just keep staying in the while look clearing
+		// stuff out
+		while (alloc.alloc_walptr_tail != alloc.alloc_walptr_head) {
+			objsnap_sync_dirtylist(alloc.alloc_walptr_tail);
+			// Ring buffer logic
+			alloc.alloc_walptr_tail = (alloc.alloc_walptr_tail + 1) % MAXTHREADS;
+		}
+
+
+
+		mtx_lock(&osdata.os_syncer_lk);
+		msleep_sbt(&osdata.os_syncer_wakeup, &osdata.os_syncer_lk,
+			PRIBIO, "Sync-wait", SBT_1NS * 100000, 0,
+			C_HARDCLOCK);
+	}
+
+	osdata.os_syncer_exit = -1;
+	mtx_unlock(&osdata.os_syncer_lk);
+	kthread_exit();
+}
+
+
+
+static int
 objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 {
 	int error = 0;
@@ -556,6 +620,10 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		bzero(osdata.os_stats, sizeof(struct cycletimer) * OS_STAT_MAX);
 		bzero(threadsets, sizeof(struct dirtyset) * MAXTHREADS);
 
+		// TODO: FOR NOW JUST SET TO ZERO, During recovery we
+		// have to see the latest txn id
+		global_txnid = 0;
+
 		// Initialize Locks
 		for (int i = 0; i < MAXINODES; i++) {
 			lockinit(&vnode_cache[i].v_lock, 0, "objsnap node lock", 
@@ -567,6 +635,20 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
 			taskqueue_thread_enqueue, &osdata.os_tq);
+
+		// Syncer State
+		cv_init(&osdata.os_syncer_cv, "Objsnap Syncer CV");
+		mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
+		osdata.os_syncer_wakeup = 0;
+		osdata.os_syncer_exit = 0;
+
+		error = kthread_add((void (*)(void *))objsnap_wal_syncer, &osdata, NULL,
+			&osdata.os_syncertd, 0, 0, "objsnap wal syncer");
+
+		if (error) {
+			panic("Syncer could not start");
+		}
+
 
 		taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
 
@@ -610,6 +692,19 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 				free(vnode->v_inode, M_OBJSNAP);
 			}
 		}
+
+		osdata.os_syncer_exit = 1;
+		objsnap_wakeup_syncer();
+
+		while(osdata.os_syncer_exit != -1) {
+			mtx_lock(&osdata.os_syncer_lk);
+			msleep_sbt(&osdata.os_syncer_wakeup, &osdata.os_syncer_lk,
+				PRIBIO, "Sync-exit-wait", SBT_1MS, 0,
+				C_HARDCLOCK);
+			mtx_unlock(&osdata.os_syncer_lk);
+		}
+		
+
 
 		taskqueue_quiesce(osdata.os_tq);
 		taskqueue_free(osdata.os_tq);

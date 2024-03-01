@@ -33,22 +33,38 @@ void
 allocator_init()
 {
 	alloc.alloc_size_total_blocks = (superblock.super_size / BLOCKSIZE);
+	mtx_init(&alloc.alloc_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
 	alloc.alloc_bsize = BLOCKSIZE;
 	alloc.alloc_next_block = superblock.super_max_inodes + MAXTHREADS + 2;
-    alloc.alloc_walptr = superblock.super_max_inodes + 2;
+    alloc.alloc_walptr_head = superblock.super_max_inodes + 2;
+    alloc.alloc_walptr_tail = superblock.super_max_inodes + 2;
 };
 
 diskptr_t
 allocate_threadwal()
 {
-    size_t n = atomic_load_64(&alloc.alloc_walptr);
-    size_t try = (n + 1) % MAXTHREADS;
-    while (!atomic_cmpset_64(&alloc.alloc_walptr, n, (n + 1) % MAXTHREADS)) {
-        n = atomic_load_64(&alloc.alloc_walptr);
-        try = (n + 1) % MAXTHREADS;
-    }
+    int check_behind;
+    diskptr_t ptr;
 
-    return try;
+    mtx_lock(&alloc.alloc_lk);
+    size_t curhead = alloc.alloc_walptr_head;
+    size_t curtail = alloc.alloc_walptr_head;
+    check_behind = ((curhead + 1) % MAXTHREADS) == curtail;
+    while (check_behind) {
+        curhead = alloc.alloc_walptr_head;
+        curtail = alloc.alloc_walptr_head;
+        check_behind = ((curhead + 1) % MAXTHREADS) == curtail;
+        printf("WAITING ON SYNCER!");
+        pause("Waiting on Syncer", hz / 10);
+    }
+    
+    alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAXTHREADS;
+
+    ptr = alloc.alloc_walptr_head;
+
+    mtx_unlock(&alloc.alloc_lk);
+
+    return ptr;
 }
 
 diskptr_t allocate_block(int i)
