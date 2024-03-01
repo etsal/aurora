@@ -328,12 +328,13 @@ int main()
 
 	//basicTest();
 	clock_cycles = get_clock_speed_sleep();
-	int numCheckpoints = 2000;
+	int numCheckpoints = 5000;
 	int numthreads = 8;
-	int numblocks_per_ckpt = 8;
-	for (int i = 1; i < numthreads; i++) {
+	int numblocks_per_ckpt = 16;
+	int GiB = (1024 * 1024) / BLOCKSIZE;
+	for (int i = 1; i < numthreads + 1; i++) {
 		uint64_t before = rdtscp();	
-		uint64_t avglat = threadedTest(i, 1, 2048, numblocks_per_ckpt, numCheckpoints);
+		uint64_t avglat = threadedTest(i, 1, 64 * GiB, numblocks_per_ckpt, numCheckpoints);
 		uint64_t after = rdtscp();
 		uint64_t change = after - before;
 		change = cycles_to_ms(change, clock_cycles);
