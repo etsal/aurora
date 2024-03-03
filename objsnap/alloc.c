@@ -66,7 +66,6 @@ allocator_init()
     while (left) {
         ptr.offset = offset;
         bucket = determine_bucket_max(left);
-        printf("Whats left %u - %d\n", left, bucket);
         internalsize = 1 << (bucket);
         ptr.size = internalsize;
 
