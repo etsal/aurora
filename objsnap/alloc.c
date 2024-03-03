@@ -256,3 +256,4 @@ allocate_inode_done:
 
     return newinode;
 }
+

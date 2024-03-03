@@ -18,7 +18,7 @@
 
 #include "binaryalloc.h"
 
-MALLOC_DEFINE(M_OBJSNAP_BA, "binary allocator", "binary allocator");
+MALLOC_DEFINE(M_ARRAY, "Array allocator", "array allocator");
 
 #ifdef BINARY_ALLOCATOR_DEBUG 
 #define BADEBUG(...) BADEBUG(__VA_ARGS__)
@@ -30,31 +30,29 @@ ba_print(struct binaryallocator *ba)
 {
     printf("Binary Allocator State:\n");
     for (int i = 0; i < (MAXPOWEROFTWO + 1); i++) {
-        printf("[%d, %u] %d\n", i, 1 << i, ba->ba_flists[i].f_cnt);
+        printf("[%d, %u] %d\n", i, 1 << i, ba->ba_flists[i].cnt);
     }
 }
 
 void 
 ba_init(struct binaryallocator *ba)
 {
-    struct freelist *f;
+    struct arraylist *f;
 	mtx_init(&ba->ba_lock, "Binary allocator Lock", NULL, MTX_DEF);
     for (int i = 0; i < (MAXPOWEROFTWO + 1); i++) {
         f = &ba->ba_flists[i];
-        f->f_cnt = 0;
-        f->f_max = INITLISTSIZE;
-        f->f_lists = malloc(sizeof(diskptr_t) * INITLISTSIZE, M_OBJSNAP_BA, M_WAITOK);
+        initlist(f, INITLISTSIZE);
     }
 }
 
 void 
 ba_destroy(struct binaryallocator *ba)
 {
-    struct freelist *f;
+    struct arraylist *f;
 
     for (int i = 0; i < MAXPOWEROFTWO + 1; i++) {
         f = &ba->ba_flists[i];
-        free(f->f_lists, M_OBJSNAP_BA);
+        destroylist(f);
     }
 }
 
@@ -73,11 +71,11 @@ determine_bucket(int numblocks)
 }
 
 static int 
-allocate_from_bucket(struct freelist *f, diskptr_t *ptr)
+allocate_from_bucket(struct arraylist *f, diskptr_t *ptr)
 {
-    if (f->f_cnt) {
-        *ptr = f->f_lists[f->f_cnt - 1];
-        f->f_cnt -= 1;
+    if (f->cnt) {
+        *ptr = f->list[f->cnt - 1];
+        f->cnt -= 1;
 
         return (0);
     }
@@ -85,20 +83,11 @@ allocate_from_bucket(struct freelist *f, diskptr_t *ptr)
     return ENOSPC;
 }
 
-static void
-expand_freelist(struct freelist *f)
-{
-    diskptr_t *newlist = malloc(sizeof(diskptr_t) * (f->f_max * 2), M_OBJSNAP_BA, M_WAITOK);
-    memcpy(newlist, f->f_lists, f->f_max * sizeof(diskptr_t));
-    f->f_max = f->f_max * 2;
-    free(f->f_lists, M_OBJSNAP_BA);
-    f->f_lists = newlist;
-}
 
 static int
 split_above(struct binaryallocator *ba, int bucket) 
 {
-    struct freelist *from, *into;
+    struct arraylist *from, *into;
     diskptr_t ptr;
     int error;
     int splitbucket = bucket + 1;
@@ -110,16 +99,16 @@ split_above(struct binaryallocator *ba, int bucket)
     from = &ba->ba_flists[splitbucket];
     into = &ba->ba_flists[bucket];
 
-    KASSERT(into->f_cnt == 0, ("Bucket should be empty!"));
+    KASSERT(into->cnt == 0, ("Bucket should be empty!"));
 
 
-    if (from->f_cnt == 0) {
+    if (from->cnt == 0) {
         error = split_above(ba, splitbucket);
         if (error) {
             panic("Out of space\n");
         }
 
-        KASSERT(from->f_cnt == 2, ("Should be two available after split"));
+        KASSERT(from->cnt == 2, ("Should be two available after split"));
     }
 
     // Only ever going up 1 power of two so split it into two
@@ -130,8 +119,8 @@ split_above(struct binaryallocator *ba, int bucket)
         for (int i = 0; i < 2; i++) {
             tmpptr.offset = ptr.offset + (splitinto * i);
             tmpptr.size = splitinto;
-            into->f_lists[into->f_cnt] = tmpptr;
-            into->f_cnt += 1;
+            into->list[into->cnt] = tmpptr;
+            into->cnt += 1;
         }
         return (0);
     } 
@@ -142,7 +131,7 @@ split_above(struct binaryallocator *ba, int bucket)
 int
 ba_alloc(struct binaryallocator *ba, int numblocks, diskptr_t *ptr)
 {
-    struct freelist *f;
+    struct arraylist *f;
 
     mtx_lock(&ba->ba_lock);
     int bucket = determine_bucket(numblocks);
@@ -179,54 +168,49 @@ ba_alloc(struct binaryallocator *ba, int numblocks, diskptr_t *ptr)
 static void 
 ba_free_unlocked(struct binaryallocator *ba, diskptr_t tofree)
 {
-    struct freelist *f;
+    struct arraylist *f;
     int bucket = determine_bucket(tofree.size);
     f = &ba->ba_flists[bucket];
     int next;
     KASSERT(tofree.size == (1 << bucket), ("Pointer does not belong in this bucket\n"));
 
     // Edge case of empty list
-    if (f->f_cnt == 0) {
-        f->f_lists[0] = tofree;
-        f->f_cnt = 1;
+    if (f->cnt == 0) {
+        f->list[0] = tofree;
+        f->cnt = 1;
         return;
     }
 
     // We go through the list to determine 
     // TODO: We need to order from largest to smalled so we can
     // pop off the tail easily when allocating
-    for (next = 0; next < f->f_cnt; next++) {
-        if (f->f_lists[next].offset == tofree.offset) {
+    for (next = 0; next < f->cnt; next++) {
+        if (f->list[next].offset == tofree.offset) {
             panic("Value already found?\n");
         }
 
-        if (f->f_lists[next].offset > tofree.offset) {
+        if (f->list[next].offset > tofree.offset) {
             break;
         }
     }
 
     // MERGE!
-    if ((tofree.offset + tofree.size) == f->f_lists[next].offset && 
+    if ((tofree.offset + tofree.size) == f->list[next].offset && 
         (bucket != MAXPOWEROFTWO)) {
-        KASSERT(f->f_lists[next].size == tofree.size, 
+        KASSERT(f->list[next].size == tofree.size, 
             ("We want to merge, they are different sizes\n"));
         tofree.size = tofree.size * 2;            
-        memmove(&f->f_lists[next], &f->f_lists[next + 1], 
-            sizeof(diskptr_t) * (f->f_cnt - next - 1));
-        f->f_cnt -= 1;
+        removelist(f, next);
         ba_free_unlocked(ba, tofree);
 
         return;
     }
 
-    if (f->f_cnt == f->f_max) {
-        expand_freelist(f);
+    if (f->cnt == f->max) {
+        reinitlist(f, f->max * 2);
     }
 
-    memmove(&f->f_lists[next + 1], &f->f_lists[next], 
-        sizeof(diskptr_t) * (f->f_cnt - next));
-    f->f_lists[next] = tofree;
-    f->f_cnt += 1;
+    addlist(f, next, tofree);
 }
 
 void
@@ -236,3 +220,48 @@ ba_free(struct binaryallocator *ba, diskptr_t tofree)
     ba_free_unlocked(ba, tofree);
     mtx_unlock(&ba->ba_lock);
 }
+
+void 
+initlist(struct arraylist *al, int max)
+{
+    al->cnt = 0;
+    al->max = max;
+    al->list = malloc(sizeof(diskptr_t) * max, M_ARRAY, M_WAITOK);
+}
+
+void 
+destroylist(struct arraylist *al)
+{
+    free(al->list, M_ARRAY);
+}
+
+void 
+addlist(struct arraylist *al, int at, diskptr_t value) 
+{
+    memmove(&al->list[at + 1], &al->list[at], 
+        sizeof(diskptr_t) * (al->cnt - at));
+    al->list[at] = value;
+    al->cnt += 1;
+}
+
+void 
+removelist(struct arraylist *al, int index) 
+{
+    memmove(&al->list[index], &al->list[index + 1], 
+        sizeof(diskptr_t) * (al->cnt - index - 1));
+    al->cnt -= 1;
+}
+
+
+void
+reinitlist(struct arraylist *f, int to)
+{
+    diskptr_t *newlist = malloc(sizeof(diskptr_t) * to, 
+        M_ARRAY, M_WAITOK);
+    int amount = to < f->cnt ? to : f->cnt;
+    memcpy(newlist, f->list, amount * sizeof(diskptr_t));
+    f->max = to;
+    free(f->list, M_ARRAY);
+    f->list = newlist;
+}
+
