@@ -22,6 +22,7 @@
 
 #include "objsnap_ioctl.h"
 #include "vtree.h"
+#include "binaryalloc.h"
 
 
 #define OBJMAGIC (0xdeadbeef)
@@ -102,8 +103,6 @@ struct objsnap_vnode {
 	struct lock v_lock;
 	struct lock v_commit_lock;
 	enum VSTATE v_state;
-	diskptr_t *v_deadlist;
-	diskptr_t *v_freeme;
 };
 
 

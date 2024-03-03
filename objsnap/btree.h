@@ -20,6 +20,7 @@
 #include <sys/vnode.h>
 
 #include "vtree.h"
+#include "binaryalloc.h"
 
 #define BT_MAX_KEY_SIZE (8L)
 #define BT_MAX_HDR_SIZE (64L)
@@ -100,7 +101,13 @@ typedef struct btree
   size_t tr_vs;
   uint64_t tr_version;
   struct vnode *tr_vp;
+
+	struct arraylist tr_freeme;
+	struct arraylist tr_deadlist;
 } btree;
+
+btree_t btree_create(void);
+void btree_destroy(btree_t tree);
 
 int
 btree_init(void* tree, struct vnode *vp, diskptr_t ptr, size_t value_size);

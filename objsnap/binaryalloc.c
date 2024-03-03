@@ -238,6 +238,9 @@ destroylist(struct arraylist *al)
 void 
 addlist(struct arraylist *al, int at, diskptr_t value) 
 {
+    if (al->cnt == al->max)
+        reinitlist(al, al->max * 2);
+
     memmove(&al->list[at + 1], &al->list[at], 
         sizeof(diskptr_t) * (al->cnt - at));
     al->list[at] = value;
@@ -250,6 +253,16 @@ removelist(struct arraylist *al, int index)
     memmove(&al->list[index], &al->list[index + 1], 
         sizeof(diskptr_t) * (al->cnt - index - 1));
     al->cnt -= 1;
+}
+
+void
+appendlist(struct arraylist *al, diskptr_t ptr)
+{
+    if (al->cnt == al->max)
+        reinitlist(al, al->max * 2);
+
+    al->list[al->cnt] = ptr;
+    al->cnt += 1;
 }
 
 
@@ -265,3 +278,15 @@ reinitlist(struct arraylist *f, int to)
     f->list = newlist;
 }
 
+
+void 
+movelist(struct arraylist *dst, struct arraylist *src)
+{
+    free(dst->list, M_ARRAY);
+    dst->list = src->list;
+    dst->max = src->max;
+    dst->cnt = src->cnt;
+    src->list = malloc(sizeof(diskptr_t) * dst->max, 
+        M_ARRAY, M_WAITOK);
+    src->cnt = 0;
+}

@@ -136,6 +136,11 @@ allocate_block(int i)
     return ptr;
 }
 
+void 
+free_block(diskptr_t ptr)
+{
+    ba_free(&alloc.alloc_impl, ptr);
+}
 
 int 
 write_ondisk_inode(osinode_t *inode)
@@ -189,7 +194,7 @@ osinode_t *allocate_inode()
     vnode->v_inode = newinode;
 
     // We must allocate the btree first and place it in our inode structures
-    btree_t btree = malloc(sizeof(struct btree), M_OBJSNAP, M_WAITOK);
+    btree_t btree = btree_create();
     vnode->v_tree = vtree_create(btree, &btreeops, 0);
     VTREE_INIT(&vnode->v_tree, osdata.os_vp, 
         newinode->i_treeptr, sizeof(diskptr_t));
@@ -242,7 +247,6 @@ osinode_t *allocate_inode()
 
     vnode->v_magic = OBJMAGIC;
     vnode->v_state = VALID;
-
 
 allocate_inode_done:
 

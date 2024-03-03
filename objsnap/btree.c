@@ -12,10 +12,13 @@
 #include <sys/bufobj.h>
 
 #include "objsnap_internal.h"
+#include "binaryalloc.h"
 #include "btree.h"
 #include "alloc.h"
 
 //#define DEBUG
+
+MALLOC_DEFINE(M_BTREE, "Btree allocator", "btree allocator");
 
 #define INDEX_NULL ((uint16_t)-1)
 
@@ -204,6 +207,9 @@ path_cow(bpath_t path)
 
       // Release the buffer from its mapping
       brelvp(tmp->n_bp);
+
+      // Append to the deadlist
+      appendlist(&tmp->n_tree->tr_deadlist, tmp->n_ptr);
 
       // Assign our new pointer
       tmp->n_ptr = newptr;
@@ -949,6 +955,23 @@ btree_bumpversion(void *treep) {
 uint64_t btree_getversion(void *treep) {
   btree_t tree = (btree_t)treep;
   return tree->tr_version;
+}
+
+btree_t
+btree_create() {
+  btree_t tree = malloc(sizeof(struct btree), M_BTREE, M_WAITOK);
+  initlist(&tree->tr_freeme, 64);
+  initlist(&tree->tr_deadlist, 64);
+
+  return tree;
+}
+
+void
+btree_destroy(btree_t ptr)
+{
+  destroylist(&ptr->tr_freeme);
+  destroylist(&ptr->tr_deadlist);
+  free(ptr, M_BTREE);
 }
 
 

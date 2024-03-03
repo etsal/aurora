@@ -41,6 +41,7 @@
 #include "objsnap_internal.h"
 #include "objsnap_ioctl.h"
 #include "alloc.h"
+#include "btree.h"
 
 /* XXX Rename to M_SLS. */
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
@@ -119,20 +120,6 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 	OS_STOP(DATAWRITE, &before);
 
 	free(aiov, M_OBJSNAP);
-}
-
-static void
-objsnap_flush_inode_fn(void *ctx, int pending)
-{
-	struct objsnap_vnode *vnode = (struct objsnap_vnode *)(ctx);
-	osinode_t *inode = vnode->v_inode;
-	// During inserting we likely COW faulted which means we need to update our treeptr;
-	inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
-	VTREE_CHECKPOINT(&vnode->v_tree);
-
-	if (write_ondisk_inode(inode)) {
-		printf("Issue writing inode!\n");
-	}
 }
 
 static void
@@ -502,6 +489,25 @@ objsnap_sync_dirtylist(int threadlist_at)
 		if (write_ondisk_inode(inode)) {
 			printf("Issue writing inode!\n");
 		}
+
+		// GC Work Section
+		btree_t tree = vnode->v_tree.v_tree;
+
+		// We first free all value on the freelist 
+		// This is values that the old inode (that has now completely gone)
+		// and been rewritten, so we must free it.
+		// For example: 
+		// Epoch 1 (inode 1): 10 new writes, 0 COWS, 0 freeme, 0 deadlist
+		// Epoch 2 (inode 2): 5 new writes, 5 COWS, 0 freeme, 5 deadlist
+		// Epoch 3 (inode 1): 2 new writes, 2 COWS, 5 freeme, 2 deadlist
+		// Epoch 4 (inode 2): 1 new writes, 1 COWS, 2 freeme, 1 deadlist
+		for (int i = 0; i < tree->tr_freeme.cnt; i++) {
+			free_block(tree->tr_freeme.list[i]);
+		}
+
+		// Move the deadlist to free list
+		movelist(&tree->tr_freeme, &tree->tr_deadlist);
+
 	}
 
 	return (0);
@@ -631,7 +637,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		for (int i = 0; i < MAXINODES; i ++) {
 			struct objsnap_vnode *vnode = &vnode_cache[i];
 			if (vnode->v_tree.v_tree != NULL) {
-				free(vnode->v_tree.v_tree, M_OBJSNAP);
+				btree_destroy(vnode->v_tree.v_tree);
 				vnode->v_tree.v_tree = NULL;
 				
 			}

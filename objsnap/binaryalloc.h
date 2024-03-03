@@ -28,6 +28,8 @@ void destroylist(struct arraylist *al);
 void addlist(struct arraylist *al, int at, diskptr_t value);
 void removelist(struct arraylist *al, int index);
 void reinitlist(struct arraylist *al, int to);
+void appendlist(struct arraylist *al, diskptr_t ptr);
+void movelist(struct arraylist *a, struct arraylist *b);
 
 // Remember its the 2^(x) * PAGE_SIZE
 // Or rather its how many continguous page blocks are there.
