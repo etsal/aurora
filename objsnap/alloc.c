@@ -25,21 +25,70 @@
 
 struct allocator alloc;
 
+static int 
+determine_bucket_max(int numblocks)
+{
+    int i = 1;
+    int shift;
+    for (shift = 0; shift <= MAXPOWEROFTWO; shift++) {
+        if (numblocks == (i << shift)) {
+            return (shift);
+        }
 
+        if (numblocks < (i << shift)) {
+            return (shift - 1);
+        }
+    }
+
+    return MAXPOWEROFTWO;
+}
 
 // We need to allocate inodes and jazz in a SSD block size (256 MB), or rather 
 // the WALs should definately be allocated serially
 void
 allocator_init()
 {
-	alloc.alloc_size_total_blocks = (superblock.super_size / BLOCKSIZE);
+    diskptr_t ptr;
+    size_t internalsize;
+    int bucket;
+
+	alloc.alloc_size_total_blocks = superblock.super_size;
 	mtx_init(&alloc.alloc_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
 	alloc.alloc_bsize = BLOCKSIZE;
-	alloc.alloc_next_block = superblock.super_max_inodes + MAXTHREADS + 2;
+
+    ba_init(&alloc.alloc_impl);
+
+    // Start the offset after inodes and wal thread list
+    uint32_t offset = superblock.super_max_inodes + MAXTHREADS + 2;
+    uint32_t left = alloc.alloc_size_total_blocks - offset;
+
+    // Maximum allowed entry in the allocator
+    while (left) {
+        ptr.offset = offset;
+        bucket = determine_bucket_max(left);
+        printf("Whats left %u - %d\n", left, bucket);
+        internalsize = 1 << (bucket);
+        ptr.size = internalsize;
+
+        left -= ptr.size;
+        offset += ptr.size;
+        ba_free(&alloc.alloc_impl, ptr);
+    }
+
+    printf("Initial allocator State:\n");
+    ba_print(&alloc.alloc_impl);
+
+
     alloc.alloc_base = superblock.super_max_inodes + 2;
     alloc.alloc_walptr_head = 0; 
     alloc.alloc_walptr_tail = 0;
 };
+
+void 
+allocator_destroy()
+{
+    ba_destroy(&alloc.alloc_impl);
+}
 
 diskptr_t
 allocate_threadwal()
@@ -59,20 +108,32 @@ allocate_threadwal()
         pause("Waiting on Syncer", hz / 10);
     }
     
-    ptr = alloc.alloc_walptr_head;
+    ptr.offset = alloc.alloc_walptr_head;
+    ptr.size = 1; 
 
     alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAXTHREADS;
 
     mtx_unlock(&alloc.alloc_lk);
 
-    return ptr + alloc.alloc_base;
+    ptr.offset += alloc.alloc_base;
+
+    return ptr;
 }
 
-diskptr_t allocate_block(int i)
+diskptr_t 
+allocate_block(int i)
 {
-    return (diskptr_t)atomic_fetchadd_64(
-        &alloc.alloc_next_block, i);
+    diskptr_t ptr;
+    uint64_t before;
+    int error;
+    OS_START(ALLOCATE, &before);
+    error = ba_alloc(&alloc.alloc_impl, i, &ptr);
+    if (error) {
+        panic("Problem allocating!");
+    }
+    OS_STOP(ALLOCATE, &before);
 
+    return ptr;
 }
 
 
@@ -134,7 +195,7 @@ osinode_t *allocate_inode()
         newinode->i_treeptr, sizeof(diskptr_t));
 
     // Initialize ondisk root block
-    error = bread(osdata.os_vp, DEVICE_BLOCK_NUM(newinode->i_treeptr), 
+    error = bread(osdata.os_vp, DEVICE_BLOCK_NUM(newinode->i_treeptr.offset), 
         BLOCKSIZE, NOCRED, &super_bp);
 
     // We just dirty, they have created but not checkpointed so don't need to write here.

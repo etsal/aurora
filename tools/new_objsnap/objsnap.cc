@@ -108,7 +108,7 @@ int newfs(const char *path)
 	memset(sb, 0, ssize);
 	sb->super_ssize = ssize;
 	sb->super_bsize = 512;
-	sb->super_size = size;
+	sb->super_size = size / BLOCKSIZE;
 	sb->super_asize = bsize;
     sb->super_max_inodes = MAXINODES;
     sb->super_next = 1;
@@ -295,9 +295,9 @@ threadedTest(int numthreads, int num_objs,
 			size_of_obj_in_blocks, writes_per_iteration, times, i](){
 
 			uint64_t avg =  random_write_task(maps, num_objs, 
-			size_of_obj_in_blocks,
-			writes_per_iteration, 
-			times, i);
+				size_of_obj_in_blocks,
+				writes_per_iteration, 
+				times, i);
 			avgs[i] = avg;
 
         });
@@ -320,25 +320,27 @@ threadedTest(int numthreads, int num_objs,
 
 int main()
 {
+	clock_cycles = get_clock_speed_sleep();
+	//basicTest();
 	int error = 0;
 	if ((error = setup())) {
         printf("Problem in Setup!");
 		return (-1);
     }
 
-	//basicTest();
-	clock_cycles = get_clock_speed_sleep();
 	int numCheckpoints = 5000;
-	int numthreads = 8;
+	int numthreads = 4;
 	int numblocks_per_ckpt = 16;
-	int GiB = (1024 * 1024) / BLOCKSIZE;
+	int MiB = (1024 * 1024) / BLOCKSIZE;
+	int GiB = (1024 * MiB);
 	for (int i = 1; i < numthreads + 1; i++) {
 		uint64_t before = rdtscp();	
-		uint64_t avglat = threadedTest(i, 1, 64 * GiB, numblocks_per_ckpt, numCheckpoints);
+		uint64_t avglat = threadedTest(i, 1, 32 * GiB, 
+			numblocks_per_ckpt, numCheckpoints);
 		uint64_t after = rdtscp();
-		uint64_t change = after - before;
-		change = cycles_to_ms(change, clock_cycles);
-		printf("[%d] Ckpts/ms(%lu), latency(%lu) \n", i, (numCheckpoints * i) / change, avglat);
+		double change = after - before;
+		change = cycles_to_s(change, clock_cycles);
+		printf("[%d] Ckpts/s(%f), latency(%lu) \n", i, (numCheckpoints * i) / change, avglat);
 	}
 
 	printstats(clock_cycles);

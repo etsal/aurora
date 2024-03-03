@@ -90,7 +90,8 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 
 	struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
 
-	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(ptr), BLOCKSIZE * pagecnt, 
+	struct buf *bp = getblk(osdata.os_vp, 
+		DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE * pagecnt, 
 		0, 0, GB_UNMAPPED);
 
 	for (int t = 0; t < pagecnt; t++) {
@@ -151,6 +152,7 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	STAT_TO_ARGS(args, BTCOW);
 	STAT_TO_ARGS(args, BTINSERT);
 	STAT_TO_ARGS(args, CHECKPOINT);
+	STAT_TO_ARGS(args, ALLOCATE);
 	args->os_cnt = OS_STAT_LAST;
 	return (0);
 }
@@ -173,9 +175,10 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	for (int i = 0; i < set->d_cnt; i++) {
 		tckpt.tckpt_ptrs[i].w_inode = set->d_pg[i].inode;
 		tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(set->d_pg[i].offset);
-		tckpt.tckpt_ptrs[i].ptr = ptr + i;
+		tckpt.tckpt_ptrs[i].ptr.offset = ptr.offset + i;
+		tckpt.tckpt_ptrs[i].ptr.size = 1;
 	}
-	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock), 
+	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock.offset), 
 		BLOCKSIZE, 0, 0, 0);
 
 	memcpy(bp->b_data, &tckpt, sizeof(struct threadcheckpoint));
@@ -480,7 +483,6 @@ objsnap_sync_dirtylist(int threadlist_at)
 		inode = vnode->v_inode;
 
 		// Update inodes to include checkpoint lists
-
 		for (int t = 0; t < inode_cnt; t++) {
 			inode->i_checkpointed_with[t] = inode_i[t];
 		}
@@ -545,6 +547,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	case MOD_LOAD:
 
 		bzero(&osdata, sizeof(osdata));
+		bzero(&alloc, sizeof(struct allocator));
 
 		/* Make the SLS available to userspace. */
 		error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
@@ -656,6 +659,8 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		osdata.os_tq = NULL;
 
 		free(vnode_cache, M_OBJSNAP);
+
+		allocator_destroy();
 
     	break;
 	default:

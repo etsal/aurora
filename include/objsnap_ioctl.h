@@ -17,11 +17,17 @@ extern "C" {
 
 #define NULLDISKPTR ((diskptr_t) -1)
 #define BADINDEX ((index_t)(-1))
+#define MAXPOWEROFTWO (31)
 
 
 typedef uint64_t epoch_t;
 typedef int index_t;
-typedef uint64_t diskptr_t;
+
+typedef struct diskptr {
+  uint32_t offset;
+  uint32_t size;
+} diskptr_t;
+
 typedef struct timerstat statblock[OS_STAT_MAX];
 
 typedef struct {

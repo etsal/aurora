@@ -68,7 +68,7 @@ binary_search(uint64_t* arr, size_t size, uint64_t key)
 static void
 btnode_print(btnode_t node)
 {
-  printf("\nNode %lu %lu\n", node->n_ptr, BLOCKSIZE);
+  printf("\nNode %u %lu\n", node->n_ptr.offset, BLOCKSIZE);
   for (int i = 0; i < node->n_len; i += 10) {
     printf("%d: ", i);
     for (int j = i; j < i + 10 && j < node->n_len; j++) {
@@ -81,7 +81,7 @@ btnode_print(btnode_t node)
     for (int i = 0; i < (node->n_len + 1); i += 10) {
       printf("%d: ", i);
       for (int j = i; j < i + 10 && (j < (node->n_len + 1)); j++) {
-        printf(" %lu |", node->n_ch[j]);
+        printf(" %u |", node->n_ch[j].offset);
       }
       printf("\n");
     }
@@ -108,7 +108,8 @@ btnode_wrap_bp(btnode_t node, btree_t tree, struct buf* bp)
 {
   diskptr_t ptr;
 
-  ptr = bp->b_lblkno;
+  ptr.offset = bp->b_lblkno;
+  ptr.size = 1;
 
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
@@ -121,16 +122,19 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 {
   struct buf *bp;
   int error = 0;
-  error = bread(tree->tr_vp, DEVICE_BLOCK_NUM(ptr), BLOCKSIZE, NOCRED, &bp);
+  error = bread(tree->tr_vp, DEVICE_BLOCK_NUM(ptr.offset), 
+    BLOCKSIZE, NOCRED, &bp);
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
   node->n_ptr = ptr;
-  bp->b_blkno = DEVICE_BLOCK_NUM(ptr);
+  bp->b_blkno = DEVICE_BLOCK_NUM(ptr.offset);
   bp->b_iooffset = dbtob(bp->b_blkno);
 
 #ifdef DEBUG
-  printf("[Btnode Init] %p COW(%d) PTR(%lu) Size(%u) Datap(%p) MAX(%lu) Device(%lu)\n", bp, BT_ISCOW(node), ptr, node->n_len, bp->b_data, BT_MAX_KEYS, DEVICE_BLOCK_NUM(ptr));
+  printf("[Btnode Init] %p PTR(%u) Size(%u) Datap(%p) MAX(%lu) Device(%lu)\n", 
+    bp, ptr.offset, node->n_len, 
+    bp->b_data, BT_MAX_KEYS, DEVICE_BLOCK_NUM(ptr.offset));
 #endif
 }
 
@@ -140,19 +144,20 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
 {
   diskptr_t ptr = allocate_block(1);
 
-  struct buf *bp = getblk(tree->tr_vp, DEVICE_BLOCK_NUM(ptr), BLOCKSIZE, 0, 0, 0);
-  bzero(bp->b_data, BLOCKSIZE);
+  struct buf *bp = getblk(tree->tr_vp, DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE, 0, 0, 0);
+    bzero(bp->b_data, BLOCKSIZE);
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
   node->n_ptr = ptr;
   node->n_type = type;
   node->n_len = 0;
-  bp->b_blkno = DEVICE_BLOCK_NUM(ptr);
+  bp->b_blkno = DEVICE_BLOCK_NUM(ptr.offset);
   bp->b_iooffset = dbtob(bp->b_blkno);
 
 #ifdef DEBUG
-  printf("[Btnode Create] %p COW(%d) PTR(%lu) Size(%u) Datap(%p) MAX(%lu) Device(%lu)\n", bp, BT_ISCOW(node), ptr, node->n_len, bp->b_data, BT_MAX_KEYS, DEVICE_BLOCK_NUM(ptr));
+  printf("[Btnode Create] %p PTR(%u) Size(%u) Datap(%p) MAX(%lu) Device(%lu)\n", 
+    bp, ptr.offset, node->n_len, bp->b_data, BT_MAX_KEYS, DEVICE_BLOCK_NUM(ptr.offset));
 #endif
 }
 
@@ -205,8 +210,8 @@ path_cow(bpath_t path)
 
       BO_LOCK(bo);
 
-      tmp->n_bp->b_lblkno = DEVICE_BLOCK_NUM(tmp->n_ptr);
-      tmp->n_bp->b_blkno = DEVICE_BLOCK_NUM(tmp->n_ptr);
+      tmp->n_bp->b_lblkno = DEVICE_BLOCK_NUM(tmp->n_ptr.offset);
+      tmp->n_bp->b_blkno = DEVICE_BLOCK_NUM(tmp->n_ptr.offset);
 
       // Place buffer back onto parent
       bgetvp(tmp->n_tree->tr_vp, tmp->n_bp);
@@ -224,7 +229,7 @@ path_cow(bpath_t path)
       }
 
 #ifdef DEBUG
-      printf("[Btnode COW] %p -> %p)\n", tmp.n_bp, path->p_nodes[i].n_bp);
+      printf("[Btnode COW] %p -> %p)\n", tmp->n_bp, path->p_nodes[i].n_bp);
 #endif
 
       /* Turn off cow on the node and dirty the node */
@@ -350,7 +355,7 @@ btnode_find_ge(btree_t tree, uint64_t* key, void* value, int acquire_as)
   }
 
 #ifdef DEBUG
-  printf("[Find] %lu in %lu\n", *key, node->n_ptr);
+  printf("[Find] %lu in %u\n", *key, node->n_ptr.offset);
 #endif
 
   *key = node->n_keys[idx];
@@ -386,7 +391,8 @@ btnode_inner_insert(btnode_t node, int idx, uint64_t key, diskptr_t value)
   }
 
 #ifdef DEBUG
-  printf("[Internal Insert] %lu at %d in node %lu, Size %u\n", key, idx, node->n_ptr, node->n_len);
+  printf("[Internal Insert] %lu at %d in node %u, Size %u\n", key, idx, 
+    node->n_ptr.offset, node->n_len);
 #endif
   
   node->n_keys[idx] = key;
@@ -472,7 +478,7 @@ btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
   int num_to_move = node->n_len - idx;
 
 #ifdef DEBUG
-  printf("[Insert] %lu at %d in node %lu, Size %u\n", key, idx, node->n_ptr, node->n_len);
+  printf("[Insert] %lu at %d in node %u, Size %u\n", key, idx, node->n_ptr.offset, node->n_len);
   printf("[Insert Extra] base(%p), insert_at(%p), num(%d)\n", node->n_data, &node->n_ch[idx + 2], num_to_move);
 #endif
   if (num_to_move > 0) {

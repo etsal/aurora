@@ -5,8 +5,6 @@
 #include <sys/bitstring.h>
 #include <sys/condvar.h>
 #include <sys/fcntl.h>
-#include <sys/file.h>
-#include <sys/filedesc.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
@@ -121,7 +119,8 @@ OS_STAT_DEFINE(BTFIND, 5);
 OS_STAT_DEFINE(BTCOW, 6);
 OS_STAT_DEFINE(BTINSERT, 7);
 OS_STAT_DEFINE(CHECKPOINT, 8);
-#define OS_STAT_LAST (9)
+OS_STAT_DEFINE(ALLOCATE, 9);
+#define OS_STAT_LAST (10)
 
 #define STAT_TO_ARGS(args, name) ((args)->os_stats[OS_STAT_##name]) = OS_TOSTAT_##name()
 
