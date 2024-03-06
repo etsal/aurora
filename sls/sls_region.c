@@ -248,8 +248,6 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		goto error_single;
 	}
 
-	SDT_PROBE0(sls, , , enter);
-
 	error = slsckpt_alloc(slsp, &sckpt);
 	if (error != 0)
 		goto error;
@@ -258,6 +256,8 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 	PROC_LOCK(p);
 	thread_single(p, SINGLE_BOUNDARY);
 	PROC_UNLOCK(p);
+
+	SDT_PROBE0(sls, , , enter);
 
 	/* Add the data and metadata. This also shadows the object. */
 	error = slsckpt_dataregion_fillckpt(slsp, p, addr, sckpt);
