@@ -61,6 +61,7 @@ SDT_PROBE_DEFINE0(sas, , , block);
 static const size_t MAX_WAL_SIZE = 5368709000;
 static size_t wal_space_used = 0;
 
+uint64_t slsfs_sas_commit_async;
 uint64_t slsfs_sas_tracks;
 uint64_t slsfs_sas_aborts;
 uint64_t slsfs_sas_attempts;
@@ -2131,7 +2132,9 @@ slsfs_sas_trace_commit(void)
 
 	SDT_PROBE1(sas, , , write, written);
 
-	taskqueue_drain_all(slos.slos_tq);
+	/* XXX This flag is used only to make the evaluation scripts easier. */
+	if (!slsfs_sas_commit_async)
+		taskqueue_drain_all(slos.slos_tq);
 	SDT_PROBE0(sas, , , block);
 
 	atomic_add_64(&slsfs_sas_commits, 1);

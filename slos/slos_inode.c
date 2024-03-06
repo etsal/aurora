@@ -38,6 +38,7 @@ static int slos_count_opened_bytes;
 
 extern uint64_t slsfs_sas_aborts;
 extern uint64_t slsfs_sas_commits;
+extern uint64_t slsfs_sas_commit_async;
 
 #ifdef INVARIANTS
 static void
@@ -125,6 +126,9 @@ slos_init(void)
 	(void)SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "sas_commits", CTLFLAG_RD, &slsfs_sas_commits, 0,
 	    "SAS commits done");
+	(void)SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+	    "sas_commit_async", CTLFLAG_RW, &slsfs_sas_commit_async, 0,
+	    "do not block on commit");
 	(void)SYSCTL_ADD_U64(&slos_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
 	    "sas_aborts", CTLFLAG_RD, &slsfs_sas_aborts, 0, "SAS aborts done");
 
