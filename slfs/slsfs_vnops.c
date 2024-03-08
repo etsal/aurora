@@ -2090,21 +2090,12 @@ sas_test_cow(vm_offset_t vaddr, vm_page_t *m)
 
 #define MAX_SAS (256)
 
-static __attribute__((noinline)) void
-slsfs_sas_trace_commit(void)
+static __attribute__((noinline)) size_t
+slsfs_sas_trace_commit_protect(struct pglist *snaplist)
 {
-	struct pglist *snaplist = &curthread->td_snaplist;
 	struct pmap *pmap = &curproc->p_vmspace->vm_pmap;
 	size_t written = 0;
 	vm_page_t m, mtmp;
-	struct vnode *vp;
-	uint64_t oid;
-
-	SDT_PROBE4(sas, , , start, slsfs_sas_tracks, slsfs_sas_removes,
-	    slsfs_sas_attempts, slsfs_sas_copies);
-	slsfs_sas_tracks = 0;
-	slsfs_sas_removes = 0;
-	slsfs_sas_attempts = 0;
 
 	PMAP_LOCK(pmap);
 	TAILQ_FOREACH_SAFE (m, snaplist, snapq, mtmp) {
@@ -2121,7 +2112,14 @@ slsfs_sas_trace_commit(void)
 	pmap_invalidate_all(pmap);
 	PMAP_UNLOCK(pmap);
 
-	SDT_PROBE0(sas, , , protect);
+	return (written);
+}
+
+static __attribute__((noinline)) void
+slsfs_sas_trace_commit_write(struct pglist *snaplist, size_t written)
+{
+	struct vnode *vp;
+	uint64_t oid;
 
 	while (!TAILQ_EMPTY(snaplist)) {
 		oid = TAILQ_FIRST(snaplist)->object->objid;
@@ -2135,6 +2133,26 @@ slsfs_sas_trace_commit(void)
 	/* XXX This flag is used only to make the evaluation scripts easier. */
 	if (!slsfs_sas_commit_async)
 		taskqueue_drain_all(slos.slos_tq);
+}
+
+static __attribute__((noinline)) void
+slsfs_sas_trace_commit(void)
+{
+	struct pglist *snaplist = &curthread->td_snaplist;
+	size_t written = 0;
+
+	SDT_PROBE4(sas, , , start, slsfs_sas_tracks, slsfs_sas_removes,
+	    slsfs_sas_attempts, slsfs_sas_copies);
+	slsfs_sas_tracks = 0;
+	slsfs_sas_removes = 0;
+	slsfs_sas_attempts = 0;
+
+	written = slsfs_sas_trace_commit_protect(snaplist);
+
+	SDT_PROBE0(sas, , , protect);
+
+	slsfs_sas_trace_commit_write(snaplist, written);
+
 	SDT_PROBE0(sas, , , block);
 
 	atomic_add_64(&slsfs_sas_commits, 1);
