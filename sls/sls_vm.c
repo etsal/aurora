@@ -31,6 +31,8 @@
 int sls_objprotect = 1;
 int sls_tracebuf = 1;
 SDT_PROBE_DEFINE(sls, , , procset_loop);
+SDT_PROBE_DEFINE(sls, , , protstart);
+SDT_PROBE_DEFINE(sls, , , protend);
 
 #define SLS_TRACEBUF_SIZE (32768)
 #define SLS_PRECOPY_MAX (64)
@@ -473,6 +475,7 @@ slsvm_entry_shadow(struct proc *p, struct slskv_table *table,
 		 */
 		if (need_protect)
 			slsvm_entry_protect(p, entry);
+		
 		entry->object.vm_object = vmshadow;
 		VM_OBJECT_WLOCK(vmshadow);
 		vm_object_clear_flag(vmshadow, OBJ_ONEMAPPING);
@@ -531,7 +534,7 @@ slsvm_tracebuf_invalidate(struct proc *p)
 	return (false);
 }
 
-int
+__noinline int
 slsvm_entry_shadow_single(struct proc *p, struct slskv_table *table,
     vm_map_entry_t entry)
 {
@@ -546,9 +549,12 @@ slsvm_entry_shadow_single(struct proc *p, struct slskv_table *table,
 	/* If the entries did not need protection we are using the trace buffer.
 	 */
 	if (!need_protect || sls_objprotect) {
+
+		SDT_PROBE0(sls, , , protstart);
 		PMAP_LOCK(pmap);
 		pmap_invalidate_all(pmap);
 		PMAP_UNLOCK(pmap);
+		SDT_PROBE0(sls, , , protend);
 	}
 
 	return (error);
