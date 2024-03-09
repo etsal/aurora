@@ -100,7 +100,7 @@ slsckpt_dataregion_fillckpt(struct slspart *slsp, struct proc *p,
 	return (0);
 }
 
-static void
+static __noinline void
 slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt)
 {
 	struct sls_record *oldrec, *rec;
@@ -128,7 +128,7 @@ slsckpt_compact_single(struct slspart *slsp, struct slsckpt_data *sckpt)
 	slsp->slsp_blanksckpt = sckpt;
 }
 
-static void
+static __noinline void
 slsckpt_dataregion_cleanup(struct slsckpt_data *sckpt_data,
     struct slspart *slsp, uint64_t nextepoch)
 {
