@@ -592,8 +592,7 @@ slsckpt_dataregion_dump(struct slsckpt_dataregion_dump_args *args)
 
 	free(args, M_SLSMM);
 
-	/* Remove the reference taken by the initial ioctl call. */
-	kthread_exit();
+	return;
 }
 
 /*
@@ -686,14 +685,8 @@ slsckpt_dataregion(struct slspart *slsp, struct proc *p, vm_ooffset_t addr,
 		.sckpt_data = sckpt_data,
 		.nextepoch = *nextepoch,
 	};
-	error = kthread_add((void (*)(void *))slsckpt_dataregion_dump,
-	    dump_args, NULL, NULL, 0, 0, "slsckpt_dataregion_dump");
-	if (error != 0) {
-		DEBUG1(
-		    "ERROR: Calling sls_dataregion_dump failed with %d", error);
-		slsp_epoch_advance(slsp, *nextepoch);
-		return (error);
-	}
+
+	slsckpt_dataregion_dump(dump_args);
 
 	return (0);
 
