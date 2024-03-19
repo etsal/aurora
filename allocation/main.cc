@@ -150,7 +150,7 @@ int dowrite(stats &st, std::mutex &mtx,
     int max = GinBlocks;
     int max_writes = 16; // 64 KiB write
     std::uniform_int_distribution<> dis{0, max};
-    std::uniform_int_distribution<> writes{10, max_writes};
+    std::uniform_int_distribution<> writes{1, max_writes};
     std::set<uint32_t> write_set;
     // Generate a random write set
     for (int i = 0; i < writes(gen); i++) {
@@ -169,22 +169,14 @@ void printstats(stats &st) {
     printf("Total new values: %d\n", st.total_newvalues);
     printf("Total over allocations: %d\n", st.total_overallocations);
     printf("Total blocks: %d\n", st.total_blocks);
+    printf("Total Written: %luMiB\n", (st.total_blocks * 4096UL) / (1024 * 1024));
     printf("Total blocks / total alloctions: %f\n", (double)st.total_blocks / (double)st.total_allocations);
 }
 
 // We have to imitate a random write workload, so we collect a write set and decide what frees to do.
-stats dowork(void *allocator, AllocType type, size_t disksize) {
+stats dowork(std::vector<diskptr_t> &allocation_map, std::mutex &mtx, void *allocator, AllocType type, size_t disksize) {
     stats st{};
-    size_t blocks = disksize / BLOCKSIZE;
-    std::vector<diskptr_t> allocation_map;
-    for (size_t i = 0; i < blocks; i++) {
-        diskptr_t tmp;
-        tmp.offset = -1;
-        tmp.size = (uint32_t)-1;
-        allocation_map.push_back(tmp);
-    }
-    std::mutex mtx;
-    int maxTransactions = 100000;
+    int maxTransactions = 300000;
 
     if (type == AllocType::ChunkAllocator)  {
         txn_func = [&](diskptr_t *writeset, int cnt) {
@@ -204,12 +196,14 @@ stats dowork(void *allocator, AllocType type, size_t disksize) {
             return 0;
         };
     }
+
     auto start = high_resolution_clock::now();
     double sum = 0;
     for (int i = 0; i < maxTransactions; i++) {
         if ((i != 0) && (i % 10000) == 0) {
             auto duration = duration_cast<milliseconds>(high_resolution_clock::now() - start);
             printf("Transactions done - %d - %ldms - %f\n", i, duration.count(), sum / 10000);
+            ca_print((struct chunkallocator *)allocator);
             printallocstats();
             sum = 0;
             start  = high_resolution_clock::now();
@@ -223,7 +217,17 @@ stats dowork(void *allocator, AllocType type, size_t disksize) {
 int main() {
     stats s;
     gen = std::mt19937{rd()};
+    std::vector<diskptr_t> allocation_map;
+    std::mutex mtx;
     uint64_t disksize = 1024UL * 1024UL * 1024UL * 4;
+
+    size_t blocks = disksize / BLOCKSIZE;
+    for (size_t i = 0; i < blocks; i++) {
+        diskptr_t tmp;
+        tmp.offset = -1;
+        tmp.size = (uint32_t)-1;
+        allocation_map.push_back(tmp);
+    }
 
     // ba_init(&ba);
     // diskptr_t ptr;
@@ -237,9 +241,17 @@ int main() {
 
 
     ca_init(&ca, 0, disksize, 16);
-    s = dowork(&ca, AllocType::ChunkAllocator, disksize);
+    s = dowork(allocation_map, mtx, &ca, AllocType::ChunkAllocator, disksize);
     printf("Chunk Allocation\n");
     printstats(s);
+    ca_print(&ca);
     ca_destroy(&ca);
+    uint64_t inmap = 0;
+    for (auto k : allocation_map) {
+        if (k.size != (uint32_t)(-1)) {
+            inmap += k.size;
+        }
+    }
+    printf("Blocks allocated %luMiB\n", (inmap * BLOCKSIZE) / (1024 * 1024));
     return 0;
-};
+}
