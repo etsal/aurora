@@ -3,6 +3,8 @@ machine
 x86
 */offset.inc
 */vnode_if*.h
+.vscode
+allocation/main
 
 benchmarks/posix/posix
 benchmarks/vmobject/vmobject
