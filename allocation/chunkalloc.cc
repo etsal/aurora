@@ -293,7 +293,7 @@ tryagain:
     // We must create a transaction that will free a given sector
     struct transaction writeset[64];
     uint32_t writeset_cnt = 0;
-    uint32_t max_write_set = numblocks;
+    uint32_t max_write_set = 2;
     for (uint32_t i = 0; i < curempty->max_sectors; i++) {
         struct sector *map = &curempty->sector_map[i];
         if (map->block_map == 0)
@@ -332,6 +332,8 @@ tryagain:
         curempty->mtx.unlock();
         txn_func(writeset, writeset_cnt);
         writeset_cnt = 0;
+    } else {
+        curempty->mtx.unlock();
     }
 }
 
