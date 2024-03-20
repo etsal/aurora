@@ -21,7 +21,7 @@ using namespace chrono;
 struct binaryallocator ba;
 struct chunkallocator ca;
 
-std::function<void(diskptr_t *, int cnt)> txn_func;
+std::function<void(struct transaction *, int)> txn_func;
 
 enum AllocType {
     BinaryAllocator = 0,
@@ -44,14 +44,14 @@ printallocstats() {
 }
 
 void
-doalloc(void *allocator, AllocType type, int size, diskptr_t *ptr) {
+doalloc(void *allocator, AllocType type, struct transaction *txns, int size, int flag) {
     auto start = high_resolution_clock::now();
     switch (type) {
         case AllocType::BinaryAllocator:
-            ba_alloc((struct binaryallocator *)allocator, size, ptr);
+            //ba_alloc((struct binaryallocator *)allocator, size, ptr);
             break;
         case AllocType::ChunkAllocator:
-            ca_alloc((struct chunkallocator *)allocator, size, ptr);
+            ca_alloc((struct chunkallocator *)allocator, txns, size, flag);
             break;
     }
     allocs += duration_cast<microseconds>(high_resolution_clock::now() - start).count();
@@ -88,60 +88,46 @@ int
 writethis(std::set<uint32_t> &write_set, stats &st, 
     std::vector<diskptr_t> &allocation_map,
     std::mutex &mtx,
-    void *allocator, AllocType type)
+    void *allocator, AllocType type, int flag)
 {
+    struct transaction txns[64];
+    uint32_t txn_cnt = 0;
+    while (write_set.size()) {
+        uint32_t element = *write_set.begin();
+        txns[txn_cnt].inode = 0;
+        txns[txn_cnt].offset = element; 
+        write_set.erase(write_set.begin());
+        txn_cnt += 1;
+    }
+
     // Allocate enough space for it
     auto start = high_resolution_clock::now();
-    do {
-        diskptr_t ptr;
-        doalloc(allocator, type, write_set.size(), &ptr);
-        st.total_allocations++;
-        if (ptr.size > write_set.size()) {
-            st.total_overallocations++;
-        } 
+    doalloc(allocator, type, txns, txn_cnt, flag);
+    st.total_allocations++;
 
-        // We now need to free anything that we overwrite
-        uint32_t i;
-        for (i = 0; i < ptr.size; i++) {
-            if (write_set.size() == 0) {
-                break;
-            }
-
-            // Pop element off list
-            uint32_t element = *write_set.begin();
-            write_set.erase(write_set.begin());
-
-            diskptr_t tmp = ptr;
-            tmp.offset = ptr.offset + i;
-            tmp.size = 1;
-            mtx.lock();
-            // See if we have a previous allocation there
-            if (allocation_map[element].size != (uint32_t)(-1)) {
-                // We do so free it; 
-                st.total_frees++;
-                dofree(allocator, type, allocation_map[element]);
-
-                // Then we update our value with a new value
-                allocation_map[element] = tmp;
-            } else {
-                // Add the value in
-                allocation_map[element] = tmp;
-                st.total_newvalues++;
-            }
-            mtx.unlock();
-        }
-
-        // We have left over allocated amount
-        if (i < ptr.size) {
-            diskptr_t tmp = ptr;
-            tmp.offset = ptr.offset + i;
-            tmp.size = ptr.size - i;
+    // We now need to free anything that we overwrite
+    uint32_t i;
+    for (i = 0; i < txn_cnt; i++) {
+        // Pop element off list
+        uint32_t element = txns[i].offset;
+        mtx.lock();
+        // See if we have a previous allocation there
+        if (allocation_map[element].size != (uint32_t)(-1)) {
+            // We do so free it; 
             st.total_frees++;
-            st.total_extrafrees++;
-            dofree(allocator, type, tmp);
+            dofree(allocator, type, allocation_map[element]);
+
+            // Then we update our value with a new value
+            allocation_map[element] = txns[i].ptr;
+        } else {
+            // Add the value in
+            allocation_map[element] = txns[i].ptr;
+            st.total_newvalues++;
         }
-    } while (write_set.size());
-    return duration_cast<milliseconds>(high_resolution_clock::now() - start).count();
+        mtx.unlock();
+    }
+
+    return duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 }
 
 int dowrite(stats &st, std::mutex &mtx, 
@@ -150,7 +136,7 @@ int dowrite(stats &st, std::mutex &mtx,
     int max = GinBlocks;
     int max_writes = 16; // 64 KiB write
     std::uniform_int_distribution<> dis{0, max};
-    std::uniform_int_distribution<> writes{1, max_writes};
+    std::uniform_int_distribution<> writes{15, max_writes};
     std::set<uint32_t> write_set;
     // Generate a random write set
     for (int i = 0; i < writes(gen); i++) {
@@ -158,7 +144,7 @@ int dowrite(stats &st, std::mutex &mtx,
     }
     st.total_blocks += write_set.size();
 
-    return writethis(write_set, st, allocation_map, mtx, allocator, type);
+    return writethis(write_set, st, allocation_map, mtx, allocator, type, 0);
 }
 
 void printstats(stats &st) {
@@ -176,23 +162,15 @@ void printstats(stats &st) {
 // We have to imitate a random write workload, so we collect a write set and decide what frees to do.
 stats dowork(std::vector<diskptr_t> &allocation_map, std::mutex &mtx, void *allocator, AllocType type, size_t disksize) {
     stats st{};
-    int maxTransactions = 300000;
+    int maxTransactions = 500000;
 
     if (type == AllocType::ChunkAllocator)  {
-        txn_func = [&](diskptr_t *writeset, int cnt) {
+        txn_func = [&](struct transaction *writeset, int cnt) {
             std::set<uint32_t> writes;
             for (int i = 0; i < cnt; i++) {
-                int t = 0;
-                for (auto k : allocation_map) {
-                    if (k.offset == writeset[i].offset) {
-                        assert(k.size == writeset[i].size);
-                        writes.emplace(t);
-                    }
-                    t++;
-                }
+                writes.emplace(writeset[i].offset);
             }
-            writethis(writes, st, allocation_map, mtx, allocator, type);
-
+            writethis(writes, st, allocation_map, mtx, allocator, type, 1);
             return 0;
         };
     }
@@ -200,9 +178,9 @@ stats dowork(std::vector<diskptr_t> &allocation_map, std::mutex &mtx, void *allo
     auto start = high_resolution_clock::now();
     double sum = 0;
     for (int i = 0; i < maxTransactions; i++) {
-        if ((i != 0) && (i % 10000) == 0) {
+        if ((i != 0) && (i % 100) == 0) {
             auto duration = duration_cast<milliseconds>(high_resolution_clock::now() - start);
-            printf("Transactions done - %d - %ldms - %f\n", i, duration.count(), sum / 10000);
+            printf("Transactions done - %d - %ldus - %f\n", i, duration.count(), sum / 10000);
             ca_print((struct chunkallocator *)allocator);
             printallocstats();
             sum = 0;

@@ -16,9 +16,13 @@
 #define SETALL(size) ((1 << (size)) - 1)
 #define UNSET(num, i) ((num) & (~(1 << (i))))
 
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 pthread_cond_t hp_cond = PTHREAD_COND_INITIALIZER;
+
+#include <chrono>
+using namespace std;
+using namespace chrono;
 
 static int 
 determine_bucket(int numblocks)
@@ -36,13 +40,14 @@ determine_bucket(int numblocks)
 
 
 [[maybe_unused]] static void 
-printchunk(struct chunklist *l) 
+printchunk(struct chunk *l) 
 {
     printf("Chunk ptr[%d, %d], used[%d], tnx_size[%d], sectors_free[%ld], freed[%ld], max_sectors[%ld]\n", 
         l->ptr.offset, l->ptr.size, l->used, l->txn_size, l->sectors_free, l->freed, l->max_sectors);
 }
 
-static int getFreeChunk(struct chunkallocator *ca, struct chunklist **cl, uint32_t txn_size) {
+static int 
+getFreeChunk(struct chunkallocator *ca, struct chunk **cl, uint32_t txn_size) {
     ca->new_chunk_calls++;
     for (uint32_t i = 0; i < ca->num_chunks; i++) {
         if (!ca->free_chunks[i].used) {
@@ -65,112 +70,24 @@ chunk_collect(void *arg) {
     // You can extract any other arguments similarly
     
     // Lock the mutex before entering the loop
-    pthread_mutex_lock(&mutex);
-    struct chunklist *curempty = NULL;
-    diskptr_t *writeset = (diskptr_t *)malloc(sizeof(diskptr_t) * ca->txn_size, 
-        M_WAITOK, M_CHUNKALLOC);
-    uint32_t writeset_cnt = 0;
-
+    pthread_mutex_lock(&mtx);
     
     while (!ca->terminate_thread) {
         // Wait for the condition variable to be signaled
-        pthread_cond_wait(&cond, &mutex);
+        pthread_cond_wait(&cond, &mtx);
 
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&mtx);
         
         // Check if termination signal received while waiting
         if (ca->terminate_thread) {
             break;
         }
-        // Find a candidate to empty
-        if (curempty == NULL) {
-            uint32_t max = 0;
-            for (uint32_t i = 0; i < ca->num_chunks; i++) {
-                struct chunklist *l = &ca->free_chunks[i];
-                if ((l->used == FULL) && (l->sectors_free > max)) {
-                    max = l->sectors_free;
-                    curempty = l;
-                }
-            }
-        }
-
-        if (curempty == NULL) {
-            continue;
-        }
-        
-
-        // nothing to do with this
-        if ((curempty->sectors_free <= (curempty->max_sectors / 4)) 
-                && (ca->high_pressure == 0)) {
-            curempty = NULL;
-            pthread_mutex_lock(&mutex);
-            continue;
-        }
-another_round:
-        curempty->used = EMPTYING;
-
-        if (ca->terminate_thread) {
-            break;
-        }
-
-        // Check to see if all our sectors are free now!
-        if (curempty->sectors_free == curempty->max_sectors) {
-            assert(curempty->sectors_free != 0);
-            for (uint32_t t = 0; t < curempty->max_sectors; t++) {
-                assert(__builtin_popcount(curempty->sector_map[t].block_map) == 0);
-            }
-
-            curempty->freed += 1;
-            curempty->used = 0;
-            curempty = NULL;
-            ca->high_pressure = 0;
-            ca->used_chunks--;
-            pthread_mutex_lock(&mutex);
-            pthread_cond_signal(&hp_cond);
-            continue;
-        }
-
-        // We now have a candidate to move
-        // We must create a transaction that will free a given sector
-        for (uint32_t i = 0; i < curempty->max_sectors; i++) {
-            struct sector *map = &curempty->sector_map[i];
-            if (map->block_map == 0)
-                continue;
-
-            for (uint32_t s = 0; s < curempty->txn_size; s++) {
-                // We found a write that can be added to the writeset
-                if (map->block_map & (1 << s)) {
-                    // Get our pointer out
-                    assert(writeset_cnt < curempty->txn_size);
-                    writeset[writeset_cnt].offset = 
-                        curempty->ptr.offset + (i * curempty->txn_size) + s;
-                    writeset[writeset_cnt].size = 1;
-                    writeset_cnt++;
-                }
-                if (writeset_cnt == curempty->txn_size) {
-                    break;
-                }
-            }
-
-            if (writeset_cnt == curempty->txn_size) {
-                break;
-            }
-        }
-
-        if (writeset_cnt > 0) {
-            assert(txn_func);
-            txn_func(writeset, writeset_cnt);
-            writeset_cnt = 0;
-        }
-
-        goto another_round;
     }
     
     // Unlock the mutex before exiting
-    pthread_mutex_unlock(&mutex);
+    pthread_mutex_unlock(&mtx);
     
     printf("Thread %ld terminated.\n", ca->tid);
-    free(writeset, M_CHUNKALLOC);
     pthread_exit(NULL);
 }
 
@@ -190,16 +107,22 @@ ca_init(struct chunkallocator *ca, off_t starting_offset, size_t disksize, int t
 
 
     // These chunk lists act as a bitmap for chunks on the disk.
-    ca->free_chunks = (struct chunklist *)malloc(sizeof(struct chunklist) * chunks, M_CHUNKALLOC, M_WAITOK);
-    ca->chunks_candidates = (struct chunklist **)malloc(sizeof(struct chunklist *) * ca->candidate_cnt, M_CHUNKALLOC, M_WAITOK);
-    memset(ca->chunks_candidates, 0, sizeof(struct chunklist *) * ca->candidate_cnt);
+    ca->free_chunks = (struct chunk *)malloc(sizeof(struct chunk) * chunks, M_CHUNKALLOC, M_WAITOK);
+    ca->chunks_candidates = (struct chunk **)malloc(sizeof(struct chunk *) * ca->candidate_cnt, M_CHUNKALLOC, M_WAITOK);
+
+    ca->old_chunks = (struct chunk **)malloc(sizeof(struct chunk *) * chunks, M_CHUNKALLOC, M_WAITOK);
+    ca->thread_worklist = (struct chunk **)malloc(sizeof(struct chunk *) * 128, M_CHUNKALLOC, M_WAITOK);
+    ca->old_cnt = 0;
+
+    memset(ca->chunks_candidates, 0, sizeof(struct chunk *) * ca->candidate_cnt);
+    memset(ca->thread_worklist, 0, sizeof(struct chunk *) * 128);
 
     // Init our chunks
     for (uint32_t i = 0; i < ca->num_chunks; i++) {
         diskptr_t ptr;
         ptr.offset = starting_offset + (i * (CHUNKSIZE / BLOCKSIZE));
         ptr.size = CHUNKSIZE / BLOCKSIZE;
-        struct chunklist *l = &ca->free_chunks[i];
+        struct chunk *l = &ca->free_chunks[i];
         l->ptr = ptr;
         memset(l->sector_map, 0, MAXSECTORS * sizeof(struct sector));
         l->index = i;
@@ -224,10 +147,10 @@ ca_init(struct chunkallocator *ca, off_t starting_offset, size_t disksize, int t
 }
 
 void teardown_thread(struct chunkallocator *ca) {
-    pthread_mutex_lock(&mutex);
+    pthread_mutex_lock(&mtx);
     ca->terminate_thread = 1;
     pthread_cond_signal(&cond);
-    pthread_mutex_unlock(&mutex);
+    pthread_mutex_unlock(&mtx);
     pthread_join(ca->tid, NULL);
 }
 
@@ -240,13 +163,23 @@ ca_destroy(struct chunkallocator *ca)
     return 0;
 }
 
+static void
+append_old_chunk(struct chunkallocator *ca, struct chunk *entry)
+{
+    assert(entry->used == FULL);
+    ca->allocator_lock.lock();
+    ca->old_chunks[ca->old_cnt] = entry;
+    ca->old_cnt++;
+    ca->allocator_lock.unlock();
+}
+
 int ca_print(struct chunkallocator *ca)
 {
     printf("Chunk Allocator State: %ld\n", ca->num_chunks);
     int free = 0;
     uint64_t used_blocks = 0;
     for (uint32_t i = 0; i < ca->num_chunks; i++) {
-        struct chunklist *cl = &ca->free_chunks[i];
+        struct chunk *cl = &ca->free_chunks[i];
         uint64_t blocks = 0;
     
         for (uint32_t t = 0; t < cl->max_sectors; t++) {
@@ -276,8 +209,9 @@ int ca_print(struct chunkallocator *ca)
 }
 
 static int
-allocate_from_chunk(struct chunklist *chunk, uint32_t numblocks, diskptr_t *ptr)
+allocate_from_chunk(struct chunk *chunk, struct transaction *txns, uint32_t numblocks)
 {
+    diskptr_t ptr;
     if (!chunk->sectors_free) {
         return ENOSPC;
     }
@@ -286,16 +220,27 @@ allocate_from_chunk(struct chunklist *chunk, uint32_t numblocks, diskptr_t *ptr)
         // Look for a free sector
         if (chunk->sector_map[i].block_map == 0) {
             // Create the pointer from the blockmap
-            ptr->offset = chunk->ptr.offset + (i * chunk->txn_size);
+            ptr.offset = chunk->ptr.offset + (i * chunk->txn_size);
             if (numblocks < chunk->txn_size) {
                 chunk->sector_map[i].block_map = SETALL(numblocks);
-                ptr->size = numblocks;
+                ptr.size = numblocks;
             } else {
                 chunk->sector_map[i].block_map = SETALL(chunk->txn_size);
-                ptr->size = chunk->txn_size;
+                ptr.size = chunk->txn_size;
             }
-            assert(__builtin_popcount(chunk->sector_map[i].block_map) == ptr->size);
+            assert(__builtin_popcount(chunk->sector_map[i].block_map) == ptr.size);
             chunk->sectors_free--;
+            // Update our transaction list
+            for (uint32_t t = 0; t < ptr.size; t++) {
+                txns[t].ptr.offset = ptr.offset + t;
+                txns[t].ptr.size = 1;
+                txns[t].ptr.obj_offset = txns[t].offset;
+                txns[t].ptr.obj_id = txns[t].inode;
+                // We need to update our sectors objectid list this is to enable
+                // our ability to move data.
+                chunk->sector_map[i].objects[t].inode = txns[t].inode;
+                chunk->sector_map[i].objects[t].offset = txns[t].offset;
+            }
             return (0);
         }
     }
@@ -303,80 +248,160 @@ allocate_from_chunk(struct chunklist *chunk, uint32_t numblocks, diskptr_t *ptr)
     return (ENOSPC);
 }
 
-static void refup(struct chunklist *cl) {
-    assert(cl);
-    cl->refcnt++;
-}
+#define BREAKPOINT (2000)
 
-static void refdown(struct chunklist *cl) {
-    assert(cl);
-    cl->refcnt--;
-}
+static void
+move_data(struct chunkallocator *ca, int thread_id, uint32_t numblocks) {
+    struct chunk *curempty = NULL;
 
+tryagain:
+
+    // First we check to see if we have a worklist already!
+    if (ca->thread_worklist[thread_id] == NULL) {
+        // We need to get some work to do but we also need to ensure
+        // That enough logical time has passed. Meaning Some amount of blocks
+        // Have been appended to the old queue
+        ca->allocator_lock.lock();
+        if (ca->old_cnt < BREAKPOINT) {
+            ca->allocator_lock.unlock();
+            return;
+        }
+
+        // There is some work that we should pop it off the list
+        ca->thread_worklist[thread_id] = ca->old_chunks[0];
+        assert(ca->thread_worklist[thread_id]);
+        for (int i = 1; i < ca->old_cnt; i++) {
+            ca->old_chunks[i - 1] = ca->old_chunks[i];
+        }
+        ca->old_cnt--;
+        ca->allocator_lock.unlock();
+    }
+
+    curempty = ca->thread_worklist[thread_id];
+    curempty->mtx.lock();
+    curempty->used = EMPTYING;
+
+    if (curempty->sectors_free == curempty->max_sectors) {
+        curempty->used = 0;
+        curempty->mtx.unlock();
+        curempty = NULL;
+        ca->thread_worklist[thread_id] = NULL;
+        goto tryagain;
+    }
+
+    // We now have a candidate to move
+    // We must create a transaction that will free a given sector
+    struct transaction writeset[64];
+    uint32_t writeset_cnt = 0;
+    uint32_t max_write_set = numblocks;
+    for (uint32_t i = 0; i < curempty->max_sectors; i++) {
+        struct sector *map = &curempty->sector_map[i];
+        if (map->block_map == 0)
+            continue;
+
+        for (uint32_t s = 0; s < curempty->txn_size; s++) {
+            // We found a write that can be added to the writeset
+            if (map->block_map & (1 << s)) {
+                // Get our pointer out
+                writeset[writeset_cnt].ptr.offset = 
+                    curempty->ptr.offset + (i * curempty->txn_size) + s;
+                writeset[writeset_cnt].ptr.size = 1;
+                writeset[writeset_cnt].inode = map->objects[s].inode;
+                writeset[writeset_cnt].offset = map->objects[s].offset;
+                writeset_cnt++;
+                map->block_map = UNSET(map->block_map, s);
+                if (map->block_map == 0) {
+                    curempty->sectors_free++;
+                    break;
+                }
+            }
+
+
+            if (writeset_cnt == max_write_set) {
+                break;
+            }
+        }
+
+        if (writeset_cnt == max_write_set) {
+            break;
+        }
+    }
+
+    if (writeset_cnt > 0) {
+        assert(txn_func);
+        curempty->mtx.unlock();
+        txn_func(writeset, writeset_cnt);
+        writeset_cnt = 0;
+    }
+}
 
 int 
-ca_alloc(struct chunkallocator *ca, uint32_t numblocks, diskptr_t *ptr)
+ca_alloc(struct chunkallocator *ca, struct transaction *txns, uint32_t numblocks, int flag)
 {
     int error;
-    int retries = 0;
+    int bucket;
+    struct chunk *cl;
 ca_alloc_start:
-    int bucket = determine_bucket(numblocks);
-    struct chunklist *cl = ca->chunks_candidates[bucket];
+    bucket = determine_bucket(numblocks);
+    cl = ca->chunks_candidates[bucket];
 
     cl->mtx.lock();
-    if (cl->used == FULL && (retries == 0)) {
-        retries += 1;
+    if (cl->used == FULL) {
         cl->mtx.unlock();
         goto ca_alloc_start;
     }
 
-    if (!retries) {
-        error = allocate_from_chunk(cl, numblocks, ptr);
-        if (!error) {
-            ca->allocations_from_chunk++;
-            cl->mtx.unlock();
-            return (0);
-        }
-
-        struct chunklist *newbucket;
-        cl->used = FULL;
-        // We could not allocate from a current chunk. So we need to acquire a new one
-        error = getFreeChunk(ca, &newbucket, 1 << bucket);
-        if (!error) {
-            ca->chunks_candidates[bucket] = newbucket;
-            cl->mtx.unlock();
-            // We now unlock. Any thread waiting in the allocation will fail. 
-            // Require the lock to try and refill it, see it marked as FULL and exit.
-            goto ca_alloc_start;
-        }
+    error = allocate_from_chunk(cl, txns, numblocks);
+    if (!error) {
+        ca->allocations_from_chunk++;
         cl->mtx.unlock();
-    } else {
-       cl->mtx.unlock(); 
+
+        // Before they leave - attempt to move data!
+        // WE ARE CURRENTLY PASSING IN 0, THIS WILL BE THE TID
+        if (!flag)
+            move_data(ca, 0, 1 << bucket);
+
+        return (0);
     }
 
-    ca->high_pressure = 1;
-    pthread_cond_signal(&cond);
-
-    // THIS THREAD NEEDS TO HELP EMPTY CHUNKS!
-    // Our current candidate was a dud. Fallback path, find the first chunk that can fit out bucket
-    for (uint32_t i = 0; i < ca->num_chunks; i++) {
-        cl = &ca->free_chunks[i];
-        cl->mtx.lock();
-        if (cl->sectors_free > 0 && (cl->used != EMPTYING)) {
-            numblocks = numblocks > cl->txn_size ? cl->txn_size : numblocks;
-            error = allocate_from_chunk(cl, numblocks, ptr);
-            if (!error && !cl->used) {
-                cl->used = CURRENTLY_USED;
-            }
-
-            cl->mtx.unlock();
-            if (error) {
-                continue;
-            }
-            return (0);
-        }
+    struct chunk *newbucket;
+    cl->used = FULL;
+    // We could not allocate from a current chunk. So we need to acquire a new one
+    error = getFreeChunk(ca, &newbucket, 1 << bucket);
+    if (!error) {
+        ca->chunks_candidates[bucket] = newbucket;
         cl->mtx.unlock();
+        append_old_chunk(ca, cl);
+        // We now unlock. Any thread waiting in the allocation will fail. 
+        // Require the lock to try and refill it, see it marked as FULL and exit.
+        goto ca_alloc_start;
     }
+    cl->mtx.unlock();
+
+    assert(false);
+    // ca->high_pressure = 1;
+    // pthread_cond_signal(&cond);
+
+    // // Our current candidate was a dud. We are running out of space path,
+    // // start giving out any free space we can find. 
+    // for (uint32_t i = 0; i < ca->num_chunks; i++) {
+    //     cl = &ca->free_chunks[i];
+    //     cl->mtx.lock();
+    //     if (cl->sectors_free > 0 && (cl->used != EMPTYING)) {
+    //         numblocks = numblocks > cl->txn_size ? cl->txn_size : numblocks;
+    //         error = allocate_from_chunk(cl, numblocks, ptr);
+    //         if (!error && !cl->used) {
+    //             cl->used = CURRENTLY_USED;
+    //         }
+
+    //         cl->mtx.unlock();
+    //         if (error) {
+    //             continue;
+    //         }
+    //         return (0);
+    //     }
+    //     cl->mtx.unlock();
+    // }
 
     goto ca_alloc_start;
 
@@ -401,21 +426,28 @@ ca_free(struct chunkallocator *ca, diskptr_t ptr)
     assert(ptr.size != (uint32_t)(-1));
     int chunk = ptr.offset / (CHUNKSIZE / BLOCKSIZE);
 
-    struct chunklist *l = &ca->free_chunks[chunk];
+    struct chunk *l = &ca->free_chunks[chunk];
     l->mtx.lock();
     uint32_t sector_i = (ptr.offset - l->ptr.offset) / l->txn_size;
     uint32_t bitmap_i = (ptr.offset - l->ptr.offset) % l->txn_size;
     assert((sector_i * l->txn_size) < (l->ptr.offset + l->ptr.size));
     assert((bitmap_i + ptr.size) <= l->txn_size);
-    for (uint32_t i = 0; i < ptr.size; i++) {
-        assert(l->sector_map[sector_i].block_map & (1 << (bitmap_i + i)));
-        l->sector_map[sector_i].block_map = 
-            UNSET(l->sector_map[sector_i].block_map, bitmap_i + i);
+    // We freed this with a move, this wont actually happen with pre-allocated
+    // wals for now lets just return
+    if (l->sector_map[sector_i].block_map == 0) {
+        l->mtx.unlock();
+        return (0);
     }
 
+    for (uint32_t i = 0; i < ptr.size; i++) {
+        l->sector_map[sector_i].block_map = 
+            UNSET(l->sector_map[sector_i].block_map, bitmap_i + i);
+        assert(l->sector_map[sector_i].objects[bitmap_i + i].offset == ptr.obj_offset);
+    }
+
+    // Recheck if its zero
     if (l->sector_map[sector_i].block_map == 0) {
         l->sectors_free++;
-        pthread_cond_signal(&cond);
     }
 
     l->mtx.unlock();
