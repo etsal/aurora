@@ -277,15 +277,23 @@ tryagain:
         ca->allocator_lock.unlock();
     }
 
+
     curempty = ca->thread_worklist[thread_id];
     curempty->mtx.lock();
     curempty->used = EMPTYING;
+    int sector_threshold = curempty->sectors_free < (curempty->max_sectors >> 1);
+    int chunk_threshold = (ca->num_chunks - ca->used_chunks) > 512;
+    if (sector_threshold && chunk_threshold) {
+        curempty->mtx.unlock();
+        return;
+    }
 
     if (curempty->sectors_free == curempty->max_sectors) {
         curempty->used = 0;
         curempty->mtx.unlock();
         curempty = NULL;
         ca->thread_worklist[thread_id] = NULL;
+        ca->used_chunks--;
         goto tryagain;
     }
 
@@ -293,7 +301,7 @@ tryagain:
     // We must create a transaction that will free a given sector
     struct transaction writeset[64];
     uint32_t writeset_cnt = 0;
-    uint32_t max_write_set = 2;
+    uint32_t max_write_set = numblocks;
     for (uint32_t i = 0; i < curempty->max_sectors; i++) {
         struct sector *map = &curempty->sector_map[i];
         if (map->block_map == 0)

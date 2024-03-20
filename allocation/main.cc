@@ -6,6 +6,7 @@
 #include <iostream>
 #include <cassert>
 #include <chrono>
+#include <thread>
 
 #include "binaryalloc.h"
 #include "chunkalloc.h"
@@ -126,6 +127,8 @@ writethis(std::set<uint32_t> &write_set, stats &st,
         }
         mtx.unlock();
     }
+    using namespace std::chrono_literals;
+    std::this_thread::sleep_for(50us);
 
     return duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 }
@@ -162,7 +165,7 @@ void printstats(stats &st) {
 // We have to imitate a random write workload, so we collect a write set and decide what frees to do.
 stats dowork(std::vector<diskptr_t> &allocation_map, std::mutex &mtx, void *allocator, AllocType type, size_t disksize) {
     stats st{};
-    int maxTransactions = 500000;
+    int maxTransactions = 1000000;
 
     if (type == AllocType::ChunkAllocator)  {
         txn_func = [&](struct transaction *writeset, int cnt) {
@@ -178,7 +181,7 @@ stats dowork(std::vector<diskptr_t> &allocation_map, std::mutex &mtx, void *allo
     auto start = high_resolution_clock::now();
     double sum = 0;
     for (int i = 0; i < maxTransactions; i++) {
-        if ((i != 0) && (i % 100) == 0) {
+        if ((i != 0) && (i % 10000) == 0) {
             auto duration = duration_cast<milliseconds>(high_resolution_clock::now() - start);
             printf("Transactions done - %d - %ldus - %f\n", i, duration.count(), sum / 10000);
             ca_print((struct chunkallocator *)allocator);
