@@ -66,7 +66,7 @@ static void
 objsnap_syncer_trigger_exit(void)
 {
 	osdata.os_syncer_exit = OBJSYNC_EXITING;
-	wakeup(&osdata.os_syncer_wakeup);
+	wakeup(&osdata);
 }
 
 static void
@@ -74,9 +74,7 @@ objsnap_syncer_wait_exit(void)
 {
 	while(osdata.os_syncer_exit != OBJSYNC_EXITED) {
 		mtx_lock(&osdata.os_syncer_lk);
-		msleep_sbt(&osdata.os_syncer_wakeup, &osdata.os_syncer_lk,
-			PRIBIO, "Sync-exit-wait", SBT_1MS, 0,
-			C_HARDCLOCK);
+		msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-exit-wait", SBT_1MS, 0, C_HARDCLOCK);
 		mtx_unlock(&osdata.os_syncer_lk);
 	}
 }
@@ -544,8 +542,7 @@ objsnap_wal_syncer(void *ctx)
 		}
 
 		mtx_lock(&osdata.os_syncer_lk);
-		msleep_sbt(&osdata.os_syncer_wakeup, &osdata.os_syncer_lk,
-			PRIBIO, "Sync-wait", SBT_1NS * 100000, 0,
+		msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-wait", SBT_1NS * 100000, 0,
 			C_HARDCLOCK);
 	}
 
@@ -604,7 +601,6 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		// Syncer State
 		mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
-		osdata.os_syncer_wakeup = 0;
 		osdata.os_syncer_exit = OBJSYNC_RUNNING;
 
 		error = kthread_add((void (*)(void *))objsnap_wal_syncer, &osdata, NULL,
