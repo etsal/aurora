@@ -64,7 +64,6 @@ struct objsnap_metadata {
 	struct lock os_lock;
 	struct cycletimer os_stats[32];
 
-	struct cv os_syncer_cv;
 	struct mtx os_syncer_lk;
 	struct thread *os_syncertd;
 	int os_syncer_wakeup;
