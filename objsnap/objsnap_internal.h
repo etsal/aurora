@@ -49,7 +49,11 @@
 #define OS_START(name, before) ctstart(OS_STAT_GET_##name(), before)
 #define OS_STOP(name, before) ctstop(OS_STAT_GET_##name(), before)
 
-
+enum objsync_state {
+	OBJSYNC_RUNNING,
+	OBJSYNC_EXITING,
+	OBJSYNC_EXITED,
+};
 
 struct objsnap_metadata {
 	struct cdev *os_cdev;	/* The cdev that exposes the SLS ops */
@@ -64,7 +68,7 @@ struct objsnap_metadata {
 	struct mtx os_syncer_lk;
 	struct thread *os_syncertd;
 	int os_syncer_wakeup;
-	int os_syncer_exit;
+	enum objsync_state os_syncer_exit;
 };
 
 struct pageset {

@@ -43,7 +43,6 @@
 #include "alloc.h"
 #include "btree.h"
 
-/* XXX Rename to M_SLS. */
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
 
 struct objsnap_metadata osdata;
@@ -519,7 +518,7 @@ static void
 objsnap_wal_syncer(void *ctx)
 {
 	mtx_lock(&osdata.os_syncer_lk);
-	while (!osdata.os_syncer_exit) {
+	while (osdata.os_syncer_exit == OBJSYNC_RUNNING) {
 		mtx_unlock(&osdata.os_syncer_lk);
 
 		// Clear out current tail to head of Wal entrys, no need for a lock
@@ -537,7 +536,7 @@ objsnap_wal_syncer(void *ctx)
 			C_HARDCLOCK);
 	}
 
-	osdata.os_syncer_exit = -1;
+	osdata.os_syncer_exit = OBJSYNC_EXITED;
 	mtx_unlock(&osdata.os_syncer_lk);
 	kthread_exit();
 }
@@ -594,7 +593,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		cv_init(&osdata.os_syncer_cv, "Objsnap Syncer CV");
 		mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
 		osdata.os_syncer_wakeup = 0;
-		osdata.os_syncer_exit = 0;
+		osdata.os_syncer_exit = OBJSYNC_RUNNING;
 
 		error = kthread_add((void (*)(void *))objsnap_wal_syncer, &osdata, NULL,
 			&osdata.os_syncertd, 0, 0, "objsnap wal syncer");
@@ -647,10 +646,10 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 			}
 		}
 
-		osdata.os_syncer_exit = 1;
+		osdata.os_syncer_exit = OBJSYNC_EXITING;
 		objsnap_wakeup_syncer();
 
-		while(osdata.os_syncer_exit != -1) {
+		while(osdata.os_syncer_exit != OBJSYNC_EXITED) {
 			mtx_lock(&osdata.os_syncer_lk);
 			msleep_sbt(&osdata.os_syncer_wakeup, &osdata.os_syncer_lk,
 				PRIBIO, "Sync-exit-wait", SBT_1MS, 0,
