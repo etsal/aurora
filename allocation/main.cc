@@ -128,7 +128,7 @@ writethis(std::set<uint32_t> &write_set, stats &st,
         mtx.unlock();
     }
     using namespace std::chrono_literals;
-    std::this_thread::sleep_for(50us);
+    //std::this_thread::sleep_for(50us);
 
     return duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 }

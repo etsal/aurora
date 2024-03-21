@@ -6,12 +6,21 @@
 #include <atomic>
 
 #include "binaryalloc.h"
-
-#define CHUNKSIZE (1024UL * KiB)
-#define MAXSECTORS (1024 / 4)
-
 #define BLOCKSIZE (4096)
+#define KiB (1024)
+#define MiB (1024 * KiB)
 
+// Tunables
+#define CHUNKSIZE (1UL * MiB)
+#define MAXTHREADS (128)
+
+// Uncomment to override the maximum amount of data a thread will move on an allocation
+//#define MAX_BLOCKS_TO_MOVE (4) 
+
+// End tunables
+
+
+#define MAXSECTORS (CHUNKSIZE / BLOCKSIZE )
 #define CURRENTLY_USED (1)
 #define EMPTYING (2)
 #define FULL (3)
@@ -30,7 +39,8 @@ struct objectid {
 };
 
 struct sector {
-    uint64_t block_map; // uint64_t means that the max sector size is 64 blocks. (256 MiB)
+    // uint64_t means that the max sector size is 64 blocks.
+    uint64_t block_map;     
     struct objectid objects[64];
 };
 

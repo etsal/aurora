@@ -9,8 +9,6 @@
 
 #include "chunkalloc.h"
 
-#define KiB (1024UL)
-#define MiB (1024UL * KiB)
 #define HIGHPRESSURE (2)
 
 #define SETALL(size) ((1 << (size)) - 1)
@@ -111,11 +109,11 @@ ca_init(struct chunkallocator *ca, off_t starting_offset, size_t disksize, int t
     ca->chunks_candidates = (struct chunk **)malloc(sizeof(struct chunk *) * ca->candidate_cnt, M_CHUNKALLOC, M_WAITOK);
 
     ca->old_chunks = (struct chunk **)malloc(sizeof(struct chunk *) * chunks, M_CHUNKALLOC, M_WAITOK);
-    ca->thread_worklist = (struct chunk **)malloc(sizeof(struct chunk *) * 128, M_CHUNKALLOC, M_WAITOK);
+    ca->thread_worklist = (struct chunk **)malloc(sizeof(struct chunk *) * MAXTHREADS, M_CHUNKALLOC, M_WAITOK);
     ca->old_cnt = 0;
 
     memset(ca->chunks_candidates, 0, sizeof(struct chunk *) * ca->candidate_cnt);
-    memset(ca->thread_worklist, 0, sizeof(struct chunk *) * 128);
+    memset(ca->thread_worklist, 0, sizeof(struct chunk *) * MAXTHREADS);
 
     // Init our chunks
     for (uint32_t i = 0; i < ca->num_chunks; i++) {
@@ -248,7 +246,7 @@ allocate_from_chunk(struct chunk *chunk, struct transaction *txns, uint32_t numb
     return (ENOSPC);
 }
 
-#define BREAKPOINT (2000)
+#define BREAKPOINT (MAXTHREADS)
 
 static void
 move_data(struct chunkallocator *ca, int thread_id, uint32_t numblocks) {
@@ -282,7 +280,7 @@ tryagain:
     curempty->mtx.lock();
     curempty->used = EMPTYING;
     int sector_threshold = curempty->sectors_free < (curempty->max_sectors >> 1);
-    int chunk_threshold = (ca->num_chunks - ca->used_chunks) > 512;
+    int chunk_threshold = (ca->num_chunks - ca->used_chunks) > (MAXTHREADS << 1);
     if (sector_threshold && chunk_threshold) {
         curempty->mtx.unlock();
         return;
@@ -301,7 +299,11 @@ tryagain:
     // We must create a transaction that will free a given sector
     struct transaction writeset[64];
     uint32_t writeset_cnt = 0;
+#ifdef MAX_BLOCKS_TO_MOVE 
+    uint32_t max_write_set = MAX_BLOCKS_TO_MOVE;
+#else
     uint32_t max_write_set = numblocks;
+#endif
     for (uint32_t i = 0; i < curempty->max_sectors; i++) {
         struct sector *map = &curempty->sector_map[i];
         if (map->block_map == 0)
