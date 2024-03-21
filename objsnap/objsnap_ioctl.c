@@ -304,7 +304,7 @@ objsnap_init(struct objsnap_init_args *args)
 
 	vp = nd.ni_vp;
 
-	if (!vn_isdisk_error(vp, &error)) {
+	if (!vn_isdisk(vp, &error)) {
 		/* XXX Can we make it so we can use a file? */
 		printf("Is not a disk! %d\n", error);
 		vput(vp);
