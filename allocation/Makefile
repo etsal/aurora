@@ -1,4 +1,3 @@
-CXX = g++
 CXXFLAGS = -Wall -Wextra -std=c++17 -g
 LDFLAGS = -lpthread
 
@@ -14,9 +13,6 @@ $(MAIN): $(OBJS)
 	$(CXX) $(CXXFLAGS) $(OBJS) -o $(MAIN) $(LDFLAGS)
 
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-%.o: %.c
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
