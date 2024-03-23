@@ -126,6 +126,14 @@ ba_alloc(struct binaryallocator *ba, int numblocks, diskptr_t *ptr)
     f = &ba->ba_flists[bucket];
     if (!allocate_from_bucket(f, ptr)) {
         pthread_mutex_unlock(&ba->ba_lock);
+        if (numblocks < ptr->size) {
+            diskptr_t tmp;
+            tmp.offset = ptr->offset + numblocks;
+            tmp.size = ptr->size - numblocks;
+            ba_free(ba, tmp);
+        }
+
+        ptr->size = numblocks;
         BADEBUG("[BA] Successfully allocated ptr at %u of size %u\n", ptr->offset, ptr->size);
         return (0);
     }
@@ -150,6 +158,14 @@ ba_alloc(struct binaryallocator *ba, int numblocks, diskptr_t *ptr)
         pthread_mutex_unlock(&ba->ba_lock);
         BADEBUG("[BA with split] Successfully allocated ptr at %u of size %u\n",
             ptr->offset, ptr->size);
+        if (numblocks < ptr->size) {
+            diskptr_t tmp;
+            tmp.offset = ptr->offset + numblocks;
+            tmp.size = ptr->size - numblocks;
+            ba_free(ba, tmp);
+        }
+
+        ptr->size = numblocks;
         return (0);
     }
 
@@ -180,21 +196,6 @@ ba_free_unlocked(struct binaryallocator *ba, diskptr_t tofree)
         f->list[0] = tofree;
         f->cnt = 1;
         return;
-    }
-
-    // We go through the list to determine 
-    // TODO: We need to order from largest to smalled so we can
-    // pop off the tail easily when allocating
-    for (next = 0; next < f->cnt; next++) {
-        if (f->list[next].offset == tofree.offset) {
-            // THIS IS A DOUBLE FREE BUG, BUT I AM RETURNING FOR NOW
-            // There is an object thats free, that we are trying to free
-            return;
-        }
-
-        if (f->list[next].offset > tofree.offset) {
-            break;
-        }
     }
 
     // MERGE!

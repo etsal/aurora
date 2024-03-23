@@ -12,8 +12,6 @@
 typedef struct diskptr {
   uint32_t offset;
   uint32_t size;
-  uint32_t obj_offset;
-  uint32_t obj_id;
 } diskptr_t;
 
 #define malloc(a, b, c) malloc(a)

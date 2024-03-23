@@ -15,7 +15,7 @@
 #define MAXTHREADS (128)
 
 // Uncomment to override the maximum amount of data a thread will move on an allocation
-//#define MAX_BLOCKS_TO_MOVE (4) 
+//#define MAX_BLOCKS_TO_MOVE (8) 
 
 // End tunables
 
@@ -58,13 +58,15 @@ struct chunk {
 };
 
 struct chunkallocator {
-    struct chunk *free_chunks;    
+    struct chunk *chunks;    
 
     // This is the list of binary allocation candidates
     // [0] = 1 block
     // [1] = 2 blocks
     // [2] = 4 blocks
     struct chunk **chunks_candidates;
+    struct chunk **next_chunk;
+    uint64_t next_cnt;
 
     // When a chunk gets used
     struct chunk **old_chunks;
@@ -85,7 +87,7 @@ struct chunkallocator {
     pthread_t tid;
     int terminate_thread;
     int high_pressure;
-
+    uint64_t moved;
     int emptys;
 };
 
