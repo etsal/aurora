@@ -93,7 +93,7 @@ struct chunkallocator {
 
 int ca_init(struct chunkallocator *ca, off_t starting_offset, uint64_t disksize, int txn_size_in_blocks);
 int ca_destroy(struct chunkallocator *ca);
-int ca_print(struct chunkallocator *ca);
+uint64_t ca_print(struct chunkallocator *ca);
 
 int ca_alloc(struct chunkallocator *ca, struct transaction *txn, uint32_t numblocks, int flag);
 int ca_free(struct chunkallocator *ca, diskptr_t ptr);

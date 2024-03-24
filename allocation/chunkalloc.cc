@@ -178,7 +178,7 @@ append_old_chunk(struct chunkallocator *ca, struct chunk *entry)
     ca->allocator_lock.unlock();
 }
 
-int ca_print(struct chunkallocator *ca)
+uint64_t ca_print(struct chunkallocator *ca)
 {
     printf("Chunk Allocator State: %ld\n", ca->num_chunks);
     int free = 0;
@@ -186,12 +186,11 @@ int ca_print(struct chunkallocator *ca)
     for (uint32_t i = 0; i < ca->num_chunks; i++) {
         struct chunk *cl = &ca->chunks[i];
         uint64_t blocks = 0;
-    
         for (uint32_t t = 0; t < cl->max_sectors; t++) {
             blocks += __builtin_popcount(cl->sector_map[t].block_map);
         }
 
-        if (!ca->chunks[i].used) {
+        if (!cl->used) {
             free += 1;
             if (blocks != 0) {
                 for (uint32_t t = 0; t < cl->max_sectors; t++) {
@@ -211,7 +210,7 @@ int ca_print(struct chunkallocator *ca)
     printf("Emptys done %d\n", ca->emptys);
     printf("Used Blocks %ldMiB\n", (used_blocks * BLOCKSIZE) / (1024 * 1024));
     printf("Amount of Data moved %luMiB\n", (ca->moved * BLOCKSIZE) / (1024 * 1024));
-    return 0;
+    return used_blocks;
 }
 
 static int
@@ -234,7 +233,9 @@ allocate_from_chunk(struct chunk *chunk, struct transaction *txns, uint32_t numb
                 chunk->sector_map[i].block_map = SETALL(chunk->txn_size);
                 ptr.size = chunk->txn_size;
             }
+
             assert(__builtin_popcount(chunk->sector_map[i].block_map) == ptr.size);
+
             chunk->sectors_free--;
             // Update our transaction list
             for (uint32_t t = 0; t < ptr.size; t++) {
@@ -309,8 +310,16 @@ move_data(struct chunkallocator *ca, int thread_id, uint32_t numblocks) {
 #else
     uint32_t max_write_set = numblocks;
 #endif
-    double f = (double)((ca->used_chunks)) / (double)ca->num_chunks;
-    max_write_set = (int)(f * 100) > 90 ? max_write_set: 0;
+    double f = ((double)(ca->used_chunks + MAXTHREADS)) / ((double)ca->num_chunks);
+    if (f < 0.95) {
+        f = 0;
+    }
+
+    if ((ca->num_chunks - ca->used_chunks) < MAXTHREADS) {
+        f = 1.0;
+    }
+
+    max_write_set = (int)(f * 32);
     if (max_write_set == 0) {
         curempty->mtx.unlock();
         return;
@@ -400,7 +409,6 @@ ca_alloc_start:
         // WE ARE CURRENTLY PASSING IN 0, THIS WILL BE THE TID
         if (!flag)
             move_data(ca, 0, 1 << bucket);
-        assert(ca->chunks_candidates[bucket]->used != FULL);
         // Our transaction killed a group
         return (0);
     }
@@ -418,26 +426,18 @@ ca_alloc_start:
         // Require the lock to try and refill it, see it marked as FULL and exit.
         assert(newbucket->used != FULL);
         goto ca_alloc_start;
-    } else {
-        cl->mtx.unlock();
-        move_data(ca, 0, 1 << bucket);
-        goto ca_alloc_start;
     }
-
-    ca_print(ca);
-    printchunk(cl);
+    cl->mtx.unlock();
     assert(false);
     // ca->high_pressure = 1;
     // pthread_cond_signal(&cond);
-
-    // // Our current candidate was a dud. We are running out of space path,
-    // // start giving out any free space we can find. 
+    // Our current candidate was a dud. We are running out of space path,
+    // start giving out any free space we can find. 
     // for (uint32_t i = 0; i < ca->num_chunks; i++) {
-    //     cl = &ca->free_chunks[i];
+    //     cl = &ca->chunks[i];
     //     cl->mtx.lock();
-    //     if (cl->sectors_free > 0 && (cl->used != EMPTYING)) {
-    //         numblocks = numblocks > cl->txn_size ? cl->txn_size : numblocks;
-    //         error = allocate_from_chunk(cl, numblocks, ptr);
+    //     if (cl->sectors_free > 0 && (cl->used != EMPTYING) && (cl->txn_size > numblocks)) {
+    //         error = allocate_from_chunk(cl, txns, numblocks);
     //         if (!error && !cl->used) {
     //             cl->used = CURRENTLY_USED;
     //         }
