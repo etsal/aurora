@@ -26,8 +26,8 @@ struct binaryallocator ba;
 struct duelingtrees dt;
 struct chunkallocator ca;
 
-int maxTransactions = 6000000; // Number of txns to do
-int max_obj_size = GinBlocks * 118; // Max object size
+int maxTransactions = 5000000; // Number of txns to do
+int max_obj_size = GinBlocks * 5; // Max object size
 int max_writes = 16; // 64 KiB write
 int min_writes = 1; // 4096 
 
@@ -227,8 +227,6 @@ print_allocation_map(std::vector<diskptr_t> &allocation_map, int per_x_blocks) {
         printf("%lu,", k);
     }
     printf("\n");
-    printf("%lu %lu\n", heat.size(), heat_map.size() / per_x_blocks);
-    printf("Non zero %lu\n", non_zero);
     return inmap;
 }
 
@@ -248,16 +246,17 @@ stats dowork(std::vector<diskptr_t> &allocation_map, std::mutex &mtx, void *allo
     }
 
     auto start = high_resolution_clock::now();
+    auto print_per = 10000;
     double sum = 0;
     for (int i = 0; i < maxTransactions; i++) {
-        if ((i != 0) && (i % 10000) == 0) {
+        if ((i != 0) && (i % print_per) == 0) {
             auto duration = duration_cast<milliseconds>(high_resolution_clock::now() - start);
-            printf("Transactions done - %d - %ldus - %f\n", i, duration.count(), sum / 10000);
+            printf("Transactions done - %d - %ldms - %fus/a\n", i, duration.count(), sum / print_per);
             sum = 0;
             start  = high_resolution_clock::now();
-            // auto ca_blocks = ca_print((struct chunkallocator *)allocator);
-            // auto user_blocks = print_allocation_map(allocation_map, 256 * 1024);
-            // assert(ca_blocks == user_blocks);
+            auto ca_blocks = ca_print((struct chunkallocator *)allocator);
+            auto user_blocks = print_allocation_map(allocation_map, 256 * 1024);
+            assert(ca_blocks == user_blocks);
         }
         sum += dowrite(st, mtx, allocation_map, allocator, type);
     }
@@ -287,7 +286,7 @@ int main() {
     gen = std::mt19937{rd()};
     std::vector<diskptr_t> allocation_map;
     std::mutex mtx;
-    uint64_t disksize = 1024UL * 1024UL * 1024UL * 120;
+    uint64_t disksize = 1024UL * 1024UL * 1024UL * 64;
     uint64_t blocks = disksize / (uint64_t)BLOCKSIZE;
     if (blocks < (uint64_t)max_obj_size) {
         printf("Disk size too small! Reduce max object size or increase disksize\n");
@@ -314,7 +313,7 @@ int main() {
     // reset(allocation_map, blocks);
 
 
-    ca_init(&ca, 0, disksize, 32);
+    ca_init(&ca, 0, disksize, 64);
     s = dowork(allocation_map, mtx, &ca, AllocType::ChunkAllocator);
     printf("Chunk Allocation\n");
     printstats(s);

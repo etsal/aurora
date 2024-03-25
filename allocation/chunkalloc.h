@@ -51,6 +51,7 @@ struct chunk {
     uint32_t txn_size;
     uint64_t sectors_free;
     uint64_t max_sectors;
+    uint64_t blocks_used;
     diskptr_t ptr;
     uint64_t freed;
 
@@ -66,7 +67,7 @@ struct chunkallocator {
     // [2] = 4 blocks
     struct chunk **chunks_candidates;
     struct chunk **next_chunk;
-    uint64_t next_cnt;
+    int next_cnt;
 
     // When a chunk gets used
     struct chunk **old_chunks;
