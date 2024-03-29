@@ -128,6 +128,7 @@ ca_init(struct chunkallocator *ca, off_t starting_offset, size_t disksize, int t
     // These chunk lists act as a bitmap for chunks on the disk.
     ca->chunks = (struct chunk *)malloc(sizeof(struct chunk) * chunks, M_CHUNKALLOC, M_WAITOK);
     ca->chunks_candidates = (struct chunk **)malloc(sizeof(struct chunk *) * ca->candidate_cnt, M_CHUNKALLOC, M_WAITOK);
+    ca->chunks_candidates_old = (struct chunk **)malloc(sizeof(struct chunk *) * ca->candidate_cnt, M_CHUNKALLOC, M_WAITOK);
 
     ca->old_chunks = (struct chunk **)malloc(sizeof(struct chunk *) * chunks, M_CHUNKALLOC, M_WAITOK);
     ca->next_chunk = (struct chunk **)malloc(sizeof(struct chunk *) * chunks, M_CHUNKALLOC, M_WAITOK);
@@ -161,6 +162,10 @@ ca_init(struct chunkallocator *ca, off_t starting_offset, size_t disksize, int t
 
     for (uint32_t i = 0; i < ca->candidate_cnt; i++) {
         getFreeChunk(ca, &ca->chunks_candidates[i], 1ULL << i);
+    }
+
+    for (uint32_t i = 0; i < ca->candidate_cnt; i++) {
+        getFreeChunk(ca, &ca->chunks_candidates_old[i], 1ULL << i);
     }
 
     ca->emptys = 0;
@@ -338,6 +343,7 @@ ensure_workset(struct chunkallocator *ca, int thread_id)
         ca->allocator_lock.unlock();
     }
 }
+
 static void
 move_data(struct chunkallocator *ca, int thread_id, uint32_t numblocks) {
     struct chunk *curempty = NULL;
@@ -453,7 +459,11 @@ ca_alloc_start:
 
     bucket = determine_bucket(numblocks);
     ca->allocator_lock.lock();
-    cl = ca->chunks_candidates[bucket];
+    if (flag) {
+        cl = ca->chunks_candidates_old[bucket];
+    } else {
+        cl = ca->chunks_candidates[bucket];
+    }
     cl->mtx.lock();
     ca->allocator_lock.unlock();
 
@@ -486,9 +496,15 @@ ca_alloc_start:
     error = getFreeChunk(ca, &newbucket, 1ULL << bucket);
     if (!error) {
         append_old_chunk(ca, cl);
-        ca->chunks_candidates[bucket] = newbucket;
-        assert(ca->chunks_candidates[bucket]->used == CURRENTLY_USED);
-        assert(ca->chunks_candidates[bucket]->used != FULL);
+        if (flag) {
+            ca->chunks_candidates_old[bucket] = newbucket;
+            assert(ca->chunks_candidates_old[bucket]->used == CURRENTLY_USED);
+            assert(ca->chunks_candidates_old[bucket]->used != FULL);
+        } else {
+            ca->chunks_candidates[bucket] = newbucket;
+            assert(ca->chunks_candidates[bucket]->used == CURRENTLY_USED);
+            assert(ca->chunks_candidates[bucket]->used != FULL);
+        }
         cl->mtx.unlock();
         // We now unlock. Any thread waiting in the allocation will fail. 
         // Require the lock to try and refill it, see it marked as FULL and exit.

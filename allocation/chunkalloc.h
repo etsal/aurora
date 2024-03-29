@@ -18,8 +18,6 @@
 //#define MAX_BLOCKS_TO_MOVE (8) 
 
 // End tunables
-
-
 #define MAXSECTORS (CHUNKSIZE / BLOCKSIZE )
 #define CURRENTLY_USED (1)
 #define EMPTYING (2)
@@ -58,6 +56,7 @@ struct chunk {
     std::mutex mtx;
 };
 
+
 struct chunkallocator {
     struct chunk *chunks;    
 
@@ -66,6 +65,7 @@ struct chunkallocator {
     // [1] = 2 blocks
     // [2] = 4 blocks
     struct chunk **chunks_candidates;
+    struct chunk **chunks_candidates_old;
     struct chunk **next_chunk;
     int next_cnt;
 

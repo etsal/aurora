@@ -27,9 +27,10 @@ struct duelingtrees dt;
 struct chunkallocator ca;
 
 int maxTransactions = 5000000; // Number of txns to do
-int max_obj_size = GinBlocks * 5; // Max object size
 int max_writes = 16; // 64 KiB write
 int min_writes = 1; // 4096 
+uint64_t disksize = 1024UL * 1024UL * 1024UL * 64;
+int max_obj_size = 48 * GinBlocks; // Max object size
 
 
 std::function<void(struct transaction *, int)> txn_func;
@@ -173,12 +174,20 @@ writethis(std::set<uint32_t> &write_set, stats &st,
 int dowrite(stats &st, std::mutex &mtx, 
     std::vector<diskptr_t> &allocation_map, 
     void *allocator, AllocType type) {
-    std::uniform_int_distribution<> dis{0, max_obj_size};
+    std::normal_distribution<double> dis{max_obj_size >> 1, max_obj_size / 4};
     std::uniform_int_distribution<> writes{min_writes, max_writes};
     std::set<uint32_t> write_set;
     // Generate a random write set
     for (int i = 0; i < writes(gen); i++) {
-        write_set.emplace(dis(gen));
+        auto s = int(dis(gen));
+        if (s < 0) {
+            s = 0;
+        }
+
+        if (s > max_obj_size) {
+            s = max_obj_size;
+        }
+        write_set.emplace(s);
     }
     st.total_blocks += write_set.size();
 
@@ -254,9 +263,9 @@ stats dowork(std::vector<diskptr_t> &allocation_map, std::mutex &mtx, void *allo
             printf("Transactions done - %d - %ldms - %fus/a\n", i, duration.count(), sum / print_per);
             sum = 0;
             start  = high_resolution_clock::now();
-            auto ca_blocks = ca_print((struct chunkallocator *)allocator);
-            auto user_blocks = print_allocation_map(allocation_map, 256 * 1024);
-            assert(ca_blocks == user_blocks);
+            // auto ca_blocks = ca_print((struct chunkallocator *)allocator);
+            // auto user_blocks = print_allocation_map(allocation_map, 256 * 1024);
+            // assert(ca_blocks == user_blocks);
         }
         sum += dowrite(st, mtx, allocation_map, allocator, type);
     }
@@ -286,7 +295,6 @@ int main() {
     gen = std::mt19937{rd()};
     std::vector<diskptr_t> allocation_map;
     std::mutex mtx;
-    uint64_t disksize = 1024UL * 1024UL * 1024UL * 64;
     uint64_t blocks = disksize / (uint64_t)BLOCKSIZE;
     if (blocks < (uint64_t)max_obj_size) {
         printf("Disk size too small! Reduce max object size or increase disksize\n");
@@ -306,11 +314,11 @@ int main() {
     // printf("Binary Allocation\n");
     // printstats(s);
 
-    // dt_init(&dt, disksize);
-    // s = dowork(allocation_map, mtx, &dt, AllocType::DuelingTrees);
-    // printstats(s);
-    // print_allocation_map(allocation_map, 256 * 1024);
-    // reset(allocation_map, blocks);
+    dt_init(&dt, disksize);
+    s = dowork(allocation_map, mtx, &dt, AllocType::DuelingTrees);
+    printstats(s);
+    print_allocation_map(allocation_map, 256 * 1024);
+    reset(allocation_map, blocks);
 
 
     ca_init(&ca, 0, disksize, 64);
