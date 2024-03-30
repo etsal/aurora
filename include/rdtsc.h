@@ -15,6 +15,8 @@
 #include <sys/types.h>
 #ifdef _KERNEL
 #include <machine/atomic.h>
+#else
+#include <unistd.h>
 #endif
 
 #define cycles_to_ns(cycles, clock_freq)                                       \

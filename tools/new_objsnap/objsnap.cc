@@ -339,7 +339,7 @@ int main()
 	int MiB = (1024 * 1024) / BLOCKSIZE;
 	int GiB = (1024 * MiB);
 	printf("Threads(%d), Blocksize (%lu), Total Dirty Set in Blocks (%d), Checkpoints per thread(%d), Number of objects(%d)\n",
-		numthreads, totaldirtyset, BLOCKSIZE, numCheckpoints, numobjs);
+		numthreads, BLOCKSIZE, totaldirtyset, numCheckpoints, numobjs);
 	for (int i = 1; i < numthreads + 1; i++) {
 		uint64_t before = rdtscp();	
 		uint64_t avglat = threadedTest(i, numobjs, 1 * GiB, 
