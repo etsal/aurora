@@ -99,28 +99,6 @@ btnode_dirty(btnode_t node)
 }
 
 static void
-path_print(bpath_t path)
-{
-  for (int i = 0; i < path->p_len; i++) {
-    btnode_print(&path->p_nodes[i]);
-  }
-}
-
-static void
-btnode_wrap_bp(btnode_t node, btree_t tree, struct buf* bp)
-{
-  diskptr_t ptr;
-
-  ptr.offset = bp->b_lblkno;
-  ptr.size = 1;
-
-  node->n_bp = bp;
-  node->n_data = (btdata_t)bp->b_data;
-  node->n_tree = tree;
-  node->n_ptr = ptr;
-}
-
-static void
 btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 {
   struct buf *bp;
@@ -287,12 +265,6 @@ path_fixup_cur_parent(bpath_t path, btnode_t parent)
   path->p_cur += 1;
   path->p_len += 1;
   return path_getcur(path);
-}
-
-static inline void
-path_copy(bpath_t dst, bpath_t src)
-{
-  memcpy(dst->p_nodes, src->p_nodes, src->p_len * sizeof(btnode));
 }
 
 static btnode_t

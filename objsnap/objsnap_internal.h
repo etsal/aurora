@@ -42,7 +42,7 @@
 	static struct cycletimer *OS_STAT_GET_##name(void) { \
 		return &osdata.os_stats[OS_STAT_##name]; \
 	} \
-	static struct timerstat OS_TOSTAT_##name() { \
+	static __attribute__((always_inline)) __inline__ struct timerstat OS_TOSTAT_##name() { \
 		return ctstat(#name, OS_STAT_GET_##name()); \
 	}
 

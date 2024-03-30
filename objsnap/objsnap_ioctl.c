@@ -132,12 +132,6 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 	free(aiov, M_OBJSNAP);
 }
 
-static void
-objsnap_done(struct bio *bip)
-{
-	g_destroy_bio(bip);
-}
-
 static int
 objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	STAT_TO_ARGS(args, LOCKANDCOPY);
@@ -612,6 +606,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 
 		taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
+		objsnap_sysctl_init();
 
 		break;
 	case MOD_UNLOAD:
@@ -640,6 +635,8 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 			osdata.os_cdev = NULL;
 			printf("Destroying device\n");
 		}
+
+		objsnap_sysctl_fini();
 
 		for (int i = 0; i < MAXINODES; i ++) {
 			struct objsnap_vnode *vnode = &vnode_cache[i];
