@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-int objsnap_init(char *path);
+int objsnap_init(const char *path);
 index_t objsnap_create();
 int objsnap_dirty(index_t fd, int tid, void *ptr);
 int objsnap_stat(index_t fd, osinode_t *inode);

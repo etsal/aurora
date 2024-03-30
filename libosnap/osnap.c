@@ -28,7 +28,7 @@ objsnap_fd_check()
 }
 
 int 
-objsnap_init(char *path)
+objsnap_init(const char *path)
 {
     int error = 0;
     struct objsnap_init_args args;

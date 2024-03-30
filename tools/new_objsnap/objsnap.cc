@@ -30,6 +30,8 @@
 #include <objsnap_ioctl.h>
 #include <rdtsc.h>
 
+const char *DISK = "/dev/nvd0";
+
 uint64_t clock_cycles;
 
 int newfs(const char *path)
@@ -141,13 +143,13 @@ int newfs(const char *path)
 int 
 setup()
 {
- 	int error = newfs("/dev/nvd0");
+ 	int error = newfs(DISK);
 	if (error) {
 		printf("Problem creating new objsnap device");
 		return error;
 	}
 
-	error = objsnap_init("/dev/nvd0");
+	error = objsnap_init(DISK);
 	if (error) {
 		printf("Error with objsnap init\n");
 		return error;
