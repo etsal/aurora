@@ -25,6 +25,8 @@
 
 extern std::function<void(struct transaction *txns, int cnt)> txn_func;
 
+extern int enable_old_chunks;
+
 struct transaction {
    uint32_t inode; 
    uint32_t offset;

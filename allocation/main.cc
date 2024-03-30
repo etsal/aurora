@@ -33,8 +33,8 @@ struct chunkallocator ca;
 #define GIB (1024UL * 1024UL * 1024UL)
 
 int maxTransactions = 2000000; // Number of txns to do
-int max_writes = 16; // 64 KiB write
-int min_writes = 8; // 4096 
+int max_writes = 64; // 64 KiB write
+int min_writes = 16; // 4096 
 uint64_t disksize = GIB * 64;
 int max_obj_size = 48 * GinBlocks; // Max object size
 int size_of_hotset = 8 * GinBlocks; // Max object size
@@ -281,7 +281,17 @@ stats dowork(std::vector<diskptr_t> &allocation_map, std::mutex &mtx, void *allo
     auto start = high_resolution_clock::now();
     auto print_per = 10000;
     double sum = 0;
-    std::ofstream outfile("data.csv", std::ios::out);
+    std::stringstream fn;
+    int maxTransactions = 2000000; // Number of txns to do
+    int max_writes = 64; // 64 KiB write
+    int min_writes = 16; // 4096 
+    uint64_t disksize = GIB * 64;
+    int max_obj_size = 48 * GinBlocks; // Max object size
+    int size_of_hotset = 8 * GinBlocks; // Max object size
+
+    fn << min_writes << "min-" << max_writes << "max-" << disksize / GIB << "ds-" << max_obj_size / GinBlocks;
+    fn << "objsize-" << size_of_hotset / GinBlocks << "hot-" << enable_old_chunks << ".csv";
+    std::ofstream outfile(fn.str(), std::ios::out);
 
     for (int i = 0; i < maxTransactions; i++) {
         if ((i != 0) && (i % print_per) == 0) {

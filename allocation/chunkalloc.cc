@@ -22,7 +22,10 @@ pthread_cond_t hp_cond = PTHREAD_COND_INITIALIZER;
 using namespace std;
 using namespace chrono;
 
-int enable_old_chunks = 0;
+// Enabling old chunks only really matters if real transactions can use the 64 page
+// bucket. Otherwise old data is naturally aggregated together as regular transactions
+// never allocate out of the 64 page bucket.
+int enable_old_chunks = 1;
 
 static int 
 determine_bucket(int numblocks)

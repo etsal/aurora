@@ -17,7 +17,8 @@ def graphme(file):
     ax.plot(x_values, txn_blocks, label="TXN Writes")
     ax.plot(x_values, total_alloc, label="Total Allocations")
     ax.legend()
-    fig.savefig("data.png")
+    name = file.split(".")[0]
+    fig.savefig("{}.png".format(name))
 
 
 if __name__ == "__main__":
