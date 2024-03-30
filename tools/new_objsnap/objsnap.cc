@@ -30,7 +30,7 @@
 #include <objsnap_ioctl.h>
 #include <rdtsc.h>
 
-const char *DISK = "/dev/nvd0";
+const char *DISK;
 
 uint64_t clock_cycles;
 
@@ -320,15 +320,23 @@ threadedTest(int numthreads, int num_objs,
 }
 
 
-int main()
+int main(int argc, char *argv[])
 {
-	clock_cycles = get_clock_speed_sleep();
-	//basicTest();
 	int error = 0;
-	if ((error = setup())) {
-        printf("Problem in Setup!");
+
+	clock_cycles = get_clock_speed_sleep();
+
+	if (argc != 2) {
+		fprintf(stderr, "Usage: ./new_objsnap <DISK>\n");
 		return (-1);
-    }
+	}
+	DISK = argv[1];
+
+	error = setup();
+	if (error != 0) {
+        	printf("Problem in Setup!");
+		return (-1);
+    	}
 
 	int totaldirtyset = 16;
 	int numCheckpoints = 5000;
