@@ -7,6 +7,10 @@
 #include <cassert>
 #include <chrono>
 #include <thread>
+#include <unistd.h>
+#include <cstring>
+#include <sstream>
+#include <fstream>
 
 #include "binaryalloc.h"
 #include "chunkalloc.h"
@@ -26,11 +30,14 @@ struct binaryallocator ba;
 struct duelingtrees dt;
 struct chunkallocator ca;
 
-int maxTransactions = 5000000; // Number of txns to do
+#define GIB (1024UL * 1024UL * 1024UL)
+
+int maxTransactions = 2000000; // Number of txns to do
 int max_writes = 16; // 64 KiB write
-int min_writes = 1; // 4096 
-uint64_t disksize = 1024UL * 1024UL * 1024UL * 64;
+int min_writes = 8; // 4096 
+uint64_t disksize = GIB * 64;
 int max_obj_size = 48 * GinBlocks; // Max object size
+int size_of_hotset = 8 * GinBlocks; // Max object size
 
 
 std::function<void(struct transaction *, int)> txn_func;
@@ -40,6 +47,7 @@ enum AllocType {
     ChunkAllocator = 1,
     DuelingTrees = 2,
 };
+AllocType type = AllocType::ChunkAllocator;
 
 double allocs = 0;
 double allocs_cnt = 0;
@@ -90,6 +98,21 @@ doalloc(void *allocator, AllocType type, struct transaction *txns, int size, int
     allocs += duration_cast<microseconds>(high_resolution_clock::now() - start).count();
     allocs_cnt += 1;
 
+}
+struct allocatorstats 
+getstat(void *allocator, AllocType type) 
+{
+    struct allocatorstats null{};
+    switch (type) {
+        case AllocType::BinaryAllocator:
+            return null;
+        case AllocType::ChunkAllocator:
+            return ca_stat((struct chunkallocator *)allocator);
+        case AllocType::DuelingTrees:
+            return null;
+    }
+
+    return null;
 }
 
 void
@@ -174,7 +197,7 @@ writethis(std::set<uint32_t> &write_set, stats &st,
 int dowrite(stats &st, std::mutex &mtx, 
     std::vector<diskptr_t> &allocation_map, 
     void *allocator, AllocType type) {
-    std::normal_distribution<double> dis{max_obj_size >> 1, max_obj_size / 4};
+    std::normal_distribution<double> dis{max_obj_size >> 1, size_of_hotset / 2};
     std::uniform_int_distribution<> writes{min_writes, max_writes};
     std::set<uint32_t> write_set;
     // Generate a random write set
@@ -189,6 +212,7 @@ int dowrite(stats &st, std::mutex &mtx,
         }
         write_set.emplace(s);
     }
+
     st.total_blocks += write_set.size();
 
     return writethis(write_set, st, allocation_map, mtx, allocator, type, 0);
@@ -257,15 +281,23 @@ stats dowork(std::vector<diskptr_t> &allocation_map, std::mutex &mtx, void *allo
     auto start = high_resolution_clock::now();
     auto print_per = 10000;
     double sum = 0;
+    std::ofstream outfile("data.csv", std::ios::out);
+
     for (int i = 0; i < maxTransactions; i++) {
         if ((i != 0) && (i % print_per) == 0) {
+            std::stringstream ss;
             auto duration = duration_cast<milliseconds>(high_resolution_clock::now() - start);
-            printf("Transactions done - %d - %ldms - %fus/a\n", i, duration.count(), sum / print_per);
+            ss << i << ", " << st.total_blocks << ", " << st.total_allocations;
+            ss << ", " << sum / print_per;
             sum = 0;
             start  = high_resolution_clock::now();
-            // auto ca_blocks = ca_print((struct chunkallocator *)allocator);
-            // auto user_blocks = print_allocation_map(allocation_map, 256 * 1024);
-            // assert(ca_blocks == user_blocks);
+            auto allocstats = getstat(allocator, type);
+            for (int i = 0; i < allocstats.numStats; i++) {
+                ss << ", " << allocstats.list[i];
+            }
+            ss << std::endl;
+            outfile << ss.str();
+            printf(ss.str().c_str());
         }
         sum += dowrite(st, mtx, allocation_map, allocator, type);
     }
@@ -288,47 +320,93 @@ reset(std::vector<diskptr_t> &allocation_map, uint64_t blocks) {
     }
 }
 
+void usage()
+{
+    printf("Usage: allocator tester tool\n");
+    printf("  -h\t\tPrint usage instructions\n");
+    printf("  -x\t\tNumber of transaction to perform\n");
+    printf("  -t\t\tType of allocator: dt = dueling trees, chunk = chunk allocator\n");
+    printf("  -l\t\tMin number of writes in a transaction\n");
+    printf("  -m\t\tMax number of writes in a transaction\n");
+    printf("  -s\t\tSize of disk in GiB\n");
+    printf("  -o\t\tSize of object in GiB\n");
+}
 
-
-int main() {
+int main(int argc, char *argv[]) {
+    int opt;
     stats s;
     gen = std::mt19937{rd()};
     std::vector<diskptr_t> allocation_map;
     std::mutex mtx;
+
+    while ((opt = getopt(argc, argv, "x:t:l:m:s:o:h:e:")) != -1) {
+        switch (opt) {
+            case 't':
+                if (strcmp(optarg, "dt")) {
+                    type = AllocType::DuelingTrees;
+                } else {
+                    type = AllocType::ChunkAllocator;
+                }
+                break; 
+            case 'x':
+                maxTransactions = strtoull(optarg, NULL, 10);
+                break;
+            case 'm':
+                max_writes = atoi(optarg);
+                break;
+            case 'l':
+                min_writes = atoi(optarg);
+                break;
+            case 's':
+                disksize = strtoull(optarg, NULL, 10) * GIB;
+                break;
+            case 'o':
+                max_obj_size = strtoull(optarg, NULL, 10) * GIB;
+                break;
+            case 'e':
+                size_of_hotset = strtoull(optarg, NULL, 10) * GinBlocks;
+                break;
+
+            case 'h':
+                usage();
+                exit(0);
+        }
+    }
+
     uint64_t blocks = disksize / (uint64_t)BLOCKSIZE;
     if (blocks < (uint64_t)max_obj_size) {
         printf("Disk size too small! Reduce max object size or increase disksize\n");
         return -1;
     }
-    printf("Blocks %lu\n", blocks);
+
     reset(allocation_map, blocks);
-    printf("%lu\n", allocation_map.size());
     assert(allocation_map.size() == blocks);
-    // ba_init(&ba);
-    // diskptr_t ptr;
-    // ptr.offset = 0;
-    // ptr.size = disksize / BLOCKSIZE;
-    // ba_free(&ba, ptr);
-    // s = dowork(allocation_map, mtx, &ba, AllocType::BinaryAllocator);
-    // ba_destroy(&ba);
-    // printf("Binary Allocation\n");
-    // printstats(s);
-
-    dt_init(&dt, disksize);
-    s = dowork(allocation_map, mtx, &dt, AllocType::DuelingTrees);
-    printstats(s);
-    print_allocation_map(allocation_map, 256 * 1024);
-    reset(allocation_map, blocks);
-
-
-    ca_init(&ca, 0, disksize, 64);
-    s = dowork(allocation_map, mtx, &ca, AllocType::ChunkAllocator);
-    printf("Chunk Allocation\n");
-    printstats(s);
-    auto ca_blocks = ca_print(&ca);
-    ca_destroy(&ca);
-    printf("%lu\n", allocation_map.size());
-    auto user_blocks = print_allocation_map(allocation_map, 256 * 1024);
-    assert(ca_blocks == user_blocks);
+    switch (type) {
+        case AllocType::ChunkAllocator: {
+            ca_init(&ca, 0, disksize, 64);
+            s = dowork(allocation_map, mtx, &ca, AllocType::ChunkAllocator);
+            ca_destroy(&ca);
+            return (0);
+        }
+        case AllocType::BinaryAllocator: {
+            ba_init(&ba);
+            diskptr_t ptr;
+            ptr.offset = 0;
+            ptr.size = disksize / BLOCKSIZE;
+            ba_free(&ba, ptr);
+            s = dowork(allocation_map, mtx, &ba, AllocType::BinaryAllocator);
+            ba_destroy(&ba);
+            printf("Binary Allocation\n");
+            printstats(s);
+            return (0);
+        }
+        case AllocType::DuelingTrees: {
+            dt_init(&dt, disksize);
+            s = dowork(allocation_map, mtx, &dt, AllocType::DuelingTrees);
+            printstats(s);
+            print_allocation_map(allocation_map, 256 * 1024);
+            return (0);
+        }
+    }
     return 0;
 }

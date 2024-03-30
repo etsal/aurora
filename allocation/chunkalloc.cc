@@ -22,6 +22,8 @@ pthread_cond_t hp_cond = PTHREAD_COND_INITIALIZER;
 using namespace std;
 using namespace chrono;
 
+int enable_old_chunks = 0;
+
 static int 
 determine_bucket(int numblocks)
 {
@@ -188,6 +190,7 @@ ca_destroy(struct chunkallocator *ca)
     free(ca->chunks, M_CHUNKALLOC);
     free(ca->next_chunk, M_CHUNKALLOC);
     free(ca->chunks_candidates, M_CHUNKALLOC);
+    free(ca->chunks_candidates_old, M_CHUNKALLOC);
     return 0;
 }
 
@@ -202,9 +205,9 @@ append_old_chunk(struct chunkallocator *ca, struct chunk *entry)
     ca->allocator_lock.unlock();
 }
 
-uint64_t ca_print(struct chunkallocator *ca)
+struct allocatorstats ca_stat(struct chunkallocator *ca)
 {
-    printf("Chunk Allocator State: %ld\n", ca->num_chunks);
+    struct allocatorstats stats;
     int free = 0;
     uint64_t used_blocks = 0;
     for (uint32_t i = 0; i < ca->num_chunks; i++) {
@@ -228,14 +231,16 @@ uint64_t ca_print(struct chunkallocator *ca)
 
         used_blocks += blocks;
     }
-    printf("Free Chunks: %d\n", free);
-    printf("Total Chunks: %ld\n", ca->num_chunks);
-    printf("Allocations from Chunk %lu\n", ca->allocations_from_chunk);
-    printf("New Chunk calls %lu\n", ca->new_chunk_calls);
-    printf("Emptys done %d\n", ca->emptys);
-    printf("Used Blocks %ldMiB\n", (used_blocks * BLOCKSIZE) / (1024 * 1024));
-    printf("Amount of Data moved %luMiB\n", (ca->moved * BLOCKSIZE) / (1024 * 1024));
-    return used_blocks;
+
+    stats.list[0] = free;
+    stats.list[1] = ca->num_chunks;
+    stats.list[2] = ca->allocations_from_chunk;
+    stats.list[3] = ca->new_chunk_calls;
+    stats.list[4] = ca->emptys;
+    stats.list[5] = used_blocks;
+    stats.list[6] = ca->moved;
+    stats.numStats = 7;
+    return stats;
 }
 
 static int
@@ -373,8 +378,6 @@ move_data(struct chunkallocator *ca, int thread_id, uint32_t numblocks) {
         return;
     }
 
-
-fill_workset:
     for (uint32_t i = 0; i < curempty->max_sectors; i++) {
         struct sector *map = &curempty->sector_map[i];
         if (map->block_map == 0)
@@ -459,7 +462,7 @@ ca_alloc_start:
 
     bucket = determine_bucket(numblocks);
     ca->allocator_lock.lock();
-    if (flag) {
+    if (flag && enable_old_chunks) {
         cl = ca->chunks_candidates_old[bucket];
     } else {
         cl = ca->chunks_candidates[bucket];
@@ -496,7 +499,7 @@ ca_alloc_start:
     error = getFreeChunk(ca, &newbucket, 1ULL << bucket);
     if (!error) {
         append_old_chunk(ca, cl);
-        if (flag) {
+        if (flag && enable_old_chunks) {
             ca->chunks_candidates_old[bucket] = newbucket;
             assert(ca->chunks_candidates_old[bucket]->used == CURRENTLY_USED);
             assert(ca->chunks_candidates_old[bucket]->used != FULL);
@@ -534,7 +537,6 @@ ca_alloc_start:
     printf("Could not find chunk for %d\n", numblocks);
     printf("Total Space in free sectors: %ld MiB\n", total_space_available / (1024UL * 1024UL));
     printf("Total Space in free blocks: %ld MiB\n", total_space_blocks / (1024UL * 1024UL));
-    ca_print(ca);
     assert(false);
     goto ca_alloc_start;
 }

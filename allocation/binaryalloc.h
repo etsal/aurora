@@ -14,6 +14,11 @@ typedef struct diskptr {
   uint32_t size;
 } diskptr_t;
 
+struct allocatorstats {
+  uint64_t list[64];
+  uint64_t numStats;
+};
+
 #define malloc(a, b, c) malloc(a)
 #define free(a, b) free(a)
 
