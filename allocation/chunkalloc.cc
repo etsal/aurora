@@ -369,6 +369,7 @@ move_data(struct chunkallocator *ca, int thread_id, uint32_t numblocks) {
         return;
     }
 
+    int sector_freed = 0;
     for (uint32_t i = 0; i < curempty->max_sectors; i++) {
         struct sector *map = &curempty->sector_map[i];
         if (map->block_map == 0)
@@ -393,6 +394,7 @@ move_data(struct chunkallocator *ca, int thread_id, uint32_t numblocks) {
                 curempty->blocks_used -= 1;
                 assert((before - 1) == __builtin_popcountll(map->block_map));
                 if (map->block_map == 0) {
+                    sector_freed = 1;
                     curempty->sectors_free++;
                     break;
                 }
@@ -401,15 +403,24 @@ move_data(struct chunkallocator *ca, int thread_id, uint32_t numblocks) {
             if (writeset_cnt == max_write_set) {
                 break;
             }
+
+            if (sector_freed) {
+                break;
+            }
         }
 
         if (writeset_cnt == max_write_set) {
             break;
         }
 
+        if (sector_freed) {
+            break;
+        }
+        
         if (map->block_map != 0) {
             assert(false);
         }
+
     }
 
     if (curempty->sectors_free == curempty->max_sectors) {

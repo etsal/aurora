@@ -11,7 +11,7 @@
 #define MiB (1024 * KiB)
 
 // Tunables
-#define CHUNKSIZE (1UL * MiB)
+#define CHUNKSIZE (8UL * MiB)
 #define MAXTHREADS (128)
 
 // Uncomment to override the maximum amount of data a thread will move on an allocation
