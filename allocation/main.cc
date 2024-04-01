@@ -36,8 +36,8 @@ int maxTransactions = 2000000; // Number of txns to do
 int max_writes = 64; // 64 KiB write
 int min_writes = 16; // 4096 
 uint64_t disksize = GIB * 64;
-int max_obj_size = 48 * GinBlocks; // Max object size
-int size_of_hotset = 8 * GinBlocks; // Max object size
+uint64_t max_obj_size = 48 * GinBlocks; // Max object size
+uint64_t size_of_hotset = 8 * GinBlocks; // Max object size
 
 
 std::function<void(struct transaction *, int)> txn_func;
@@ -194,15 +194,25 @@ writethis(std::set<uint32_t> &write_set, stats &st,
     return duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 }
 
+int HOTPERCENTAGE = 90;
 int dowrite(stats &st, std::mutex &mtx, 
     std::vector<diskptr_t> &allocation_map, 
     void *allocator, AllocType type) {
-    std::normal_distribution<double> dis{max_obj_size >> 1, size_of_hotset / 2};
+    std::uniform_int_distribution<> dis_hot{0, size_of_hotset};
+    std::uniform_int_distribution<> dis_nothot{size_of_hotset, max_obj_size};
     std::uniform_int_distribution<> writes{min_writes, max_writes};
+    std::uniform_int_distribution<> hot_probability{1, 100};
     std::set<uint32_t> write_set;
     // Generate a random write set
     for (int i = 0; i < writes(gen); i++) {
-        auto s = int(dis(gen));
+        int s;
+
+        bool isHot = hot_probability(gen) < HOTPERCENTAGE;
+        if (isHot)
+            s = int(dis_hot(gen));
+        else
+            s = int(dis_nothot(gen));
+
         if (s < 0) {
             s = 0;
         }
@@ -210,6 +220,7 @@ int dowrite(stats &st, std::mutex &mtx,
         if (s > max_obj_size) {
             s = max_obj_size;
         }
+
         write_set.emplace(s);
     }
 
@@ -282,15 +293,9 @@ stats dowork(std::vector<diskptr_t> &allocation_map, std::mutex &mtx, void *allo
     auto print_per = 10000;
     double sum = 0;
     std::stringstream fn;
-    int maxTransactions = 2000000; // Number of txns to do
-    int max_writes = 64; // 64 KiB write
-    int min_writes = 16; // 4096 
-    uint64_t disksize = GIB * 64;
-    int max_obj_size = 48 * GinBlocks; // Max object size
-    int size_of_hotset = 8 * GinBlocks; // Max object size
 
     fn << min_writes << "min-" << max_writes << "max-" << disksize / GIB << "ds-" << max_obj_size / GinBlocks;
-    fn << "objsize-" << size_of_hotset / GinBlocks << "hot-" << enable_old_chunks << ".csv";
+    fn << "objsize-" << size_of_hotset / GinBlocks << "hot-" << maxTransactions << "-" << enable_old_chunks << ".csv";
     std::ofstream outfile(fn.str(), std::ios::out);
 
     for (int i = 0; i < maxTransactions; i++) {
@@ -340,6 +345,8 @@ void usage()
     printf("  -m\t\tMax number of writes in a transaction\n");
     printf("  -s\t\tSize of disk in GiB\n");
     printf("  -o\t\tSize of object in GiB\n");
+    printf("  -e\t\tSize of the hot set in GiB (Will span 2 std deviations of the object)\n");
+    printf("  -c\t\tEnable old chuck allocation (Chunk Allocator only)\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -349,7 +356,7 @@ int main(int argc, char *argv[]) {
     std::vector<diskptr_t> allocation_map;
     std::mutex mtx;
 
-    while ((opt = getopt(argc, argv, "x:t:l:m:s:o:h:e:")) != -1) {
+    while ((opt = getopt(argc, argv, "x:t:l:m:s:o:he:c")) != -1) {
         switch (opt) {
             case 't':
                 if (strcmp(optarg, "dt")) {
@@ -368,15 +375,17 @@ int main(int argc, char *argv[]) {
                 min_writes = atoi(optarg);
                 break;
             case 's':
-                disksize = strtoull(optarg, NULL, 10) * GIB;
+                disksize = GIB * strtoull(optarg, NULL, 10);
                 break;
             case 'o':
-                max_obj_size = strtoull(optarg, NULL, 10) * GIB;
+                max_obj_size = GinBlocks * atoi(optarg);
                 break;
             case 'e':
                 size_of_hotset = strtoull(optarg, NULL, 10) * GinBlocks;
                 break;
-
+            case 'c':
+                enable_old_chunks = 1;
+                break;
             case 'h':
                 usage();
                 exit(0);
@@ -384,7 +393,7 @@ int main(int argc, char *argv[]) {
     }
 
     uint64_t blocks = disksize / (uint64_t)BLOCKSIZE;
-    if (blocks < (uint64_t)max_obj_size) {
+    if (blocks < max_obj_size) {
         printf("Disk size too small! Reduce max object size or increase disksize\n");
         return -1;
     }

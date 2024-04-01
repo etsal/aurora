@@ -25,7 +25,7 @@ using namespace chrono;
 // Enabling old chunks only really matters if real transactions can use the 64 page
 // bucket. Otherwise old data is naturally aggregated together as regular transactions
 // never allocate out of the 64 page bucket.
-int enable_old_chunks = 1;
+int enable_old_chunks = 0;
 
 static int 
 determine_bucket(int numblocks)
@@ -58,24 +58,13 @@ getFreeChunk(struct chunkallocator *ca, struct chunk **cl, uint32_t txn_size) {
         return ENOSPC;
     }
 
-    // for (int i = 0; i < ca->next_cnt; i++) {
-    //     if (ca->next_chunk[i]->used != 0) {
-    //         printchunk(ca->next_chunk[i]);
-    //         printf("%d\n", i);
-    //         assert(false);
-    //     }
-    // }
-
     *cl = ca->next_chunk[0];
-    if((*cl)->used != 0) {
-        printchunk(*cl);
-        printf("%d\n", ca->next_cnt);
-    }
 
     ca->next_cnt--;
     for (int i = 0; i < ca->next_cnt; i++) {
         ca->next_chunk[i] = ca->next_chunk[i + 1];
     }
+
     assert((*cl)->used == 0);
     (*cl)->used = CURRENTLY_USED;
     (*cl)->txn_size = txn_size;
@@ -373,10 +362,9 @@ move_data(struct chunkallocator *ca, int thread_id, uint32_t numblocks) {
 #ifdef MAX_BLOCKS_TO_MOVE 
     uint32_t max_write_set = MAX_BLOCKS_TO_MOVE;
 #else
-    uint32_t max_write_set = ca->txn_size;
+    uint32_t max_write_set = curempty->txn_size;
 #endif
-    max_write_set = ca->txn_size;
-    if (ca->next_cnt > 1000) {
+    if (ca->next_cnt > (2 * MAXTHREADS)) {
         curempty->mtx.unlock();
         return;
     }
