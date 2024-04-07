@@ -11,8 +11,8 @@
 #define MiB (1024 * KiB)
 
 // Tunables
-#define CHUNKSIZE (8UL * MiB)
-#define MAXTHREADS (128)
+#define CHUNKSIZE (1UL * MiB)
+#define MAXTHREADS (64)
 
 // Uncomment to override the maximum amount of data a thread will move on an allocation
 //#define MAX_BLOCKS_TO_MOVE (8) 
@@ -59,6 +59,16 @@ struct chunk {
 };
 
 
+// Adding them in seperate structures in case we need
+// stat metadata later
+struct chunklist {
+    struct chunk *chunk;
+};
+
+struct workset {
+    struct chunklist buckets[6];
+};
+
 struct chunkallocator {
     struct chunk *chunks;    
 
@@ -75,7 +85,7 @@ struct chunkallocator {
     struct chunk **old_chunks;
     int old_cnt;
 
-    struct chunk **thread_worklist;
+    struct workset thread_worklist[64];
     std::mutex allocator_lock;
 
     uint64_t candidate_cnt;
@@ -92,6 +102,9 @@ struct chunkallocator {
     int high_pressure;
     uint64_t moved;
     int emptys;
+    uint64_t emergency_move;
+
+    uint64_t free;
 };
 
 int ca_init(struct chunkallocator *ca, off_t starting_offset, uint64_t disksize, int txn_size_in_blocks);

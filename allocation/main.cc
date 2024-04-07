@@ -12,6 +12,7 @@
 #include <sstream>
 #include <fstream>
 
+
 #include "binaryalloc.h"
 #include "chunkalloc.h"
 #include "dueling.h"
@@ -194,25 +195,55 @@ writethis(std::set<uint32_t> &write_set, stats &st,
     return duration_cast<microseconds>(high_resolution_clock::now() - start).count();
 }
 
+int64_t ParetoCdfInversion(double u, double theta, double k, double sigma) {
+    double ret;
+    if (k == 0.0) {
+      ret = theta - sigma * std::log(u);
+    } else {
+      ret = theta + sigma * (std::pow(u, -1 * k) - 1) / k;
+    }
+    return static_cast<int64_t>(ceil(ret));
+}
+
+double pareto_distribution(double max, double alpha) {
+    std::exponential_distribution<double> dist(1.0);
+    double u = dist(gen); // Random number between 0 and 1
+
+    // Mapping the random number to the desired range (0 to 100)
+    return max * (std::pow(u, -1.0 / alpha));
+}
+
+std::map<int, int> obj_heat_map;
+
 int HOTPERCENTAGE = 90;
 int dowrite(stats &st, std::mutex &mtx, 
     std::vector<diskptr_t> &allocation_map, 
     void *allocator, AllocType type) {
+    // To make the pareto distribution move we have it move every 1M writes
+    // down the the object
+    static uint64_t count = 0;
     std::uniform_int_distribution<uint64_t> dis_hot{0, size_of_hotset};
     std::uniform_int_distribution<uint64_t> dis_nothot{size_of_hotset, max_obj_size};
-    std::uniform_int_distribution<uint64_t> writes{min_writes, max_writes};
+    std::uniform_int_distribution<> writes{min_writes, max_writes};
     std::uniform_int_distribution<uint64_t> hot_probability{1, 100};
     std::set<uint32_t> write_set;
+    count += 1;
+
     // Generate a random write set
     for (int i = 0; i < writes(gen); i++) {
         int s;
+        int shift = count / 1000000;
+        if ((shift * size_of_hotset) > max_obj_size) {
+            count = 0;
+            shift = 0;
+        }
 
-        bool isHot = hot_probability(gen) < HOTPERCENTAGE;
-        if (isHot)
-            s = int(dis_hot(gen));
-        else
-            s = int(dis_nothot(gen));
-
+        s = pareto_distribution(max_obj_size, 3) - (shift * (size_of_hotset));
+        // bool isHot = hot_probability(gen) < HOTPERCENTAGE;
+        // if (isHot)
+        //     s = int(dis_hot(gen));
+        // else
+        //     s = int(dis_nothot(gen));
         if (s < 0) {
             s = 0;
         }
@@ -221,8 +252,10 @@ int dowrite(stats &st, std::mutex &mtx,
             s = max_obj_size;
         }
 
+        obj_heat_map[s] += 1;
         write_set.emplace(s);
     }
+
 
     st.total_blocks += write_set.size();
 
