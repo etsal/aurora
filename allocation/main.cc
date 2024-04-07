@@ -198,10 +198,10 @@ int HOTPERCENTAGE = 90;
 int dowrite(stats &st, std::mutex &mtx, 
     std::vector<diskptr_t> &allocation_map, 
     void *allocator, AllocType type) {
-    std::uniform_int_distribution<> dis_hot{0, size_of_hotset};
-    std::uniform_int_distribution<> dis_nothot{size_of_hotset, max_obj_size};
-    std::uniform_int_distribution<> writes{min_writes, max_writes};
-    std::uniform_int_distribution<> hot_probability{1, 100};
+    std::uniform_int_distribution<uint64_t> dis_hot{0, size_of_hotset};
+    std::uniform_int_distribution<uint64_t> dis_nothot{size_of_hotset, max_obj_size};
+    std::uniform_int_distribution<uint64_t> writes{min_writes, max_writes};
+    std::uniform_int_distribution<uint64_t> hot_probability{1, 100};
     std::set<uint32_t> write_set;
     // Generate a random write set
     for (int i = 0; i < writes(gen); i++) {
@@ -239,6 +239,17 @@ void printstats(stats &st) {
     printf("Total blocks: %d\n", st.total_blocks);
     printf("Total Written: %luMiB\n", (st.total_blocks * 4096UL) / (1024 * 1024));
     printf("Total blocks / total alloctions: %f\n", (double)st.total_blocks / (double)st.total_allocations);
+}
+
+uint64_t
+check_allocated(std::vector<diskptr_t> &allocation_map) {
+    uint64_t count = 0;
+    for (const auto &k: allocation_map) {
+        if (k.size != (uint32_t)(-1)) {
+            count += 1;
+        }
+    }
+    return count;
 }
 
 uint64_t 
@@ -310,9 +321,19 @@ stats dowork(std::vector<diskptr_t> &allocation_map, std::mutex &mtx, void *allo
             for (int i = 0; i < allocstats.numStats; i++) {
                 ss << ", " << allocstats.list[i];
             }
+
             ss << std::endl;
             outfile << ss.str();
             printf(ss.str().c_str());
+            auto size = check_allocated(allocation_map);
+            if (allocstats.list[allocstats.numStats - 1] != (allocation_map.size() - size)) {
+                printf("Listed Free Blocks: %lu\n", allocstats.list[allocstats.numStats - 1]);
+                printf("Real Free Blocks: %lu\n", (allocation_map.size() - size));
+                printf("List Allocated: %lu\n", allocstats.list[allocstats.numStats - 4]);
+                printf("Real Allocated: %lu\n", size);
+                assert(false);
+            }
+
         }
         sum += dowrite(st, mtx, allocation_map, allocator, type);
     }
