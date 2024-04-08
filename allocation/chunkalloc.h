@@ -1,9 +1,9 @@
 #ifndef __CHUNKALLOC_H__
 #define __CHUNKALLOC_H__
 
+#include <atomic>
 #include <functional>
 #include <mutex>
-#include <atomic>
 
 #include "binaryalloc.h"
 #define BLOCKSIZE (4096)
@@ -14,103 +14,120 @@
 #define CHUNKSIZE (1UL * MiB)
 #define MAXTHREADS (64)
 
-// Uncomment to override the maximum amount of data a thread will move on an allocation
-//#define MAX_BLOCKS_TO_MOVE (8) 
+// Uncomment to override the maximum amount of data a thread will move on an
+// allocation
+//#define MAX_BLOCKS_TO_MOVE (8)
 
 // End tunables
-#define MAXSECTORS (CHUNKSIZE / BLOCKSIZE )
+#define MAXSECTORS (CHUNKSIZE / BLOCKSIZE)
 #define CURRENTLY_USED (1)
 #define EMPTYING (2)
 #define FULL (3)
 
-extern std::function<void(struct transaction *txns, int cnt)> txn_func;
+extern std::function<void(struct transaction* txns, int cnt)> txn_func;
 
 extern int enable_old_chunks;
 
-struct transaction {
-   uint32_t inode; 
-   uint32_t offset;
-   diskptr_t ptr;
+struct transaction
+{
+  uint32_t inode;
+  uint32_t offset;
+  diskptr_t ptr;
 };
 
-struct objectid {
-    uint32_t inode;
-    uint32_t offset;
+struct objectid
+{
+  uint32_t inode;
+  uint32_t offset;
 };
 
-struct sector {
-    // uint64_t means that the max sector size is 64 blocks.
-    uint64_t block_map;     
-    struct objectid objects[64];
+struct sector
+{
+  // uint64_t means that the max sector size is 64 blocks.
+  uint64_t block_map;
+  struct objectid objects[64];
 };
 
-struct chunk {
-    struct sector sector_map[MAXSECTORS];
-    int index;
-    uint8_t used;
-    uint32_t txn_size;
-    uint64_t sectors_free;
-    uint64_t max_sectors;
-    uint64_t blocks_used;
-    diskptr_t ptr;
-    uint64_t freed;
+struct chunk
+{
+  struct sector sector_map[MAXSECTORS];
+  int index;
+  uint8_t used;
+  uint32_t txn_size;
+  uint64_t sectors_free;
+  uint64_t max_sectors;
+  uint64_t blocks_used;
+  diskptr_t ptr;
+  uint64_t freed;
 
-    std::mutex mtx;
+  std::mutex mtx;
 };
-
 
 // Adding them in seperate structures in case we need
 // stat metadata later
-struct chunklist {
-    struct chunk *chunk;
+struct chunklist
+{
+  struct chunk* chunk;
 };
 
-struct workset {
-    struct chunklist buckets[6];
+struct workset
+{
+  struct chunklist buckets[6];
 };
 
-struct chunkallocator {
-    struct chunk *chunks;    
+struct chunkallocator
+{
+  struct chunk* chunks;
 
-    // This is the list of binary allocation candidates
-    // [0] = 1 block
-    // [1] = 2 blocks
-    // [2] = 4 blocks
-    struct chunk **chunks_candidates;
-    struct chunk **chunks_candidates_old;
-    struct chunk **next_chunk;
-    int next_cnt;
+  // This is the list of binary allocation candidates
+  // [0] = 1 block
+  // [1] = 2 blocks
+  // [2] = 4 blocks
+  struct chunk** chunks_candidates;
+  struct chunk** chunks_candidates_old;
+  struct chunk** next_chunk;
+  int next_cnt;
 
-    // When a chunk gets used
-    struct chunk **old_chunks;
-    int old_cnt;
+  // When a chunk gets used
+  struct chunk** old_chunks;
+  int old_cnt;
 
-    struct workset thread_worklist[64];
-    std::mutex allocator_lock;
+  struct workset thread_worklist[64];
+  std::mutex allocator_lock;
 
-    uint64_t candidate_cnt;
-    uint64_t num_chunks;
-    uint64_t used_chunks;
-    uint64_t starting_offset;
-    uint32_t txn_size;
+  uint64_t candidate_cnt;
+  uint64_t num_chunks;
+  uint64_t used_chunks;
+  uint64_t starting_offset;
+  uint32_t txn_size;
 
-    uint64_t allocations_from_chunk;
-    uint64_t new_chunk_calls;
+  uint64_t allocations_from_chunk;
+  uint64_t new_chunk_calls;
 
-    pthread_t tid;
-    int terminate_thread;
-    int high_pressure;
-    uint64_t moved;
-    int emptys;
-    uint64_t emergency_move;
+  pthread_t tid;
+  int terminate_thread;
+  uint64_t moved;
+  int emptys;
+  uint64_t emergency_move;
 
-    uint64_t free;
+  uint64_t free;
 };
 
-int ca_init(struct chunkallocator *ca, off_t starting_offset, uint64_t disksize, int txn_size_in_blocks);
-int ca_destroy(struct chunkallocator *ca);
-struct allocatorstats ca_stat(struct chunkallocator *ca);
+int
+ca_init(struct chunkallocator* ca,
+        off_t starting_offset,
+        uint64_t disksize,
+        int txn_size_in_blocks);
+int
+ca_destroy(struct chunkallocator* ca);
+struct allocatorstats
+ca_stat(struct chunkallocator* ca);
 
-int ca_alloc(struct chunkallocator *ca, struct transaction *txn, uint32_t numblocks, int flag);
-int ca_free(struct chunkallocator *ca, diskptr_t ptr);
+int
+ca_alloc(struct chunkallocator* ca,
+         struct transaction* txn,
+         uint32_t numblocks,
+         int flag);
+int
+ca_free(struct chunkallocator* ca, diskptr_t ptr);
 #endif
