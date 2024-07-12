@@ -186,8 +186,8 @@ void
 basicTest()
 {
 	struct mapping map;
-	int error = 0;
-	if ((error = setup(disk))) {
+	int error = setup(disk);
+	if (error != 0) {
 		printf("Problem in Setup!");
 		return;
 	}
@@ -231,8 +231,8 @@ void
 random_write_load(int num_objs, int size_of_obj_in_blocks, 
 	int writes_per_iteration, int times, int tid)
 {
-	int error = 0;
-	if ((error = setup(disk))) {
+	int error = setup(disk);
+	if (error != 0) {
 		printf("Problem in Setup!");
 		return;
 	}
