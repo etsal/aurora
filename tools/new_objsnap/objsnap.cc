@@ -321,12 +321,14 @@ threadedTest(int numthreads, int num_objs,
 int main()
 {
 	clock_cycles = get_clock_speed_sleep();
+
 	//basicTest();
-	int error = 0;
-	if ((error = setup())) {
-        printf("Problem in Setup!");
+
+	int error = setup();
+	if (error != 0) {
+        	printf("Problem in Setup!");
 		return (-1);
-    }
+    	}
 
 	int totaldirtyset = 16;
 	int numCheckpoints = 5000;
