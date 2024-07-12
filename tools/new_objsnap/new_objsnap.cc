@@ -30,6 +30,7 @@
 #include <objsnap_ioctl.h>
 #include <rdtsc.h>
 
+const char *disk = "/dev/nvd0";
 uint64_t clock_cycles;
 
 int newfs(const char *path)
@@ -139,15 +140,15 @@ int newfs(const char *path)
 }
 
 int 
-setup()
+setup(const char *disk)
 {
- 	int error = newfs("/dev/nvd0");
+ 	int error = newfs(disk);
 	if (error) {
 		printf("Problem creating new objsnap device");
 		return error;
 	}
 
-	error = objsnap_init("/dev/nvd0");
+	error = objsnap_init(disk);
 	if (error) {
 		printf("Error with objsnap init\n");
 		return error;
@@ -186,7 +187,7 @@ basicTest()
 {
 	struct mapping map;
 	int error = 0;
-	if ((error = setup())) {
+	if ((error = setup(disk))) {
         printf("Problem in Setup!");
 		return;
     }
@@ -231,7 +232,7 @@ random_write_load(int num_objs, int size_of_obj_in_blocks,
 	int writes_per_iteration, int times, int tid)
 {
 	int error = 0;
-	if ((error = setup())) {
+	if ((error = setup(disk))) {
         printf("Problem in Setup!");
 		return;
     }
@@ -324,7 +325,7 @@ int main()
 
 	//basicTest();
 
-	int error = setup();
+	int error = setup(disk);
 	if (error != 0) {
         	printf("Problem in Setup!");
 		return (-1);
