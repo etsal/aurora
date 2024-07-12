@@ -638,6 +638,9 @@ objsnap_osdata_init(void)
 static void
 objsnap_osdata_fini(void)
 {
+	struct objsnap_vnode *vnode;
+	int i;
+
 	if (osdata.os_cdev != NULL) {
 		destroy_dev(osdata.os_cdev);
 
@@ -647,9 +650,7 @@ objsnap_osdata_fini(void)
 
 	if (osdata.os_consumer != NULL) {
 		g_topology_lock();
-
 		g_vfs_close(osdata.os_consumer);
-
 		g_topology_unlock();
 
 		osdata.os_consumer = NULL;
@@ -663,8 +664,8 @@ objsnap_osdata_fini(void)
 		printf("Destroying device vnode\n");
 	}
 
-	for (int i = 0; i < MAXINODES; i ++) {
-		struct objsnap_vnode *vnode = &vnode_cache[i];
+	for (i = 0; i < MAXINODES; i ++) {
+		vnode = &vnode_cache[i];
 		if (vnode->v_tree.v_tree != NULL) {
 			btree_destroy(vnode->v_tree.v_tree);
 			vnode->v_tree.v_tree = NULL;
