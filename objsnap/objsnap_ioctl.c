@@ -622,10 +622,10 @@ objsnap_osdata_init(void)
 	osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
 		taskqueue_thread_enqueue, &osdata.os_tq);
 
+	taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
+
 	/* XXXETSAL Handle errors during syncer initialization. */
 	objsnap_osdata_init_syncer();
-
-	taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
 
 	/* Make the SLS available to userspace. */
 	error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
@@ -638,6 +638,13 @@ objsnap_osdata_init(void)
 static void
 objsnap_osdata_fini(void)
 {
+	if (osdata.os_cdev != NULL) {
+		destroy_dev(osdata.os_cdev);
+
+		osdata.os_cdev = NULL;
+		printf("Destroying device\n");
+	}
+
 	if (osdata.os_consumer != NULL) {
 		g_topology_lock();
 
@@ -650,18 +657,10 @@ objsnap_osdata_fini(void)
 	}
 
 	if (osdata.os_vp != NULL) {
-
 		vrele(osdata.os_vp);
 
 		osdata.os_vp = NULL;
 		printf("Destroying device vnode\n");
-	}
-
-	if (osdata.os_cdev != NULL) {
-		destroy_dev(osdata.os_cdev);
-
-		osdata.os_cdev = NULL;
-		printf("Destroying device\n");
 	}
 
 	for (int i = 0; i < MAXINODES; i ++) {
