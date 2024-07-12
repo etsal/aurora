@@ -584,7 +584,6 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	case MOD_LOAD:
 
 		bzero(&osdata, sizeof(osdata));
-		bzero(&alloc, sizeof(struct allocator));
 
 		/* Make the SLS available to userspace. */
 		error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 

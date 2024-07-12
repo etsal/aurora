@@ -52,6 +52,7 @@ allocator_init()
     size_t internalsize;
     int bucket;
 
+	bzero(&alloc, sizeof(struct allocator));
 	alloc.alloc_size_total_blocks = superblock.super_size;
 	mtx_init(&alloc.alloc_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
 	alloc.alloc_bsize = BLOCKSIZE;
