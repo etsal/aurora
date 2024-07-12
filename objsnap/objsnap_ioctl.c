@@ -618,7 +618,23 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 
+		bzero(threadsets, sizeof(struct dirtyset) * MAXTHREADS);
+
+		// TODO: FOR NOW JUST SET TO ZERO, During recovery we
+		// have to see the latest txn id
+		global_txnid = 0;
+
+		objsnap_vncache_init();
+
 		bzero(&osdata, sizeof(osdata));
+
+		osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
+			taskqueue_thread_enqueue, &osdata.os_tq);
+
+		/* XXXETSAL Handle errors during syncer initialization. */
+		objsnap_osdata_init_syncer();
+
+		taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
 
 		/* Make the SLS available to userspace. */
 		error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
@@ -628,23 +644,6 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		if (error) {
 			return (error);
 		}
-
-		bzero(threadsets, sizeof(struct dirtyset) * MAXTHREADS);
-
-		// TODO: FOR NOW JUST SET TO ZERO, During recovery we
-		// have to see the latest txn id
-		global_txnid = 0;
-
-		objsnap_vncache_init();
-
-		osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
-			taskqueue_thread_enqueue, &osdata.os_tq);
-
-
-		/* XXXETSAL Handle errors during syncer initialization. */
-		objsnap_osdata_init_syncer();
-
-		taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
 
 		break;
 	case MOD_UNLOAD:
