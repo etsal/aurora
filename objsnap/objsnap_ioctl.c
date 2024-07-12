@@ -565,6 +565,9 @@ objsnap_vncache_fini(void)
 	struct objsnap_vnode *vn;
 	int i;
 
+	if (vnode_cache == NULL)
+		return;
+
 	for (i = 0; i < MAXINODES; i++) {
 		vn = &vnode_cache[i];
 
