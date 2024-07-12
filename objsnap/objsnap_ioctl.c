@@ -43,7 +43,6 @@
 #include "alloc.h"
 #include "btree.h"
 
-/* XXX Rename to M_SLS. */
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
 
 struct objsnap_metadata osdata;
