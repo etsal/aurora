@@ -76,7 +76,7 @@ rdtscp_cycles()
   return ret;
 }
 
-static double
+static inline double
 rdtsc_average()
 {
   uint64_t iterations = 10000000;
@@ -91,7 +91,7 @@ rdtsc_average()
   return cost / iterations;
 }
 
-static double
+static inline double
 rdtscp_average()
 {
   uint64_t iterations = 10000000;
@@ -142,12 +142,12 @@ struct timerstat {
   uint64_t sum;
 };
 
-static void 
+static inline void 
 ctstart(struct cycletimer *ct, uint64_t *b) {
   *b = rdtscp();
 }
 
-static void 
+static inline void 
 ctstop(struct cycletimer *ct, uint64_t *before) {
 #ifdef _KERNEL
   atomic_fetchadd_64(&ct->ct_sum, rdtscp() - *before);
@@ -155,14 +155,14 @@ ctstop(struct cycletimer *ct, uint64_t *before) {
 #endif
 }
 
-static void 
+static inline void 
 ctreset(struct cycletimer *ct) {
   ct->ct_sum = 0;
   ct->ct_cnt = 0;
   ct->ct_before = 0;
 }
 
-static struct timerstat 
+static inline struct timerstat 
 ctstat(char *name, struct cycletimer *ct) {
   struct timerstat st;
   if (ct->ct_cnt) {
