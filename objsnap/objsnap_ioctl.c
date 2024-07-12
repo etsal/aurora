@@ -541,7 +541,39 @@ objsnap_wal_syncer(void *ctx)
 	kthread_exit();
 }
 
+static void
+objsnap_vncache_init(void)
+{
+	struct objsnap_vnode *vn;
+	int i;
 
+	vnode_cache = malloc(sizeof(*vnode_cache) * MAXINODES, M_OBJSNAP,
+		M_WAITOK | M_ZERO);
+
+	for (i = 0; i < MAXINODES; i++) {
+		vn = &vnode_cache[i];
+
+		lockinit(&vn->v_lock, 0, "objsnap node lock", 0, 0);
+		lockinit(&vn->v_commit_lock, 0, "objsnap commit lock", 0, 0);
+	}
+}
+
+
+static void
+objsnap_vncache_fini(void)
+{
+	struct objsnap_vnode *vn;
+	int i;
+
+	for (i = 0; i < MAXINODES; i++) {
+		vn = &vnode_cache[i];
+
+		lockdestroy(&vn->v_lock);
+		lockdestroy(&vn->v_commit_lock);
+	}
+
+	free(vnode_cache, M_OBJSNAP);
+}
 
 static int
 objsnapHandler(struct module *inModule, int inEvent, void *inArg)
@@ -565,11 +597,6 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		osdata.os_vp = NULL;
 
-		vnode_cache = malloc(sizeof(struct objsnap_vnode) * MAXINODES,
-			M_OBJSNAP, M_WAITOK);
-
-		bzero(vnode_cache, sizeof(struct objsnap_vnode) * MAXINODES);
-
 		bzero(osdata.os_stats, sizeof(struct cycletimer) * OS_STAT_MAX);
 		bzero(threadsets, sizeof(struct dirtyset) * MAXTHREADS);
 
@@ -577,14 +604,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		// have to see the latest txn id
 		global_txnid = 0;
 
-		// Initialize Locks
-		for (int i = 0; i < MAXINODES; i++) {
-			lockinit(&vnode_cache[i].v_lock, 0, "objsnap node lock", 
-				0, 0);
-			lockinit(&vnode_cache[i].v_commit_lock, 0, "objsnap commit lock", 
-				0, 0);
-			
-		}
+		objsnap_vncache_init();
 
 		osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
 			taskqueue_thread_enqueue, &osdata.os_tq);
@@ -658,12 +678,11 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		}
 		
 
-
 		taskqueue_quiesce(osdata.os_tq);
 		taskqueue_free(osdata.os_tq);
 		osdata.os_tq = NULL;
 
-		free(vnode_cache, M_OBJSNAP);
+		objsnap_vncache_fini();
 
 		allocator_destroy();
 
