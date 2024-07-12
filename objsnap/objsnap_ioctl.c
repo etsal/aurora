@@ -611,6 +611,77 @@ objsnap_osdata_fini_syncer(void)
 }
 
 static int
+objsnap_osdata_init(void)
+{
+	int error;
+	bzero(&osdata, sizeof(osdata));
+
+	osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
+		taskqueue_thread_enqueue, &osdata.os_tq);
+
+	/* XXXETSAL Handle errors during syncer initialization. */
+	objsnap_osdata_init_syncer();
+
+	taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
+
+	/* Make the SLS available to userspace. */
+	error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
+		&osdata.os_cdev, &objsnap_cdevsw, 0, UID_ROOT, GID_WHEEL, 
+		0666, "objsnap");
+
+	return (error);
+}
+
+static void
+objsnap_osdata_fini(void)
+{
+	if (osdata.os_consumer != NULL) {
+		g_topology_lock();
+
+		g_vfs_close(osdata.os_consumer);
+
+		g_topology_unlock();
+
+		osdata.os_consumer = NULL;
+		printf("Destroying consumer\n");
+	}
+
+	if (osdata.os_vp != NULL) {
+
+		vrele(osdata.os_vp);
+
+		osdata.os_vp = NULL;
+		printf("Destroying device vnode\n");
+	}
+
+	if (osdata.os_cdev != NULL) {
+		destroy_dev(osdata.os_cdev);
+
+		osdata.os_cdev = NULL;
+		printf("Destroying device\n");
+	}
+
+	for (int i = 0; i < MAXINODES; i ++) {
+		struct objsnap_vnode *vnode = &vnode_cache[i];
+		if (vnode->v_tree.v_tree != NULL) {
+			btree_destroy(vnode->v_tree.v_tree);
+			vnode->v_tree.v_tree = NULL;
+			
+		}
+
+		if (vnode->v_inode != NULL) {
+			free(vnode->v_inode, M_OBJSNAP);
+		}
+	}
+
+	objsnap_osdata_fini_syncer();
+
+	taskqueue_quiesce(osdata.os_tq);
+	taskqueue_free(osdata.os_tq);
+	osdata.os_tq = NULL;
+}
+
+static int
 objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 {
 	int error = 0;
@@ -626,71 +697,13 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		objsnap_vncache_init();
 
-		bzero(&osdata, sizeof(osdata));
-
-		osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
-			taskqueue_thread_enqueue, &osdata.os_tq);
-
-		/* XXXETSAL Handle errors during syncer initialization. */
-		objsnap_osdata_init_syncer();
-
-		taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
-
-		/* Make the SLS available to userspace. */
-		error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
-			&osdata.os_cdev, &objsnap_cdevsw, 0, UID_ROOT, GID_WHEEL, 
-			0666, "objsnap");
-
-		if (error) {
+		error = objsnap_osdata_init();
+		if (error != 0)
 			return (error);
-		}
 
 		break;
 	case MOD_UNLOAD:
-		if (osdata.os_consumer != NULL) {
-			g_topology_lock();
-
-			g_vfs_close(osdata.os_consumer);
-
-			g_topology_unlock();
-
-			osdata.os_consumer = NULL;
-			printf("Destroying consumer\n");
-		}
-
-		if (osdata.os_vp != NULL) {
-
-			vrele(osdata.os_vp);
-
-			osdata.os_vp = NULL;
-			printf("Destroying device vnode\n");
-		}
-
-		if (osdata.os_cdev != NULL) {
-			destroy_dev(osdata.os_cdev);
-
-			osdata.os_cdev = NULL;
-			printf("Destroying device\n");
-		}
-
-		for (int i = 0; i < MAXINODES; i ++) {
-			struct objsnap_vnode *vnode = &vnode_cache[i];
-			if (vnode->v_tree.v_tree != NULL) {
-				btree_destroy(vnode->v_tree.v_tree);
-				vnode->v_tree.v_tree = NULL;
-				
-			}
-
-			if (vnode->v_inode != NULL) {
-				free(vnode->v_inode, M_OBJSNAP);
-			}
-		}
-
-		objsnap_osdata_fini_syncer();
-
-		taskqueue_quiesce(osdata.os_tq);
-		taskqueue_free(osdata.os_tq);
-		osdata.os_tq = NULL;
+		objsnap_osdata_fini();
 
 		objsnap_vncache_fini();
 
