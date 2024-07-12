@@ -20,17 +20,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sysexits.h>
 #include <time.h>
 #include <unistd.h>
 #include <uuid.h>
-#include <stdlib.h>
 
 #include <assert.h>
 #include <objsnap.h>
 #include <objsnap_ioctl.h>
 #include <rdtsc.h>
 
-const char *disk = "/dev/nvd0";
+const char *disk;
 uint64_t clock_cycles;
 
 int newfs(const char *path)
@@ -319,8 +319,16 @@ threadedTest(int numthreads, int num_objs,
 }
 
 
-int main()
+int
+main(int argc, char *argv[])
 {
+	if (argc != 2) {
+		printf("Usage: new_objsnap <disk>");
+		return (EX_USAGE);
+	}
+
+	disk = argv[1];
+
 	clock_cycles = get_clock_speed_sleep();
 
 	//basicTest();
@@ -353,4 +361,6 @@ int main()
 	}
 
 	printstats(clock_cycles);
+
+	return (EX_OK);
 }
