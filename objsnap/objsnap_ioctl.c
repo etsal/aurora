@@ -592,7 +592,10 @@ objsnap_osdata_init_syncer(void)
 	if (error != 0) {
 		printf("Syncer could not start");
 		cv_destroy(&osdata.os_syncer_cv);
+		bzero(&osdata.os_syncer_cv, sizeof(osdata.os_syncer_cv));
+
 		mtx_destroy(&osdata.os_syncer_lk);
+		bzero(&osdata.os_syncer_lk, sizeof(osdata.os_syncer_lk));
 	}
 
 	return (error);
@@ -611,6 +614,12 @@ objsnap_osdata_fini_syncer(void)
 			C_HARDCLOCK);
 		mtx_unlock(&osdata.os_syncer_lk);
 	}
+
+	mtx_destroy(osdata.os_syncer_lk);
+	bzero(&osdata.os_syncer_lk, sizeof(osdata.os_syncer_lk));
+
+	cv_destroy(osdata.os_syncer_cv);
+	bzero(&osdata.os_syncer_cv, sizeof(osdata.os_syncer_cv));
 }
 
 static int
