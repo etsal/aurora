@@ -629,9 +629,6 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 			return (error);
 		}
 
-		osdata.os_vp = NULL;
-
-		bzero(osdata.os_stats, sizeof(struct cycletimer) * OS_STAT_MAX);
 		bzero(threadsets, sizeof(struct dirtyset) * MAXTHREADS);
 
 		// TODO: FOR NOW JUST SET TO ZERO, During recovery we
