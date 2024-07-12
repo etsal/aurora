@@ -50,7 +50,6 @@ static uint64_t global_txnid;
 
 super_t superblock;
 struct objsnap_vnode *vnode_cache = NULL;
-int pbufcnt = -1;
 static struct dirtyset threadsets[MAXTHREADS];
 
 struct checkpoint_data {
