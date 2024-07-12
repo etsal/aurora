@@ -576,6 +576,41 @@ objsnap_vncache_fini(void)
 }
 
 static int
+objsnap_osdata_init_syncer(void)
+{
+	int error;
+
+	cv_init(&osdata.os_syncer_cv, "Objsnap Syncer CV");
+	mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
+
+	error = kthread_add((void (*)(void *))objsnap_wal_syncer, &osdata, NULL,
+		&osdata.os_syncertd, 0, 0, "objsnap wal syncer");
+
+	if (error != 0) {
+		printf("Syncer could not start");
+		cv_destroy(&osdata.os_syncer_cv);
+		mtx_destroy(&osdata.os_syncer_lk);
+	}
+
+	return (error);
+}
+
+static void
+objsnap_osdata_fini_syncer(void)
+{
+	osdata.os_syncer_exit = 1;
+	objsnap_wakeup_syncer();
+
+	while(osdata.os_syncer_exit != -1) {
+		mtx_lock(&osdata.os_syncer_lk);
+		msleep_sbt(&osdata.os_syncer_wakeup, &osdata.os_syncer_lk,
+			PRIBIO, "Sync-exit-wait", SBT_1MS, 0,
+			C_HARDCLOCK);
+		mtx_unlock(&osdata.os_syncer_lk);
+	}
+}
+
+static int
 objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 {
 	int error = 0;
@@ -608,19 +643,9 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
 			taskqueue_thread_enqueue, &osdata.os_tq);
 
-		// Syncer State
-		cv_init(&osdata.os_syncer_cv, "Objsnap Syncer CV");
-		mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
-		osdata.os_syncer_wakeup = 0;
-		osdata.os_syncer_exit = 0;
 
-		error = kthread_add((void (*)(void *))objsnap_wal_syncer, &osdata, NULL,
-			&osdata.os_syncertd, 0, 0, "objsnap wal syncer");
-
-		if (error) {
-			panic("Syncer could not start");
-		}
-
+		/* XXXETSAL Handle errors during syncer initialization. */
+		objsnap_osdata_init_syncer();
 
 		taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
 
@@ -665,17 +690,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 			}
 		}
 
-		osdata.os_syncer_exit = 1;
-		objsnap_wakeup_syncer();
-
-		while(osdata.os_syncer_exit != -1) {
-			mtx_lock(&osdata.os_syncer_lk);
-			msleep_sbt(&osdata.os_syncer_wakeup, &osdata.os_syncer_lk,
-				PRIBIO, "Sync-exit-wait", SBT_1MS, 0,
-				C_HARDCLOCK);
-			mtx_unlock(&osdata.os_syncer_lk);
-		}
-		
+		objsnap_osdata_fini_syncer();
 
 		taskqueue_quiesce(osdata.os_tq);
 		taskqueue_free(osdata.os_tq);
