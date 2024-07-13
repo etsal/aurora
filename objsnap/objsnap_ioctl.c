@@ -97,8 +97,7 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 	struct uio uio;
 	int pagecnt = set->cp_d->d_cnt;
 	diskptr_t ptr = set->ptr;
-
-	struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
+	struct iovec aiov[MAXDRTYCNT];
 
 	struct buf *bp = getblk(osdata.os_vp, 
 		DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE * pagecnt, 
@@ -127,8 +126,6 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 	OS_START(DATAWRITE, &before);
 	bbarrierwrite(bp);
 	OS_STOP(DATAWRITE, &before);
-
-	free(aiov, M_OBJSNAP);
 }
 
 static int
