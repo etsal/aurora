@@ -125,7 +125,7 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 	OS_STOP(VNFAULTMOVE, &before);
 
 	OS_START(DATAWRITE, &before);
-	bwrite(bp);
+	bbarrierwrite(bp);
 	OS_STOP(DATAWRITE, &before);
 
 	free(aiov, M_OBJSNAP);
@@ -294,7 +294,6 @@ objsnap_init(struct objsnap_init_args *args)
 
 	int error = 0;
 	char *path = args->path;
-
 
 	// Take path and convert to a device vnode.
 	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, path, curthread);
