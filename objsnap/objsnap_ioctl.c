@@ -50,7 +50,6 @@ static uint64_t global_txnid;
 
 super_t superblock;
 struct objsnap_vnode *vnode_cache = NULL;
-int pbufcnt = -1;
 static struct dirtyset threadsets[MAXTHREADS];
 
 struct checkpoint_data {
@@ -545,7 +544,144 @@ objsnap_wal_syncer(void *ctx)
 	kthread_exit();
 }
 
+static void
+objsnap_vncache_init(void)
+{
+	struct objsnap_vnode *vn;
+	int i;
 
+	vnode_cache = malloc(sizeof(*vnode_cache) * MAXINODES, M_OBJSNAP,
+		M_WAITOK | M_ZERO);
+
+	for (i = 0; i < MAXINODES; i++) {
+		vn = &vnode_cache[i];
+
+		lockinit(&vn->v_lock, 0, "objsnap node lock", 0, 0);
+		lockinit(&vn->v_commit_lock, 0, "objsnap commit lock", 0, 0);
+	}
+}
+
+
+static void
+objsnap_vncache_fini(void)
+{
+	struct objsnap_vnode *vn;
+	int i;
+
+	if (vnode_cache == NULL)
+		return;
+
+	for (i = 0; i < MAXINODES; i++) {
+		vn = &vnode_cache[i];
+
+		lockdestroy(&vn->v_lock);
+		lockdestroy(&vn->v_commit_lock);
+	}
+
+	free(vnode_cache, M_OBJSNAP);
+}
+
+static int
+objsnap_osdata_init_syncer(void)
+{
+	int error;
+
+	mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
+
+	error = kthread_add((void (*)(void *))objsnap_wal_syncer, &osdata, NULL,
+		&osdata.os_syncertd, 0, 0, "objsnap wal syncer");
+
+	if (error != 0) {
+		printf("Syncer could not start");
+
+		mtx_destroy(&osdata.os_syncer_lk);
+		bzero(&osdata.os_syncer_lk, sizeof(osdata.os_syncer_lk));
+	}
+
+	return (error);
+}
+
+static void
+objsnap_osdata_fini_syncer(void)
+{
+	osdata.os_syncer_exit = OBJSYNC_EXITING;
+	objsnap_syncer_trigger_exit();
+	objsnap_syncer_wait_exit();
+
+	mtx_destroy(&osdata.os_syncer_lk);
+	bzero(&osdata.os_syncer_lk, sizeof(osdata.os_syncer_lk));
+}
+
+static int
+objsnap_osdata_init(void)
+{
+	int error;
+	bzero(&osdata, sizeof(osdata));
+
+	osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
+		taskqueue_thread_enqueue, &osdata.os_tq);
+
+	taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
+
+	/* XXXETSAL Handle errors during syncer initialization. */
+	objsnap_osdata_init_syncer();
+
+	/* Make the SLS available to userspace. */
+	error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
+		&osdata.os_cdev, &objsnap_cdevsw, 0, UID_ROOT, GID_WHEEL, 
+		0666, "objsnap");
+
+	return (error);
+}
+
+static void
+objsnap_osdata_fini(void)
+{
+	struct objsnap_vnode *vnode;
+	int i;
+
+	if (osdata.os_cdev != NULL) {
+		destroy_dev(osdata.os_cdev);
+
+		osdata.os_cdev = NULL;
+		printf("Destroying device\n");
+	}
+
+	if (osdata.os_consumer != NULL) {
+		g_topology_lock();
+		g_vfs_close(osdata.os_consumer);
+		g_topology_unlock();
+
+		osdata.os_consumer = NULL;
+		printf("Destroying consumer\n");
+	}
+
+	if (osdata.os_vp != NULL) {
+		vrele(osdata.os_vp);
+
+		osdata.os_vp = NULL;
+		printf("Destroying device vnode\n");
+	}
+
+	for (i = 0; i < MAXINODES; i ++) {
+		vnode = &vnode_cache[i];
+		if (vnode->v_tree.v_tree != NULL) {
+			btree_destroy(vnode->v_tree.v_tree);
+			vnode->v_tree.v_tree = NULL;
+			
+		}
+
+		if (vnode->v_inode != NULL) {
+			free(vnode->v_inode, M_OBJSNAP);
+		}
+	}
+
+	objsnap_osdata_fini_syncer();
+
+	taskqueue_quiesce(osdata.os_tq);
+	taskqueue_free(osdata.os_tq);
+	osdata.os_tq = NULL;
+}
 
 static int
 objsnapHandler(struct module *inModule, int inEvent, void *inArg)
@@ -555,110 +691,23 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 
-		bzero(&osdata, sizeof(osdata));
-		bzero(&alloc, sizeof(struct allocator));
-
-		/* Make the SLS available to userspace. */
-		error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
-			&osdata.os_cdev, &objsnap_cdevsw, 0, UID_ROOT, GID_WHEEL, 
-			0666, "objsnap");
-
-		if (error) {
-			return (error);
-		}
-
-		osdata.os_vp = NULL;
-
-		vnode_cache = malloc(sizeof(struct objsnap_vnode) * MAXINODES,
-			M_OBJSNAP, M_WAITOK);
-
-		bzero(vnode_cache, sizeof(struct objsnap_vnode) * MAXINODES);
-
-		bzero(osdata.os_stats, sizeof(struct cycletimer) * OS_STAT_MAX);
 		bzero(threadsets, sizeof(struct dirtyset) * MAXTHREADS);
 
 		// TODO: FOR NOW JUST SET TO ZERO, During recovery we
 		// have to see the latest txn id
 		global_txnid = 0;
 
-		// Initialize Locks
-		for (int i = 0; i < MAXINODES; i++) {
-			lockinit(&vnode_cache[i].v_lock, 0, "objsnap node lock", 
-				0, 0);
-			lockinit(&vnode_cache[i].v_commit_lock, 0, "objsnap commit lock", 
-				0, 0);
-			
-		}
+		objsnap_vncache_init();
 
-		osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
-			taskqueue_thread_enqueue, &osdata.os_tq);
-
-		// Syncer State
-		mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
-		osdata.os_syncer_exit = OBJSYNC_RUNNING;
-
-		error = kthread_add((void (*)(void *))objsnap_wal_syncer, &osdata, NULL,
-			&osdata.os_syncertd, 0, 0, "objsnap wal syncer");
-
-		if (error) {
-			panic("Syncer could not start");
-		}
-
-
-		taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
-		objsnap_sysctl_init();
+		error = objsnap_osdata_init();
+		if (error != 0)
+			return (error);
 
 		break;
 	case MOD_UNLOAD:
-		if (osdata.os_consumer != NULL) {
-			g_topology_lock();
+		objsnap_osdata_fini();
 
-			g_vfs_close(osdata.os_consumer);
-
-			g_topology_unlock();
-
-			osdata.os_consumer = NULL;
-			printf("Destroying consumer\n");
-		}
-
-		if (osdata.os_vp != NULL) {
-
-			vrele(osdata.os_vp);
-
-			osdata.os_vp = NULL;
-			printf("Destroying device vnode\n");
-		}
-
-		if (osdata.os_cdev != NULL) {
-			destroy_dev(osdata.os_cdev);
-
-			osdata.os_cdev = NULL;
-			printf("Destroying device\n");
-		}
-
-		objsnap_sysctl_fini();
-
-		for (int i = 0; i < MAXINODES; i ++) {
-			struct objsnap_vnode *vnode = &vnode_cache[i];
-			if (vnode->v_tree.v_tree != NULL) {
-				btree_destroy(vnode->v_tree.v_tree);
-				vnode->v_tree.v_tree = NULL;
-				
-			}
-
-			if (vnode->v_inode != NULL) {
-				free(vnode->v_inode, M_OBJSNAP);
-			}
-		}
-
-		objsnap_syncer_trigger_exit();
-		objsnap_syncer_wait_exit();
-
-		taskqueue_quiesce(osdata.os_tq);
-		taskqueue_free(osdata.os_tq);
-		osdata.os_tq = NULL;
-
-		free(vnode_cache, M_OBJSNAP);
+		objsnap_vncache_fini();
 
 		allocator_destroy();
 

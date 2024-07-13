@@ -39,10 +39,10 @@
 #define OS_STAT_DEFINE(name, num) \
 	static int OS_STAT_##name = num; \
 	static char *OS_STAT_NAME_##name = #name; \
-	static struct cycletimer *OS_STAT_GET_##name(void) { \
+	static inline struct cycletimer *OS_STAT_GET_##name(void) { \
 		return &osdata.os_stats[OS_STAT_##name]; \
 	} \
-	static __attribute__((always_inline)) __inline__ struct timerstat OS_TOSTAT_##name() { \
+	static inline __attribute__((always_inline)) struct timerstat OS_TOSTAT_##name() { \
 		return ctstat(#name, OS_STAT_GET_##name()); \
 	}
 

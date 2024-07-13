@@ -20,23 +20,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sysexits.h>
 #include <time.h>
 #include <unistd.h>
 #include <uuid.h>
-#include <stdlib.h>
 
 #include <assert.h>
 #include <objsnap.h>
 #include <objsnap_ioctl.h>
 #include <rdtsc.h>
 
-const char *DISK;
-
+const char *disk;
 uint64_t clock_cycles;
 
 int newfs(const char *path)
 {
-    int status;
+	int status;
 	struct stat st;
 	int fd;
 	uint32_t bsize = 0;
@@ -106,50 +105,50 @@ int newfs(const char *path)
 
 
 	printf("creating super blocks\n");
-    super_t *sb = (super_t *)malloc(BLOCKSIZE);
+    	super_t *sb = (super_t *)malloc(BLOCKSIZE);
 	memset(sb, 0, ssize);
 	sb->super_ssize = ssize;
 	sb->super_bsize = 512;
 	sb->super_size = size / BLOCKSIZE;
 	sb->super_asize = bsize;
-    sb->super_max_inodes = MAXINODES;
-    sb->super_next = 1;
-    sb->super_version = 0;
-    sb->super_blk = 0;
+	sb->super_max_inodes = MAXINODES;
+	sb->super_next = 1;
+	sb->super_version = 0;
+	sb->super_blk = 0;
 
-    ssize_t written = write(fd, sb, BLOCKSIZE);
-    if (written == (-1)) {
-        perror("writing superblock failed");
-        free(sb);
-        return (1);
-    }
+	ssize_t written = write(fd, sb, BLOCKSIZE);
+	if (written == (-1)) {
+		perror("writing superblock failed");
+		free(sb);
+		return (1);
+	}
 
-    // Increment to cover the sister super block.
-    sb->super_blk = 1;
+	// Increment to cover the sister super block.
+	sb->super_blk = 1;
 
-    written = write(fd, sb, BLOCKSIZE);
-    if (written == (-1)) {
-        perror("writing second superblock failed");
-        free(sb);
-        return (1);
-    }
+	written = write(fd, sb, BLOCKSIZE);
+	if (written == (-1)) {
+		perror("writing second superblock failed");
+		free(sb);
+		return (1);
+	}
 
 	free(sb);
-    close(fd);
+	close(fd);
 
 	return (0);
 }
 
 int 
-setup()
+setup(const char *disk)
 {
- 	int error = newfs(DISK);
+ 	int error = newfs(disk);
 	if (error) {
 		printf("Problem creating new objsnap device");
 		return error;
 	}
 
-	error = objsnap_init(DISK);
+	error = objsnap_init(disk);
 	if (error) {
 		printf("Error with objsnap init\n");
 		return error;
@@ -170,10 +169,10 @@ setup_map(struct mapping *map, size_t size_in_blocks)
 	map->inode = objsnap_create();
 	map->map = (char *)mmap(NULL, BLOCKSIZE * size_in_blocks, PROT_READ | PROT_WRITE, 
         MAP_ANON, -1, 0);
-    if (map->map == MAP_FAILED) {
-        printf("MMAP FAILED\n");
-        return -1;
-    }
+	if (map->map == MAP_FAILED) {
+		printf("MMAP FAILED\n");
+		return -1;
+	}
 
 	return (0);
 }
@@ -187,11 +186,11 @@ void
 basicTest()
 {
 	struct mapping map;
-	int error = 0;
-	if ((error = setup())) {
-        printf("Problem in Setup!");
+	int error = setup(disk);
+	if (error != 0) {
+		printf("Problem in Setup!");
 		return;
-    }
+	}
 
 	if ((error = setup_map(&map, 1024))) {
 		printf("Error in setting up mapping\n");
@@ -232,11 +231,11 @@ void
 random_write_load(int num_objs, int size_of_obj_in_blocks, 
 	int writes_per_iteration, int times, int tid)
 {
-	int error = 0;
-	if ((error = setup())) {
-        printf("Problem in Setup!");
+	int error = setup(disk);
+	if (error != 0) {
+		printf("Problem in Setup!");
 		return;
-    }
+	}
 
 	srand(time(NULL));
 
@@ -278,8 +277,8 @@ threadedTest(int numthreads, int num_objs,
 	int size_of_obj_in_blocks,
 	int writes_per_iteration, int times) {
 
-    // Vector to hold thread objects
-    std::vector<std::thread> threads;
+	// Vector to hold thread objects
+	std::vector<std::thread> threads;
 	uint64_t *avgs = (uint64_t *)malloc(sizeof(uint64_t)* numthreads);
 	int error = 0;
 
@@ -291,24 +290,24 @@ threadedTest(int numthreads, int num_objs,
 	}
 
 
-    for (int i = 0; i < numthreads; ++i) {
-        // Using a lambda function for the thread's task
-        threads.emplace_back([avgs, maps, num_objs, 
-			size_of_obj_in_blocks, writes_per_iteration, times, i](){
+	for (int i = 0; i < numthreads; ++i) {
+		// Using a lambda function for the thread's task
+		threads.emplace_back([avgs, maps, num_objs, 
+				size_of_obj_in_blocks, writes_per_iteration, times, i](){
 
-			uint64_t avg =  random_write_task(maps, num_objs, 
-				size_of_obj_in_blocks,
-				writes_per_iteration, 
-				times, i);
-			avgs[i] = avg;
+				uint64_t avg =  random_write_task(maps, num_objs, 
+					size_of_obj_in_blocks,
+					writes_per_iteration, 
+					times, i);
+				avgs[i] = avg;
 
-        });
-    }
+		});
+	}
 
-    // Join all threads to wait for them to finish
-    for (auto& thread : threads) {
-        thread.join();
-    }
+	// Join all threads to wait for them to finish
+	for (auto& thread : threads) {
+		thread.join();
+	}
 
 	uint64_t sum_avg = 0;
 	for (int i = 0; i < numthreads; i++) {
@@ -320,19 +319,21 @@ threadedTest(int numthreads, int num_objs,
 }
 
 
-int main(int argc, char *argv[])
+int
+main(int argc, char *argv[])
 {
-	int error = 0;
+	if (argc != 2) {
+		printf("Usage: new_objsnap <disk>");
+		return (EX_USAGE);
+	}
+
+	disk = argv[1];
 
 	clock_cycles = get_clock_speed_sleep();
 
-	if (argc != 2) {
-		fprintf(stderr, "Usage: ./new_objsnap <DISK>\n");
-		return (-1);
-	}
-	DISK = argv[1];
+	//basicTest();
 
-	error = setup();
+	int error = setup(disk);
 	if (error != 0) {
         	printf("Problem in Setup!");
 		return (-1);
@@ -360,4 +361,6 @@ int main(int argc, char *argv[])
 	}
 
 	printstats(clock_cycles);
+
+	return (EX_OK);
 }

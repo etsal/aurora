@@ -41,7 +41,7 @@
 /*
  * Read System Clock
  */
-static __attribute__((always_inline)) __inline__ uint64_t
+static inline __attribute__((always_inline)) uint64_t
 rdtsc_cycles(void)
 {
 #if defined(_i386_)
@@ -62,7 +62,7 @@ rdtsc_cycles(void)
  * Prevents out-of-order execution, this can be done with CPUID instruction as
  * well but at a much higher cost for the instruction itself
  */
-static __attribute__((always_inline)) __inline__ uint64_t
+static inline __attribute__((always_inline)) uint64_t
 rdtscp_cycles()
 {
 #if defined(_i386_)
@@ -78,7 +78,7 @@ rdtscp_cycles()
   return ret;
 }
 
-static __attribute__((always_inline)) __inline__ double
+static inline __attribute__((always_inline)) double
 rdtsc_average()
 {
   uint64_t iterations = 10000000;
@@ -93,7 +93,7 @@ rdtsc_average()
   return cost / iterations;
 }
 
-static __attribute__((always_inline)) __inline__ double
+static inline __attribute__((always_inline)) double
 rdtscp_average()
 {
   uint64_t iterations = 10000000;
@@ -144,12 +144,12 @@ struct timerstat {
   uint64_t sum;
 };
 
-static __attribute__((always_inline)) __inline__ void 
+static inline __attribute__((always_inline)) void 
 ctstart(struct cycletimer *ct, uint64_t *b) {
   *b = rdtscp();
 }
 
-static __attribute__((always_inline)) __inline__ void 
+static inline __attribute__((always_inline)) void 
 ctstop(struct cycletimer *ct, uint64_t *before) {
 #ifdef _KERNEL
   atomic_fetchadd_64(&ct->ct_sum, rdtscp() - *before);
@@ -157,14 +157,14 @@ ctstop(struct cycletimer *ct, uint64_t *before) {
 #endif
 }
 
-static __attribute__((always_inline)) __inline__ void 
+static inline __attribute__((always_inline)) void 
 ctreset(struct cycletimer *ct) {
   ct->ct_sum = 0;
   ct->ct_cnt = 0;
   ct->ct_before = 0;
 }
 
-static __attribute__((always_inline)) __inline__ struct timerstat
+static inline __attribute__((always_inline)) struct timerstat
 ctstat(char *name, struct cycletimer *ct) {
   struct timerstat st;
   if (ct->ct_cnt) {

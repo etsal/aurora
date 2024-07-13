@@ -1,5 +1,5 @@
 PROG= new_objsnap
-SRCS= objsnap.cc
+SRCS= new_objsnap.cc
 MAN=
 
 LDADD = -losnap -lpthread

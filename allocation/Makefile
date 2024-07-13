@@ -1,7 +1,7 @@
 CXXFLAGS = -Wall -Wextra -std=c++17 -g
 LDFLAGS = -lpthread
 
-SRCS = main.cc binaryalloc.cc chunkalloc.cc
+SRCS = main.cc binaryalloc.cc chunkalloc.cc dueling.cc
 OBJS = $(SRCS:.cc=.o)
 MAIN = main
 
