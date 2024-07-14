@@ -166,13 +166,18 @@ struct mapping {
 int
 setup_map(struct mapping *map, size_t size_in_blocks)
 {
+	size_t size = BLOCKSIZE * size_in_blocks;
+	int i;
+
 	map->inode = objsnap_create();
-	map->map = (char *)mmap(NULL, BLOCKSIZE * size_in_blocks, PROT_READ | PROT_WRITE, 
+	map->map = (char *)mmap(NULL, size, PROT_READ | PROT_WRITE, 
         MAP_ANON, -1, 0);
 	if (map->map == MAP_FAILED) {
 		printf("MMAP FAILED\n");
 		return -1;
 	}
+
+	memset(map->map, 0xa5, size);
 
 	return (0);
 }
@@ -351,7 +356,7 @@ main(int argc, char *argv[])
 		numthreads, BLOCKSIZE, totaldirtyset, numCheckpoints, numobjs);
 	for (int i = 1; i < numthreads + 1; i++) {
 		uint64_t before = rdtscp();	
-		uint64_t avglat = threadedTest(i, numobjs, 1 * GiB, 
+		uint64_t avglat = threadedTest(i, numobjs, 128 * MiB, 
 			numblocks_per_obj_per_ckpt, numCheckpoints);
 		uint64_t after = rdtscp();
 		double change = after - before;
