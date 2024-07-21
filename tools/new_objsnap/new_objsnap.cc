@@ -217,11 +217,10 @@ random_write_task(struct mapping *maps,
 	uint64_t cnt = 0;
 	uint64_t sum = 0;
 	for (int times_i = 0; times_i < times; times_i++) {
-		for (int obj_i = 0; obj_i < num_objs; obj_i++ ) {
-			for (int writes_i = 0; writes_i < writes_per_iteration; writes_i++) {
-				int rand_offset = rand() % size_of_obj_in_blocks;
-				dirty_map(&maps[obj_i], tid, rand_offset);
-			}
+		for (int w = 0; w < writes_per_iteration; w++) {
+			int obj_i = rand() % num_objs;
+			int rand_offset = rand() % size_of_obj_in_blocks;
+			dirty_map(&maps[obj_i], tid, rand_offset);
 		}
 		uint64_t before = rdtscp();	
 		objsnap_checkpoint(tid);
@@ -344,26 +343,24 @@ main(int argc, char *argv[])
 		return (-1);
     	}
 
-	int totaldirtyset = 16;
-	int numCheckpoints = 5000;
-	int numthreads = 4;
-	int numobjs = 8;
+	int totaldirtyset = 1;
+	int numCheckpoints = 100000;
+	int numthreads = 1;
+	int numobjs = 1;
 	
 	int numblocks_per_obj_per_ckpt = totaldirtyset / numobjs;
 	int MiB = (1024 * 1024) / BLOCKSIZE;
 	int GiB = (1024 * MiB);
 	printf("Threads(%d), Blocksize (%lu), Total Dirty Set in Blocks (%d), Checkpoints per thread(%d), Number of objects(%d)\n",
 		numthreads, BLOCKSIZE, totaldirtyset, numCheckpoints, numobjs);
-	for (int i = 1; i < numthreads + 1; i++) {
-		uint64_t before = rdtscp();	
-		uint64_t avglat = threadedTest(i, numobjs, 128 * MiB, 
-			numblocks_per_obj_per_ckpt, numCheckpoints);
-		uint64_t after = rdtscp();
-		double change = after - before;
-		change = cycles_to_s(change, clock_cycles);
-		printf("[%d] Ckpts/s(%f), latency(%lu), total(%d), seconds(%f)\n", 
-			i, (numCheckpoints * i) / change, avglat, (numCheckpoints * i), change);
-	}
+	uint64_t before = rdtscp();	
+	uint64_t avglat = threadedTest(numthreads, numobjs, 1 * GiB, 
+		numblocks_per_obj_per_ckpt, numCheckpoints);
+	uint64_t after = rdtscp();
+	double change = after - before;
+	change = cycles_to_s(change, clock_cycles);
+	printf("[%d] Ckpts/s(%f), latency(%lu), total(%d), seconds(%f)\n", 
+		numthreads, (numCheckpoints * numthreads) / change, avglat, (numCheckpoints * numthreads), change);
 
 	printstats(clock_cycles);
 
