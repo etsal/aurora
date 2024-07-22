@@ -344,7 +344,7 @@ main(int argc, char *argv[])
     	}
 
 	int totaldirtyset = atoi(argv[3]);
-	int numCheckpoints = 250000;
+	int numCheckpoints = 150000;
 	int numthreads = atoi(argv[2]);
 	int numobjs = 2;
 	

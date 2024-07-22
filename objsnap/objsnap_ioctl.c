@@ -116,40 +116,44 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 {
 	uint64_t before;
 	struct uio uio;
-	int pagecnt = set->cp_d->d_cnt;
 	diskptr_t ptr = set->ptr;
 	OS_START(VNFAULTMOVE, &before);
+	int left = set->cp_d->d_cnt;	
+	int i = 0;
+	while (left) {
+		int pagecnt = left > 16 ? 16 : left;
+		struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
 
-	struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
+		struct buf *bp = getblk(osdata.os_vp, 
+			DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE * pagecnt, 
+			0, 0, GB_UNMAPPED);
 
-	struct buf *bp = getblk(osdata.os_vp, 
-		DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE * pagecnt, 
-		0, 0, GB_UNMAPPED);
+		for (int t = 0; t < pagecnt; t++) {
+			struct pageset *pinfo = &set->cp_d->d_pg[i + t];
+			aiov[t].iov_base = (void *)(uintptr_t)(pinfo->offset);
+			aiov[t].iov_len = BLOCKSIZE;
+		}
+		i += pagecnt;
 
-	for (int t = 0; t < pagecnt; t++) {
-		struct pageset *pinfo = &set->cp_d->d_pg[t];
-		aiov[t].iov_base = (void *)(uintptr_t)(pinfo->offset);
-		aiov[t].iov_len = BLOCKSIZE;
+		uio.uio_iov = aiov;
+		uio.uio_iovcnt = pagecnt;
+		uio.uio_resid = BLOCKSIZE * pagecnt;
+		uio.uio_segflg = UIO_USERSPACE;
+		uio.uio_rw = UIO_WRITE;
+		uio.uio_td = curthread;
+		uio.uio_offset = 0;
+
+		vn_io_fault_pgmove(bp->b_pages, 
+			0, (int)BLOCKSIZE * pagecnt, 
+			&uio);
+		OS_STOP(VNFAULTMOVE, &before);
+
+		OS_START(DATAWRITE, &before);
+		bawrite(bp);
+		OS_STOP(DATAWRITE, &before);
+		free(aiov, M_OBJSNAP);
+		left -= pagecnt;
 	}
-
-	uio.uio_iov = aiov;
-	uio.uio_iovcnt = pagecnt;
-	uio.uio_resid = BLOCKSIZE * pagecnt;
-	uio.uio_segflg = UIO_USERSPACE;
-	uio.uio_rw = UIO_WRITE;
-	uio.uio_td = curthread;
-	uio.uio_offset = 0;
-
-	vn_io_fault_pgmove(bp->b_pages, 
-		0, (int)BLOCKSIZE * pagecnt, 
-		&uio);
-	OS_STOP(VNFAULTMOVE, &before);
-
-	OS_START(DATAWRITE, &before);
-	bwrite(bp);
-	OS_STOP(DATAWRITE, &before);
-
-	free(aiov, M_OBJSNAP);
 }
 
 static int
@@ -219,7 +223,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	for (int i = tid + 1; i < MAXTHREADS; i++) {
 		struct dirtyset *set = &threadsets[i];
 		// We cant have more the a 64KiB write combined chunk
-		if ((total_size + set->d_cnt) > 15) {
+		if ((total_size + set->d_cnt) > 32) {
 			continue;
 		}
 
@@ -229,7 +233,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 			total_size += set->d_cnt;
 		}
 
-		if (total_size >= 15) {
+		if (total_size >= 32) {
 			break;
 		}
 	}
