@@ -326,8 +326,8 @@ threadedTest(int numthreads, int num_objs,
 int
 main(int argc, char *argv[])
 {
-	if (argc != 2) {
-		printf("Usage: new_objsnap <disk>");
+	if (argc != 4) {
+		printf("Usage: new_objsnap <disk> <threads> <dirty_set_size>");
 		return (EX_USAGE);
 	}
 
@@ -343,12 +343,12 @@ main(int argc, char *argv[])
 		return (-1);
     	}
 
-	int totaldirtyset = 1;
-	int numCheckpoints = 100000;
-	int numthreads = 1;
-	int numobjs = 1;
+	int totaldirtyset = atoi(argv[3]);
+	int numCheckpoints = 250000;
+	int numthreads = atoi(argv[2]);
+	int numobjs = 2;
 	
-	int numblocks_per_obj_per_ckpt = totaldirtyset / numobjs;
+	int numblocks_per_obj_per_ckpt = totaldirtyset;
 	int MiB = (1024 * 1024) / BLOCKSIZE;
 	int GiB = (1024 * MiB);
 	printf("Threads(%d), Blocksize (%lu), Total Dirty Set in Blocks (%d), Checkpoints per thread(%d), Number of objects(%d)\n",

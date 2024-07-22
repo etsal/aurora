@@ -46,8 +46,8 @@
 		return ctstat(#name, OS_STAT_GET_##name()); \
 	}
 
-#define OS_START(name, before) ctstart(OS_STAT_GET_##name(), before)
-#define OS_STOP(name, before) ctstop(OS_STAT_GET_##name(), before)
+#define OS_START(name, before) do { ctstart(OS_STAT_GET_##name(), before); } while(0)
+#define OS_STOP(name, before) do {ctstop(OS_STAT_GET_##name(), before); } while(0)
 
 enum objsync_state {
 	OBJSYNC_RUNNING,

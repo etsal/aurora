@@ -43,6 +43,13 @@
 #include "alloc.h"
 #include "btree.h"
 
+#define MSG_NONE (0x0UL)
+#define MSG_CHECKPOINT (0x1UL)
+#define MSG_CHECKPOINTING (0x2UL)
+#define MSG_DONE (0x3UL)
+#define MSG_FORCED (0xFUL)
+#define MSG_MASK (0x3UL)
+
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
 
 struct objsnap_metadata osdata;
@@ -57,8 +64,22 @@ struct checkpoint_data {
 	diskptr_t ptr;
 };
 
+static uint64_t global_msgs[MAXTHREADS];
+
 static uint64_t get_txn_id() {
 	return atomic_fetchadd_64(&global_txnid, 1);
+}
+
+static uint64_t 
+get_msg(int tid) {
+	return atomic_load_64(&global_msgs[tid]);
+}
+
+static int
+set_msg(int tid, uint64_t msg, uint64_t expected)
+{
+	uint64_t *dst = &global_msgs[tid];
+	return atomic_fcmpset_64(dst, &expected, msg);
 }
 
 static void
@@ -67,7 +88,7 @@ objsnap_syncer_trigger_exit(void)
 	osdata.os_syncer_exit = OBJSYNC_EXITING;
 	wakeup(&osdata);
 }
-
+	
 static void
 objsnap_syncer_wait_exit(void)
 {
@@ -97,6 +118,7 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 	struct uio uio;
 	int pagecnt = set->cp_d->d_cnt;
 	diskptr_t ptr = set->ptr;
+	OS_START(VNFAULTMOVE, &before);
 
 	struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
 
@@ -117,7 +139,6 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 	uio.uio_rw = UIO_WRITE;
 	uio.uio_td = curthread;
 	uio.uio_offset = 0;
-	OS_START(VNFAULTMOVE, &before);
 
 	vn_io_fault_pgmove(bp->b_pages, 
 		0, (int)BLOCKSIZE * pagecnt, 
@@ -152,37 +173,123 @@ static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
 	uint64_t before;
-	OS_START(CHECKPOINT, &before);
-	struct dirtyset *set = &threadsets[args->tid];
-	struct threadcheckpoint tckpt;
-	struct checkpoint_data data;
+	uint64_t checkpoint;
+	OS_START(LOCKANDCOPY, &before);
+	int tid = args->tid;
+	int max_wait = 5000;
 
-	tckpt.tckpt_cnt = set->d_cnt;
-	tckpt.tckpt_txnid = get_txn_id();
-
-	diskptr_t ptr = allocate_block(set->d_cnt);
-	diskptr_t threadblock = allocate_threadwal();
-	for (int i = 0; i < set->d_cnt; i++) {
-		tckpt.tckpt_ptrs[i].w_inode = set->d_pg[i].inode;
-		tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(set->d_pg[i].offset);
-		tckpt.tckpt_ptrs[i].ptr.offset = ptr.offset + i;
-		tckpt.tckpt_ptrs[i].ptr.size = 1;
+	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
+	if (!success) {
+		printf("Checkpoint state for tid %d should be zero, but isnt\n", tid);
+		set_msg(tid, MSG_CHECKPOINT, MSG_FORCED);
 	}
+	OS_START(CHECKPOINT, &checkpoint);
+
+	int times = 0;	
+	while ((get_msg(tid) == MSG_CHECKPOINT) && times < 5) {
+		pause_sbt("combiner wait", 1 * SBT_1US, 0, 0);
+		times++;
+	}
+
+	success = set_msg(tid, MSG_CHECKPOINTING, MSG_CHECKPOINT);
+	if (!success) {
+		// Someone is checkpointing me.
+		times = 0;
+		while ((get_msg(tid) != MSG_DONE) && times < max_wait) {
+			pause_sbt("combiner wait", 1 * SBT_1US, 0, 0);
+			times++;
+		}
+
+		success = set_msg(tid, MSG_NONE, MSG_DONE);
+		if (!success) {
+			printf("What the hell!\n");
+		}
+		OS_STOP(LOCKANDCOPY, &before);
+			
+		return;
+	}
+
+	// We need to see if we can try to combine or wait on combine
+	uint64_t unlock;	
+	OS_START(UNLOCK, &unlock);
+	int mytids[MAXTHREADS];
+	size_t size_tids = 0;
+	mytids[size_tids++] = tid;
+	int total_size = threadsets[tid].d_cnt;
+	for (int i = tid + 1; i < MAXTHREADS; i++) {
+		struct dirtyset *set = &threadsets[i];
+		// We cant have more the a 64KiB write combined chunk
+		if ((total_size + set->d_cnt) > 15) {
+			continue;
+		}
+
+		success = set_msg(i, MSG_CHECKPOINTING, MSG_CHECKPOINT);
+		if (success) {
+			mytids[size_tids++] = i;
+			total_size += set->d_cnt;
+		}
+
+		if (total_size >= 15) {
+			break;
+		}
+	}
+
+	struct threadcheckpoint tckpt;
+	tckpt.tckpt_cnt = 0;
+	struct dirtyset combined_set;
+	combined_set.d_cnt = 0;
+	struct checkpoint_data data;
+	KASSERT(total_size <= 15, ("Total size too large"));
+
+	diskptr_t ptr = allocate_block(total_size);
+	for (int s = 0; s < size_tids; s++) {
+		int local_tid = mytids[s];
+		struct dirtyset *set = &threadsets[local_tid];
+		for (int t = 0; t < set->d_cnt; t++) {
+			int i = tckpt.tckpt_cnt + t;
+			tckpt.tckpt_ptrs[i].w_inode = set->d_pg[t].inode;
+			tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(set->d_pg[t].offset);
+			tckpt.tckpt_ptrs[i].ptr.offset = ptr.offset + t;
+			tckpt.tckpt_ptrs[i].ptr.size = 1;
+			combined_set.d_pg[i] = set->d_pg[t];
+		}
+
+		tckpt.tckpt_cnt += set->d_cnt;
+		combined_set.d_cnt += set->d_cnt;
+		set->d_cnt = 0;
+	}
+
+	tckpt.tckpt_txnid = get_txn_id();
+	KASSERT(total_size == combined_set.d_cnt, ("total size != combined_set"));
+	KASSERT(tckpt.tckpt_cnt == combined_set.d_cnt, ("tckpt cnt != combined_set cnt"));
+	diskptr_t threadblock = allocate_threadwal();
+
 	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock.offset), 
 		BLOCKSIZE, 0, 0, 0);
 
 	memcpy(bp->b_data, &tckpt, sizeof(struct threadcheckpoint));
 	bawrite(bp);
 
-
-	data.cp_d = set;
+	data.cp_d = &combined_set;
 	data.ptr = ptr;
 
 	objsnap_threadwal_flush(&data);
+	OS_STOP(UNLOCK, &unlock);
 
-	set->d_cnt = 0;
+	for (int s = 0; s < size_tids; s++) {
+		int local_tid = mytids[s];
+		success = set_msg(local_tid, MSG_DONE, MSG_CHECKPOINTING);
+		if (!success) {
+			printf("Msg should be checkpointing for %u (%lu), i am %d, but isnt\n", 
+					local_tid, get_msg(local_tid), tid);
+		}
+	}
 
-	OS_STOP(CHECKPOINT, &before);
+	success = set_msg(tid, MSG_NONE, MSG_DONE);
+	if (!success) {
+		printf("Uh oh!\n");
+	}
+	OS_STOP(CHECKPOINT, &checkpoint);
 
 	return;
 }
@@ -692,6 +799,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	case MOD_LOAD:
 
 		bzero(threadsets, sizeof(struct dirtyset) * MAXTHREADS);
+		bzero(global_msgs, sizeof(uint64_t) * MAXTHREADS);
 
 		// TODO: FOR NOW JUST SET TO ZERO, During recovery we
 		// have to see the latest txn id
