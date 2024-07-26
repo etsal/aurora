@@ -9,13 +9,28 @@ if [ -z $DISK ]; then
 	exit 1
 fi
 
+THREADS=""
+if [ -z $2 ]; then
+	THREADS="4"
+	echo "Thread number not specified, defaulting to $THREADS"
+else
+	THREADS="$2"
+fi
+
+DSS=""
+if [ -z $3 ]; then
+	DSS=$(( 256 * 64 ))
+	BYTES=$(( $DSS * 4096 ))
+	echo "Dirty set size not specified, defaulting to $DSS 4KiB blocks ($BYTES bytes)"
+else
+	DSS="$3"
+fi
 
 kldunload objsnap > /dev/null 2> /dev/null
-
-kldload objsnap/objsnap.ko
+kldload objsnap
 
 stat -x /dev/objsnap
 
-./tools/new_objsnap/new_objsnap $DISK $2 $3
+./tools/new_objsnap/new_objsnap /dev/$DISK $THREADS $DSS
 
 kldunload objsnap
