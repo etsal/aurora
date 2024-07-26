@@ -146,14 +146,15 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 		vn_io_fault_pgmove(bp->b_pages, 
 			0, (int)BLOCKSIZE * pagecnt, 
 			&uio);
-		OS_STOP(VNFAULTMOVE, &before);
 
 		OS_START(DATAWRITE, &before);
-		bawrite(bp);
+		bwrite(bp);
 		OS_STOP(DATAWRITE, &before);
 		free(aiov, M_OBJSNAP);
 		left -= pagecnt;
 	}
+
+	OS_STOP(VNFAULTMOVE, &before);
 }
 
 static int
@@ -272,10 +273,10 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		BLOCKSIZE, 0, 0, 0);
 
 	memcpy(bp->b_data, &tckpt, sizeof(struct threadcheckpoint));
-	bawrite(bp);
 
 	data.cp_d = &combined_set;
 	data.ptr = ptr;
+	bwrite(bp);
 
 	objsnap_threadwal_flush(&data);
 	OS_STOP(UNLOCK, &unlock);
@@ -288,6 +289,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 					local_tid, get_msg(local_tid), tid);
 		}
 	}
+
 
 	success = set_msg(tid, MSG_NONE, MSG_DONE);
 	if (!success) {
