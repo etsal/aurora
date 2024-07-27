@@ -11,7 +11,7 @@ fi
 
 THREADS=""
 if [ -z $2 ]; then
-	THREADS="32"
+	THREADS="12"
 	echo "Thread number not specified, defaulting to $THREADS"
 else
 	THREADS="$2"
