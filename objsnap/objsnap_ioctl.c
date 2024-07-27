@@ -148,7 +148,7 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 			&uio);
 
 		OS_START(DATAWRITE, &before);
-		bwrite(bp);
+		bawrite(bp);
 		OS_STOP(DATAWRITE, &before);
 		free(aiov, M_OBJSNAP);
 		left -= pagecnt;
@@ -276,7 +276,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	data.cp_d = &combined_set;
 	data.ptr = ptr;
-	bwrite(bp);
+	bawrite(bp);
 
 	objsnap_threadwal_flush(&data);
 	OS_STOP(UNLOCK, &unlock);
