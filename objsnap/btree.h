@@ -101,9 +101,8 @@ typedef struct btree
   size_t tr_vs;
   uint64_t tr_version;
   struct vnode *tr_vp;
-
-	struct arraylist tr_freeme;
-	struct arraylist tr_deadlist;
+  struct arraylist tr_freeme;
+  struct arraylist tr_deadlist;
 } btree;
 
 btree_t btree_create(void);

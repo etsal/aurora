@@ -16,6 +16,8 @@
 #include <sys/pctrie.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
+#include <sys/types.h>
+#include <sys/lock.h>
 #include <sys/rwlock.h>
 #include <sys/stat.h>
 #include <sys/syscallsubr.h>
@@ -24,6 +26,7 @@
 #include <sys/uio.h>
 #include <sys/unistd.h>
 #include <sys/vnode.h>
+#include <sys/sema.h>
 
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
@@ -139,6 +142,7 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 			aiov[t].iov_base = (void *)(uintptr_t)(pinfo->offset);
 			aiov[t].iov_len = BLOCKSIZE;
 		}
+
 		i += pagecnt;
 
 		uio.uio_iov = aiov;
@@ -159,7 +163,6 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 		free(aiov, M_OBJSNAP);
 		left -= pagecnt;
 	}
-
 }
 
 static int
@@ -180,15 +183,14 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	return (0);
 }
 
-uint64_t waiters = 0;
-uint64_t writers = 0;
+int MAX_WRITERS = 12;
+struct sema wr;
+
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
-	uint64_t before;
 	uint64_t checkpoint;
 	int tid = args->tid;
-	int max_wait = 100000;
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
 	int total_size = 0;
@@ -196,62 +198,63 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
 	if (!success) {
-		printf("Checkpoint state for tid %d should be zero, but isnt\n", tid);
+		printf("Checkpoint state for tid %d should be zero, but isnt %lu\n", tid, get_msg(tid));
 		set_msg(tid, MSG_CHECKPOINT, MSG_FORCED);
 	}
+
 	OS_START(CHECKPOINT, &checkpoint);
 
-	int times = 0;	
-	int MAX_WAITERS = 8;
-	int helper = 0;
-	if (atomic_load_64(&waiters) < MAX_WAITERS) {
-		atomic_fetchadd_64(&waiters, 1);
-		while ((get_msg(tid) == MSG_CHECKPOINT) && times < 2) {
-			pause_sbt("combiner wait", 1 * SBT_1US, 0, 0);
-			times++;
-		}
-		atomic_fetchadd_64(&waiters, -1);
+	int is_writer = sema_trywait(&wr);
+	int complete = get_msg(tid) != MSG_CHECKPOINT;
+	while (!is_writer && !complete) {
+		pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
+		complete = get_msg(tid) != MSG_CHECKPOINT;
+		is_writer = sema_trywait(&wr);
 	}
 
-	success = set_msg(tid, MSG_CHECKPOINTING, MSG_CHECKPOINT);
-	if (!success) {
-		if (atomic_fetchadd_64(&writers, 1) > 8) {
-			atomic_fetchadd_64(&writers, -1);
-wait:
-			// Become a combiner to help
-			OS_START(LOCKANDCOPY, &before);
-			// Someone is checkpointing me.
-			times = 0;
-			while ((get_msg(tid) != MSG_NONE) && times < max_wait) {
-				pause_sbt("combiner wait", 1 * SBT_1US, 0, 0);
-				times++;
-			}
-
-			if (times >= max_wait) {
-				printf("What the hell!\n");
-			}
-			OS_STOP(LOCKANDCOPY, &before);
-			return;
-		} else {
-			helper = 1;
+	if (is_writer && complete) {
+		sema_post(&wr);
+		int times = 0;
+		while ((get_msg(tid) != MSG_NONE) && (times < 100000))  {
+			pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
+			times++;
 		}
-	} else {
-		atomic_fetchadd_64(&writers, 1);
+
+		if (times >= 100000) {
+			printf("WHAT THE HELL!?\n");
+		}
+		
+		OS_STOP(CHECKPOINT, &checkpoint);
+		return;
+	}
+
+	if (!is_writer && complete) {
+		int times = 0;
+		while ((get_msg(tid) != MSG_NONE) && (times < 100000))  {
+			pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
+			times++;
+		}
+
+		if (times >= 100000) {
+			printf("WHAT THE HELL!?\n");
+		}
+
+		OS_STOP(CHECKPOINT, &checkpoint);
+		return;
+	}
+
+	if (set_msg(tid, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
 		mytids[size_tids++] = tid;
 		total_size = threadsets[tid].d_cnt;
 	}
-
 
 	// We need to see if we can try to combine or wait on combine
 	uint64_t unlock;	
 	OS_START(UNLOCK, &unlock);
 	for (int i = 0; i < MAXTHREADS; i++) {
-		if (i == tid) {
-			continue;
-		}
 		struct dirtyset *set = &threadsets[i];
 		// We cant have more the a 64KiB write combined chunk
-		if ((total_size + set->d_cnt) > 32) {
+		if ((total_size + set->d_cnt) > MAXDRTYCNT) {
 			continue;
 		}
 
@@ -261,12 +264,11 @@ wait:
 			total_size += set->d_cnt;
 		}
 
-		if (total_size >= 32) {
+		if (total_size >= MAXDRTYCNT) {
 			break;
 		}
 	}
 
-	OS_STOP(UNLOCK, &unlock);
 
 	struct threadcheckpoint tckpt;
 	tckpt.tckpt_cnt = 0;
@@ -283,8 +285,7 @@ wait:
 			int i = tckpt.tckpt_cnt + t;
 			tckpt.tckpt_ptrs[i].w_inode = set->d_pg[t].inode;
 			tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(set->d_pg[t].offset);
-			tckpt.tckpt_ptrs[i].ptr.offset = ptr.offset + t;
-			tckpt.tckpt_ptrs[i].ptr.size = 1;
+			tckpt.tckpt_ptrs[i].w_offset = ptr.offset + t;
 			combined_set.d_pg[i] = set->d_pg[t];
 		}
 
@@ -297,19 +298,19 @@ wait:
 	KASSERT(total_size == combined_set.d_cnt, ("total size != combined_set"));
 	KASSERT(tckpt.tckpt_cnt == combined_set.d_cnt, ("tckpt cnt != combined_set cnt"));
 	diskptr_t threadblock = allocate_threadwal();
-
 	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock.offset), 
 		BLOCKSIZE, 0, 0, 0);
 
 	memcpy(bp->b_data, &tckpt, sizeof(struct threadcheckpoint));
+	bawrite(bp);
 
 	data.cp_d = &combined_set;
 	data.ptr = ptr;
-	bwrite(bp);
 
 	objsnap_threadwal_flush(&data);
-
-	atomic_fetchadd_64(&writers, -1);
+	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock.offset), 
+		BLOCKSIZE, 0, 0, 0);
+	brelse(bp);
 
 	for (int s = 0; s < size_tids; s++) {
 		int local_tid = mytids[s];
@@ -320,10 +321,23 @@ wait:
 		}
 	}
 
+	sema_post(&wr);
+	{
+		int times = 0;
+		while ((get_msg(tid) != MSG_NONE) && (times < 100000))  {
+			pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
+			times++;
+		}
 
+		if (times >= 100000) {
+			printf("WHAT THE HELL!?\n");
+		}
+	}
+
+	
+
+	OS_STOP(UNLOCK, &unlock);
 	OS_STOP(CHECKPOINT, &checkpoint);
-	if (helper)
-		goto wait;
 
 	return;
 }
@@ -354,7 +368,7 @@ usrptr_to_page(vm_offset_t ptr, struct pageset *pinfo) {
 
 	struct proc *p = curthread->td_proc;
 	struct vmspace *vms = p->p_vmspace;
-    vm_map_t map = &vms->vm_map;
+    	vm_map_t map = &vms->vm_map;
 
 
 	// Check if page is valid range
@@ -524,7 +538,7 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 
 	case OBJSNAP_INIT:
 		objsnap_init((struct objsnap_init_args *)data);
-
+		sema_init(&wr, MAX_WRITERS, "writers_sema");
 		// We did not create the FS!
 		if (superblock.super_bsize == 0) {
 			error = -1;
@@ -607,7 +621,7 @@ objsnap_sync_dirtylist(int threadlist_at)
 			struct walptr *ptr = &set.tckpt_ptrs[t];
 			if (ptr->w_inode == inode_i[i]) {
 				VTREE_INSERT(&vnode->v_tree, 
-					IDX_TO_OFF(ptr->w_index) / BLOCKSIZE, &ptr->ptr);
+					IDX_TO_OFF(ptr->w_index) / BLOCKSIZE, &ptr->w_offset);
 			}
 		}
 
@@ -628,11 +642,14 @@ objsnap_sync_dirtylist(int threadlist_at)
 		
 		// During inserting we likely COW faulted which means we need to update our treeptr;
 		inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
+		uint64_t before;
+		OS_START(INODE, &before);
 		VTREE_CHECKPOINT(&vnode->v_tree);
 
 		if (write_ondisk_inode(inode)) {
 			printf("Issue writing inode!\n");
 		}
+		OS_STOP(INODE, &before);
 
 		// GC Work Section
 		btree_t tree = vnode->v_tree.v_tree;
@@ -672,7 +689,7 @@ objsnap_wal_syncer(void *ctx)
 		while (alloc.alloc_walptr_tail != alloc.alloc_walptr_head) {
 			objsnap_sync_dirtylist(alloc.alloc_walptr_tail + alloc.alloc_base);
 			// Ring buffer logic
-			alloc.alloc_walptr_tail = (alloc.alloc_walptr_tail + 1) % MAXTHREADS;
+			alloc.alloc_walptr_tail = (alloc.alloc_walptr_tail + 1) % MAX_WAL_ENTRIES;
 		}
 
 		mtx_lock(&osdata.os_syncer_lk);
@@ -852,6 +869,8 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		objsnap_vncache_fini();
 
 		allocator_destroy();
+
+		sema_destroy(&wr);
 
     	break;
 	default:

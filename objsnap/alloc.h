@@ -15,6 +15,8 @@
 #include "objsnap_internal.h"
 #include "objsnap_ioctl.h"
 
+#define MAX_WAL_ENTRIES (1024)
+
 struct allocator {
   size_t alloc_size_total_blocks;
   size_t alloc_bsize;
