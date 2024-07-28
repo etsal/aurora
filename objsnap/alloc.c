@@ -104,8 +104,10 @@ allocate_threadwal()
         curhead = alloc.alloc_walptr_head;
         curtail = alloc.alloc_walptr_head;
         check_behind = ((curhead + 1) % MAXTHREADS) == curtail;
+        mtx_unlock(&alloc.alloc_lk);
         printf("WAITING ON SYNCER!");
         pause("Waiting on Syncer", hz / 10);
+        mtx_lock(&alloc.alloc_lk);
     }
     
     ptr.offset = alloc.alloc_walptr_head;
