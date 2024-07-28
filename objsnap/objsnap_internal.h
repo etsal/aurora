@@ -25,7 +25,6 @@
 #include "vtree.h"
 
 #define OBJMAGIC (0xdeadbeef)
-#define MAXDRTYCNT (64)
 #define MAXTHREADS (64)
 
 #define LOCK(lock, type) (lockmgr(lock, type, NULL))
@@ -34,6 +33,7 @@
 #define UNLOCK_SUPER() (UNLOCK(&osdata.os_lock))
 #define INDEX_TO_VNODE(i) (&vnode_cache[(i) / 2])
 #define DEVICE_BLOCK_NUM(blki) ((blki) * ((uint64_t)BLOCKSIZE >> DEV_BSHIFT))
+#define DEVICE_BLOCK_WAL(blki) ((blki) * ((uint64_t)WALSIZE >> DEV_BSHIFT))
 
 #define OS_STAT_DEFINE(name, num) \
 	static int OS_STAT_##name = num; \
@@ -76,13 +76,15 @@ struct pageset {
 	index_t inode;
 };
 
-struct walptr {
+struct __attribute__((packed)) walptr {
 	index_t w_inode; // Object being modified
 	index_t	w_index;  // Index into the object the modification occurs
-	diskptr_t ptr; // Ptr to the data holding the modified page
+	index_t w_offset; // Ptr to the data holding the modified page
 };
 
-struct threadcheckpoint {
+
+#define MAXDRTYCNT (64)
+struct __attribute__((packed)) threadcheckpoint {
 	int tckpt_cnt;	
 	uint64_t tckpt_txnid;
 	struct walptr tckpt_ptrs[MAXDRTYCNT];

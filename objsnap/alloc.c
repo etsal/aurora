@@ -60,7 +60,7 @@ allocator_init()
     ba_init(&alloc.alloc_impl);
 
     // Start the offset after inodes and wal thread list
-    uint32_t offset = superblock.super_max_inodes + MAXTHREADS + 2;
+    uint32_t offset = superblock.super_max_inodes + MAX_WAL_ENTRIES + 2;
     uint32_t left = alloc.alloc_size_total_blocks - offset;
 
     // Maximum allowed entry in the allocator
@@ -114,7 +114,7 @@ allocate_threadwal()
     ptr.offset = alloc.alloc_walptr_head;
     ptr.size = 1; 
 
-    alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAXTHREADS;
+    alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAX_WAL_ENTRIES;
 
     mtx_unlock(&alloc.alloc_lk);
 
@@ -159,8 +159,7 @@ write_ondisk_inode(osinode_t *inode)
 	ino_bp->b_iooffset = dbtob(ino_bp->b_blkno);
 
     memcpy(ino_bp->b_data, inode, BLOCKSIZE);
-    bdirty(ino_bp);
-    brelse(ino_bp);
+    bwrite(ino_bp);
 
     return (0);
 }

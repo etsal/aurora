@@ -843,6 +843,7 @@ btree_checkpoint(void* treep)
 {
   btree_t tree = (btree_t)treep;
   btree_bumpversion(treep);
+  VOP_FSYNC(tree->tr_vp, MNT_WAIT, curthread);
 
   return (tree->tr_ptr);
 }
