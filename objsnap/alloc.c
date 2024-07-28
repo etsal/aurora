@@ -165,8 +165,8 @@ write_ondisk_inode(osinode_t *inode)
     return (0);
 }
 
-int 
-flush() {
+static int 
+flush(void) {
     struct buf *bp = NULL; // *nbp;
     struct bufobj *bo = &osdata.os_vp->v_bufobj;
 
