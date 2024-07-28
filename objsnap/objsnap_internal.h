@@ -21,9 +21,8 @@
 #include <vm/vm_object.h>
 
 #include "objsnap_ioctl.h"
+#include "arraylist.h"
 #include "vtree.h"
-#include "binaryalloc.h"
-
 
 #define OBJMAGIC (0xdeadbeef)
 #define MAXDRTYCNT (64)
