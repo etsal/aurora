@@ -315,7 +315,7 @@ threadedTest(int numthreads, int num_objs,
 
 	uint64_t sum_avg = 0;
 	for (int i = 0; i < numthreads; i++) {
-		printf("[Thread %d] %f\n", i, cycles_to_us(avgs[i], clock_cycles));
+		//printf("[Thread %d] %f\n", i, cycles_to_us(avgs[i], clock_cycles));
 		sum_avg += cycles_to_us(avgs[i], clock_cycles);
 	}
 
@@ -346,7 +346,7 @@ main(int argc, char *argv[])
 	int totaldirtyset = atoi(argv[3]);
 	int numCheckpoints = 200000;
 	int numthreads = atoi(argv[2]);
-	int numobjs = 2;
+	int numobjs = 1;
 	
 	int numblocks_per_obj_per_ckpt = totaldirtyset;
 	int MiB = (1024 * 1024) / BLOCKSIZE;
@@ -354,12 +354,12 @@ main(int argc, char *argv[])
 	printf("Threads(%d), Blocksize (%lu), Total Dirty Set in Blocks (%d), Checkpoints per thread(%d), Number of objects(%d)\n",
 		numthreads, BLOCKSIZE, totaldirtyset, numCheckpoints, numobjs);
 	uint64_t before = rdtscp();	
-	uint64_t avglat = threadedTest(numthreads, numobjs, 1 * GiB, 
+	uint64_t avglat = threadedTest(numthreads, numobjs, 10 * GiB, 
 		numblocks_per_obj_per_ckpt, numCheckpoints);
 	uint64_t after = rdtscp();
 	double change = after - before;
 	change = cycles_to_s(change, clock_cycles);
-	printf("[%d] Ckpts/s(%f), latency(%lu), total(%d), seconds(%f)\n", 
+	printf("threads(%d), Ckpts/s(%f), latency(%lu), total(%d), seconds(%f)\n", 
 		numthreads, (numCheckpoints * numthreads) / change, avglat, (numCheckpoints * numthreads), change);
 
 	printstats(clock_cycles);
