@@ -98,14 +98,15 @@ allocate_threadwal()
 
     mtx_lock(&alloc.alloc_lk);
     size_t curhead = alloc.alloc_walptr_head;
-    size_t curtail = alloc.alloc_walptr_head;
+    size_t curtail = alloc.alloc_walptr_tail;
     check_behind = ((curhead + 1) % MAX_WAL_ENTRIES) == curtail;
     while (check_behind) {
         curhead = alloc.alloc_walptr_head;
-        curtail = alloc.alloc_walptr_head;
+        curtail = alloc.alloc_walptr_tail;
         check_behind = ((curhead + 1) % MAX_WAL_ENTRIES) == curtail;
-        printf("WAITING ON SYNCER!");
-        pause("Waiting on Syncer", hz / 10);
+    	mtx_unlock(&alloc.alloc_lk);
+	pause_sbt("combiner wait", 1 * SBT_1MS, 0 ,0);
+    	mtx_unlock(&alloc.alloc_lk);
     }
     
     ptr.offset = alloc.alloc_walptr_head;

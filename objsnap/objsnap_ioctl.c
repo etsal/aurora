@@ -612,6 +612,8 @@ objsnap_sync_dirtylist(int threadlist_at)
 	}
 
 	// We now go through every write it owns and update the tree
+	uint64_t before;
+	OS_START(INODE, &before);
 	for (int i = 0; i < inode_cnt; i++) {
 		// Grab our vnode
 		struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
@@ -642,14 +644,11 @@ objsnap_sync_dirtylist(int threadlist_at)
 		
 		// During inserting we likely COW faulted which means we need to update our treeptr;
 		inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
-		uint64_t before;
-		OS_START(INODE, &before);
 		VTREE_CHECKPOINT(&vnode->v_tree);
 
 		if (write_ondisk_inode(inode)) {
 			printf("Issue writing inode!\n");
 		}
-		OS_STOP(INODE, &before);
 
 		// GC Work Section
 		btree_t tree = vnode->v_tree.v_tree;
@@ -671,6 +670,9 @@ objsnap_sync_dirtylist(int threadlist_at)
 
 	}
 
+  	VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
+	
+	OS_STOP(INODE, &before);
 	return (0);
 }
 
