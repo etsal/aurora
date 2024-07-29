@@ -1,6 +1,7 @@
 #include <sys/param.h>
 #include <sys/lock.h>
 #include <sys/queue.h>
+#include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
 #include <sys/mutex.h>
@@ -10,12 +11,14 @@
 #include "chunkalloc.h"
 #include "objsnap_internal.h"
 
+#define CA_SETALL(size) ((size) == 64 ? UINT64_MAX : ((1ULL << (size)) - 1))
 #define CA_TXNSIZE (64)
+#define CA_CRITICAL_WATERMARK (4)
 
 MALLOC_DEFINE(M_CHUNKALLOC, "Chunk allocator", "chunkalloc");
 
 static void *
-ca_alloc_chunkarray(size_t size)
+ca_arrayalloc(size_t size)
 {
 	return (mallocarray(sizeof(struct ca_chunk), size,
 		M_CHUNKALLOC, M_WAITOK | M_ZERO));
@@ -44,7 +47,7 @@ ca_populate_chunks(struct chunkallocator *ca)
 
 		bzero(chunk->cac_map, sizeof(chunk->cac_map));
 		chunk->cac_blocks_used = 0;
-		chunk->cac_state = CA_FREE;
+		chunk->cac_state = CH_FREE;
 
 		ca->ca_next[i] = &ca->ca_chunks[i];
 	}
@@ -74,15 +77,15 @@ ca_get_free_chunk(struct chunkallocator *ca, struct ca_chunk **chp, int bucket)
 	ch = ca->ca_next[0];
 	for (i = 0; i < ca->ca_next_cnt - 1; i++) {
 		ca->ca_next[i] = ca->ca_next[i + 1];
-		KASSERT(ca->ca_next[i]->cac_state == CA_FREE,
+		KASSERT(ca->ca_next[i]->cac_state == CH_FREE,
 			("used chunk in free list"));
 	}
 	ca->ca_next_cnt -= 1;
 	ca->ca_num_used += 1;
 
-	KASSERT(ch->cac_state == CA_FREE, ("allocated used chunk"));
+	KASSERT(ch->cac_state == CH_FREE, ("allocated used chunk"));
 
-	ch->cac_state = CA_ACTIVE;
+	ch->cac_state = CH_ACTIVE;
 	ch->cac_txn_size = 1UL << bucket;
 	ch->cac_sec_max = ch->cac_ptr.size / ch->cac_txn_size;
 	ch->cac_sec_free = ch->cac_sec_max;
@@ -124,29 +127,134 @@ ca_init(struct chunkallocator *ca)
 	/* All chunks in the allocator. */
 	diskbytes = superblock.super_size * superblock.super_bsize;
 	ca->ca_chunk_cnt = diskbytes / CA_CHUNKSZ;
-	ca->ca_chunks = ca_alloc_chunkarray(ca->ca_chunk_cnt);
+	ca->ca_chunks = ca_arrayalloc(ca->ca_chunk_cnt);
 
 	ca->ca_next_cnt = ca->ca_chunk_cnt;
-	ca->ca_next = ca_alloc_chunkarray(ca->ca_chunk_cnt);
+	ca->ca_next = ca_arrayalloc(ca->ca_chunk_cnt);
 
 	/* Old (XXX already/partially used?) chunks. */
 	ca->ca_old_cnt = 0;
-	ca->ca_old = ca_alloc_chunkarray(ca->ca_chunk_cnt);
+	ca->ca_old = ca_arrayalloc(ca->ca_chunk_cnt);
 
 	/* Candidate chunks. XXX What does "candidate" mean here? */
 	ca->ca_cand_cnt = determine_bucket(ca->ca_txnsz_blk) + 1;
-	ca->ca_cand = ca_alloc_chunkarray(ca->ca_cand_cnt);
-	ca->ca_cand_old = ca_alloc_chunkarray(ca->ca_cand_cnt);
+	ca->ca_cand = ca_arrayalloc(ca->ca_cand_cnt);
+	ca->ca_cand_old = ca_arrayalloc(ca->ca_cand_cnt);
 
 	ca_populate_chunks(ca);
 	ca_populate_cands(ca);
 }
 
+static int
+ca_move(struct chunkallocator *ca, int tid, int numblocks)
+{
+	return (0);
+}
+
+static int
+ca_blkalloc(struct ca_chunk *ch, int numblocks)
+{
+	diskptr_t ptr;
+	int i;
+
+	KASSERT(numblocks <= ch->cac_txn_size, ("allocating too many blocks from sector"));
+
+	if (ch->cac_state == CH_FULL)
+		return (ENOSPC);
+
+	if (ch->cac_sec_free == 0)
+		return (ENOSPC);
+
+	/* Scan all sectors till we find a free one. */
+	for (i = 0; i < ch->cac_sec_max; i++) {
+		if (ch->cac_map[i].cas_bmap != 0)
+			continue;
+
+		ch->cac_map[i].cas_bmap = CA_SETALL(numblocks);
+		ch->cac_blocks_used += numblocks;
+		ch->cac_sec_free -= 1;
+
+		ptr.offset = ch->cac_ptr.offset + (i * ch->cac_txn_size);
+		ptr.size = numblocks;
+
+		/* XXX Pass the pointer to the transaction. */
+		return (0);
+	}
+
+	return (ENOSPC);
+}
+
+static int
+ca_tryalloc(struct chunkallocator *ca, int numblocks, int bucket, bool prio, diskptr_t *ptr)
+{
+	struct ca_chunk *ch, *newch;
+	int error;
+
+	/* 
+	 * If low priority, move blocks to coalesce them. 
+	 * Keep doing so if we're critically low.
+	 */
+	if (prio) {
+		do  {
+			/* XXX Which TID are we using here?*/
+			ca_move(ca, 0, 1ULL << bucket);
+		} while (ca->ca_next_cnt < CA_CRITICAL_WATERMARK);
+	}
+
+	/* Grab the first chunk we find in the allocator. */
+	mtx_lock(&ca->ca_mtx);
+	/* XXX We assume chunks_candidates_old is unset */
+	ch = ca->ca_cand[bucket];
+
+	mtx_lock(&ch->cac_mtx);
+	mtx_unlock(&ca->ca_mtx);
+
+	/* XXX Actually pass the allocated blocks to the transactions. */
+	error = ca_blkalloc(ch, numblocks);
+	if (error == 0) {
+		mtx_unlock(&ch->cac_mtx);
+		return (0);
+	}
+
+	error = ca_get_free_chunk(ca, &newch, bucket); {
+	if (error != 0)
+		mtx_unlock(&ch->cac_mtx);
+		return (ENOSPC);
+	}
+
+	/* Append the chunk to the used list. */
+	KASSERT(ch->cac_state == CH_FULL, ("appending non-full chunk"));
+	mtx_lock(&ca->ca_mtx);
+	ca->ca_old[ca->ca_old_cnt++] = ch;
+	mtx_unlock(&ca->ca_mtx);
+
+	/* XXX old chunk logic */
+
+	ca->ca_cand[bucket] = newch;
+	KASSERT(ca->ca_cand[bucket]->cac_state == CH_ACTIVE, ("invalid candidate chunk"));
+
+	mtx_unlock(&ch->cac_mtx);
+
+	return (0);
+}
+
 int
 ca_alloc(struct chunkallocator *ca, int numblocks, diskptr_t *ptr)
 {
-	panic("unimplemented");
-	return (EOPNOTSUPP);
+	const int bucket = determine_bucket(numblocks);
+	bool high_pressure = false;
+	int error;
+
+	/* XXX What do we do with high pressure? */
+	do {
+		error = ca_tryalloc(ca, numblocks, bucket, false, ptr);
+		if (error == 0)
+			break;
+
+		high_pressure = true;
+	} while (true);
+
+	return (0);
 }
 
 void

@@ -10,8 +10,7 @@
 #include <sys/lock.h>
 #include <sys/mutex.h>
 
-
-#include "binaryalloc.h"
+#include "chunkalloc.h"
 #include "objsnap_internal.h"
 #include "objsnap_ioctl.h"
 
@@ -21,7 +20,7 @@ struct allocator {
   size_t alloc_size_total_blocks;
   size_t alloc_bsize;
   struct mtx alloc_lk;
-  struct binaryallocator alloc_impl;
+  struct chunkallocator alloc_impl;
 
   volatile size_t alloc_walptr_head;
   volatile size_t alloc_walptr_tail;

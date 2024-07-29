@@ -6,10 +6,10 @@
 #define CA_MAXSEC (CA_CHUNKSZ / BLOCKSIZE)
 
 enum ca_chunk_state {
-	CA_FREE,
-	CA_ACTIVE,
-	CA_EMPTYING,
-	CA_FULL,
+	CH_FREE,
+	CH_ACTIVE,
+	CH_EMPTYING,
+	CH_FULL,
 };
 
 struct ca_objid {

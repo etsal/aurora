@@ -18,8 +18,8 @@
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
 
-#include "alloc.h"
 #include "objsnap_internal.h"
+#include "alloc.h"
 #include "vtree.h"
 #include "btree.h"
 
@@ -57,7 +57,7 @@ allocator_init()
     mtx_init(&alloc.alloc_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
     alloc.alloc_bsize = BLOCKSIZE;
 
-    ba_init(&alloc.alloc_impl);
+    ca_init(&alloc.alloc_impl);
 
     // Start the offset after inodes and wal thread list
     uint32_t offset = superblock.super_max_inodes + MAX_WAL_ENTRIES + 2;
@@ -72,11 +72,14 @@ allocator_init()
 
         left -= ptr.size;
         offset += ptr.size;
-        ba_free(&alloc.alloc_impl, ptr);
+        ca_free(&alloc.alloc_impl, ptr);
     }
 
     printf("Initial allocator State:\n");
-    ba_print(&alloc.alloc_impl);
+    /* XXX Implemnent ca_print */
+#if 0
+    ca_print(&alloc.alloc_impl);
+#endif
 
 
     alloc.alloc_base = superblock.super_max_inodes + 2;
@@ -87,7 +90,7 @@ allocator_init()
 void 
 allocator_destroy()
 {
-    ba_destroy(&alloc.alloc_impl);
+    ca_destroy(&alloc.alloc_impl);
 }
 
 diskptr_t
@@ -130,7 +133,7 @@ allocate_block(int i)
     uint64_t before;
     int error;
     OS_START(ALLOCATE, &before);
-    error = ba_alloc(&alloc.alloc_impl, i, &ptr);
+    error = ca_alloc(&alloc.alloc_impl, i, &ptr);
     if (error) {
         panic("Problem allocating!");
     }
@@ -142,7 +145,7 @@ allocate_block(int i)
 void 
 free_block(diskptr_t ptr)
 {
-    ba_free(&alloc.alloc_impl, ptr);
+    ca_free(&alloc.alloc_impl, ptr);
 }
 
 int 
