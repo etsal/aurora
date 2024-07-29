@@ -183,7 +183,7 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	return (0);
 }
 
-int MAX_WRITERS = 12;
+int MAX_WRITERS = 6;
 struct sema wr;
 
 static void
@@ -670,14 +670,23 @@ objsnap_sync_dirtylist(int threadlist_at)
 
 	}
 
-  	VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
 	
 	OS_STOP(INODE, &before);
 	return (0);
 }
 
+static int
+check_within(uint64_t s, uint64_t e, int within, int mod) {
+	if (e == s) {
+		return (1);
+	}
+	if (e > s) {
+		return (s + within) >= e;
+	}
+	return ((s + within) % mod) >= e;
+}
 
-
+#define WAL_SYNCER_SIZE (1024)
 static void
 objsnap_wal_syncer(void *ctx)
 {
@@ -688,15 +697,17 @@ objsnap_wal_syncer(void *ctx)
 		// Clear out current tail to head of Wal entrys, no need for a lock
 		// If the head ptr outpaces us we just keep staying in the while look clearing
 		// stuff out
-		while (alloc.alloc_walptr_tail != alloc.alloc_walptr_head) {
-			objsnap_sync_dirtylist(alloc.alloc_walptr_tail + alloc.alloc_base);
-			// Ring buffer logic
-			alloc.alloc_walptr_tail = (alloc.alloc_walptr_tail + 1) % MAX_WAL_ENTRIES;
+		if (!check_within(alloc.alloc_walptr_tail, alloc.alloc_walptr_head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+			for (int i = alloc.alloc_walptr_tail; i < alloc.alloc_walptr_tail + WAL_SYNCER_SIZE; i++ ) {
+				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES) + alloc.alloc_base);
+			}
+  			VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
+			alloc.alloc_walptr_tail = (alloc.alloc_walptr_tail + WAL_SYNCER_SIZE) % MAX_WAL_ENTRIES;
 		}
-
 		mtx_lock(&osdata.os_syncer_lk);
-		msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-wait", SBT_1NS * 100000, 0,
-			C_HARDCLOCK);
+		if (check_within(alloc.alloc_walptr_tail, alloc.alloc_walptr_head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) 
+			msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-wait", SBT_1US * 10, 0,
+				C_HARDCLOCK);
 	}
 
 	osdata.os_syncer_exit = OBJSYNC_EXITED;

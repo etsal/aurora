@@ -93,6 +93,7 @@ allocator_destroy()
 diskptr_t
 allocate_threadwal()
 {
+    uint64_t before;
     int check_behind;
     diskptr_t ptr;
 
@@ -101,12 +102,14 @@ allocate_threadwal()
     size_t curtail = alloc.alloc_walptr_tail;
     check_behind = ((curhead + 1) % MAX_WAL_ENTRIES) == curtail;
     while (check_behind) {
+    	OS_START(LOCKANDCOPY, &before);
+    	mtx_unlock(&alloc.alloc_lk);
+	pause_sbt("combiner wait", 10 * SBT_1US, 0 ,0);
+    	mtx_lock(&alloc.alloc_lk);
         curhead = alloc.alloc_walptr_head;
         curtail = alloc.alloc_walptr_tail;
         check_behind = ((curhead + 1) % MAX_WAL_ENTRIES) == curtail;
-    	mtx_unlock(&alloc.alloc_lk);
-	pause_sbt("combiner wait", 1 * SBT_1MS, 0 ,0);
-    	mtx_unlock(&alloc.alloc_lk);
+    	OS_STOP(LOCKANDCOPY, &before);
     }
     
     ptr.offset = alloc.alloc_walptr_head;
@@ -157,7 +160,7 @@ write_ondisk_inode(osinode_t *inode)
 	ino_bp->b_iooffset = dbtob(ino_bp->b_blkno);
 
     memcpy(ino_bp->b_data, inode, BLOCKSIZE);
-    bwrite(ino_bp);
+    bdwrite(ino_bp);
 
     return (0);
 }
