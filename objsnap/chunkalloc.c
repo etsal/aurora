@@ -20,6 +20,34 @@ ca_alloc_chunkarray(size_t size)
 		M_CHUNKALLOC, M_WAITOK | M_ZERO));
 }
 
+static void
+ca_populate(struct chunkallocator *ca)
+{
+	const size_t blk_per_chunk = CA_CHUNKSZ / superblock.super_bsize;
+	struct ca_chunk *chunk;
+	diskptr_t ptr;
+	int i;
+
+	/* 
+	 * Populate the allocator by all disk chunks into 
+	 * it one at a time as if already allocated.
+	 */
+	for (i = 0; i < ca->ca_chunk_cnt; i++) {
+		chunk = &ca->ca_chunks[i];
+		mtx_init(&chunk->cac_mtx, "objchnmtx", NULL, MTX_DEF);
+		chunk->cac_index = i;
+
+		ptr.offset = blk_per_chunk * i;
+		ptr.size = blk_per_chunk;
+		chunk->cac_ptr = ptr;
+
+		bzero(chunk->cac_map, sizeof(chunk->cac_map));
+		chunk->cac_used = chunk->cac_freed = 0;
+
+		ca->ca_next[i] = &ca->ca_chunks[i];
+	}
+}
+
 void
 ca_init(struct chunkallocator *ca)
 {
@@ -28,7 +56,6 @@ ca_init(struct chunkallocator *ca)
 	bzero(ca, sizeof(*ca));
 	mtx_init(&ca->ca_mtx, "objcamtx", NULL, MTX_DEF);
 
-	ca->ca_startoff = 0;
 	ca->ca_txnsz_blk = CA_TXNSIZE;
 
 	/* All chunks in the allocator. */
@@ -50,9 +77,11 @@ ca_init(struct chunkallocator *ca)
 
 	/* XXX Initialize thread worklist state */
 
-	/* XXX Create the background thread */
+	/* XXX Set up background thread */
 
-	/* XXX Mark all chunks as freed */
+	ca_populate(ca);
+
+	/* XXX Populate the candidate chunk arrays */
 }
 
 int

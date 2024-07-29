@@ -24,21 +24,25 @@ struct ca_sector {
 /* XXX Static assert that CA_MAXSEC < 256 */
 struct ca_chunk {
 	struct mtx 		cac_mtx;
-	struct ca_sector 	cac_map[CA_MAXSEC];
 	int 			cac_index;
+	diskptr_t 		cac_ptr;
+
+	struct ca_sector 	cac_map[CA_MAXSEC];
+
+	uint64_t 		cac_used;
+	uint64_t 		cac_freed;
+
+	/* Fields that are only valid when the chunk is not free. */
 	enum ca_chunk_state 	cac_state;
 	uint8_t 		cac_sec_free;
+	uint8_t 		cac_sec_max;
 	uint32_t 		cac_txn_size;
-	uint64_t 		cac_blocks_used;
-	uint64_t 		cac_blocks_freed;
-	diskptr_t 		cac_ptr;
 };
 
 /* XXX Implement high-pressure state. */
 struct chunkallocator {
 	struct mtx  		ca_mtx;
 
-	uint64_t		ca_startoff;
 	uint32_t		ca_txnsz_blk;
 
 	struct ca_chunk		*ca_chunks;
