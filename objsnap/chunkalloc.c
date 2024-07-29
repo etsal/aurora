@@ -22,7 +22,7 @@ ca_alloc_chunkarray(size_t size)
 }
 
 static void
-ca_populate(struct chunkallocator *ca)
+ca_populate_chunks(struct chunkallocator *ca)
 {
 	const size_t blk_per_chunk = CA_CHUNKSZ / superblock.super_bsize;
 	struct ca_chunk *chunk;
@@ -44,8 +44,70 @@ ca_populate(struct chunkallocator *ca)
 
 		bzero(chunk->cac_map, sizeof(chunk->cac_map));
 		chunk->cac_used = chunk->cac_freed = 0;
+		chunk->cac_state = CA_FREE;
 
 		ca->ca_next[i] = &ca->ca_chunks[i];
+	}
+}
+
+static int
+ca_get_free_chunk(struct chunkallocator *ca, struct ca_chunk **chp, int bucket)
+{
+	struct ca_chunk *ch;
+	int i;
+
+	KASSERT(bucket >= 0, ("negative bucket index"));
+	KASSERT(bucket <= MAXPOWEROFTWO, ("bucket index out of bounds"));
+
+	mtx_lock(&ca->ca_mtx);
+	if (ca->ca_next_cnt == 0) {
+		mtx_unlock(&ca->ca_mtx);
+		return (ENOSPC);
+	}
+
+	/* 
+	 * XXXETSAL Is treating the next array like a queue a good idea? 
+	 * Chunk allocations cost linearly to the size of the entire 
+	 * allocator for lightly loaded systems. Implementing is as 
+	 * it was in the original for now till we discuss this.
+	 */
+	ch = ca->ca_next[0];
+	for (i = 0; i < ca->ca_next_cnt - 1; i++) {
+		ca->ca_next[i] = ca->ca_next[i + 1];
+		KASSERT(ca->ca_next[i]->cac_state == CA_FREE,
+			("used chunk in free list"));
+	}
+	ca->ca_next_cnt -= 1;
+	ca->ca_num_used += 1;
+
+	KASSERT(ch->cac_state == CA_FREE, ("allocated used chunk"));
+
+	ch->cac_state = CA_ACTIVE;
+	ch->cac_txn_size = 1UL << bucket;
+	ch->cac_sec_max = ch->cac_ptr.size / ch->cac_txn_size;
+	ch->cac_sec_free = ch->cac_sec_max;
+
+	mtx_unlock(&ca->ca_mtx);
+
+	*chp = ch;
+
+	return (0);
+}
+
+static void
+ca_populate_cands(struct chunkallocator *ca)
+{
+	int error;
+	int i;
+
+	for (i = 0; i < ca->ca_cand_cnt; i++) {
+		error = ca_get_free_chunk(ca, &ca->ca_cand[i], i);
+		if (error != 0)
+			panic("failed to populate candidate list");
+
+		error = ca_get_free_chunk(ca, &ca->ca_cand_old[i], i);
+		if (error != 0)
+			panic("failed to populate old candidate list");
 	}
 }
 
@@ -76,9 +138,8 @@ ca_init(struct chunkallocator *ca)
 	ca->ca_cand = ca_alloc_chunkarray(ca->ca_cand_cnt);
 	ca->ca_cand_old = ca_alloc_chunkarray(ca->ca_cand_cnt);
 
-	ca_populate(ca);
-
-	/* XXX Populate the candidate chunk arrays */
+	ca_populate_chunks(ca);
+	ca_populate_cands(ca);
 }
 
 int

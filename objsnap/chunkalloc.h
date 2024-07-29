@@ -6,6 +6,7 @@
 #define CA_MAXSEC (CA_CHUNKSZ / BLOCKSIZE)
 
 enum ca_chunk_state {
+	CA_FREE,
 	CA_ACTIVE,
 	CA_EMPTYING,
 	CA_FULL,
@@ -28,12 +29,12 @@ struct ca_chunk {
 	diskptr_t 		cac_ptr;
 
 	struct ca_sector 	cac_map[CA_MAXSEC];
+	enum ca_chunk_state 	cac_state;
 
 	uint64_t 		cac_used;
 	uint64_t 		cac_freed;
 
 	/* Fields that are only valid when the chunk is not free. */
-	enum ca_chunk_state 	cac_state;
 	uint8_t 		cac_sec_free;
 	uint8_t 		cac_sec_max;
 	uint32_t 		cac_txn_size;
