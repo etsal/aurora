@@ -61,7 +61,6 @@ struct chunkallocator {
 	uint64_t 		ca_num_chunks;
 	uint64_t 		ca_num_used;
 
-	bool			ca_exiting;	/* Should the allocator exit? */
 	/*
 	 * XXX Add stats back.
 	 */

@@ -1,7 +1,8 @@
 #include <sys/param.h>
+#include <sys/lock.h>
 #include <sys/queue.h>
 #include <sys/kernel.h>
-#include <sys/lock.h>
+#include <sys/kthread.h>
 #include <sys/mutex.h>
 #include <sys/taskqueue.h>
 
@@ -75,10 +76,6 @@ ca_init(struct chunkallocator *ca)
 	ca->ca_cand = ca_alloc_chunkarray(ca->ca_cand_cnt);
 	ca->ca_cand_old = ca_alloc_chunkarray(ca->ca_cand_cnt);
 
-	/* XXX Initialize thread worklist state */
-
-	/* XXX Set up background thread */
-
 	ca_populate(ca);
 
 	/* XXX Populate the candidate chunk arrays */
@@ -87,12 +84,14 @@ ca_init(struct chunkallocator *ca)
 int
 ca_alloc(struct chunkallocator *ca, int numblocks, diskptr_t *ptr)
 {
+	panic("unimplemented");
 	return (EOPNOTSUPP);
 }
 
 void
 ca_free(struct chunkallocator *ca, diskptr_t tofree)
 {
+	panic("unimplemented");
 }
 
 void
@@ -112,4 +111,5 @@ ca_destroy(struct chunkallocator *ca)
 void
 ca_print(struct chunkallocator *ca)
 {
+	panic("unimplemented");
 }
