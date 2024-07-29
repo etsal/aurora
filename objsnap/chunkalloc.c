@@ -43,7 +43,7 @@ ca_populate_chunks(struct chunkallocator *ca)
 		chunk->cac_ptr = ptr;
 
 		bzero(chunk->cac_map, sizeof(chunk->cac_map));
-		chunk->cac_used = chunk->cac_freed = 0;
+		chunk->cac_blocks_used = 0;
 		chunk->cac_state = CA_FREE;
 
 		ca->ca_next[i] = &ca->ca_chunks[i];
@@ -150,9 +150,45 @@ ca_alloc(struct chunkallocator *ca, int numblocks, diskptr_t *ptr)
 }
 
 void
-ca_free(struct chunkallocator *ca, diskptr_t tofree)
+ca_free(struct chunkallocator *ca, diskptr_t ptr)
 {
-	panic("unimplemented");
+	struct ca_chunk *ch;
+	int chind = (ptr.offset * superblock.super_bsize) / CA_CHUNKSZ;
+	int secind, bind, choff;
+
+	KASSERT(ptr.size != UINT_MAX, ("freeing invalid disk pointer"));
+	KASSERT(chind < ca->ca_num_chunks, ("freeing out-of-bounds chunk"));
+
+	mtx_lock(&ca->ca_mtx);
+	ch = &ca->ca_chunks[chind];
+
+	choff = ptr.offset - ch->cac_ptr.offset;
+	KASSERT(choff >= 0, ("negative offset in chunk"));
+
+	secind = choff / ch->cac_txn_size;
+	KASSERT(secind < CA_MAXSEC, ("chunk sector index out of bounds"));
+
+	bind = choff % ch->cac_txn_size;
+	KASSERT(bind + ptr.size <= ch->cac_txn_size, ("block index out of bounds"));
+
+	KASSERT(ch->cac_map[secind].cas_bmap != 0, ("sector has no allocated blocks"));
+	KASSERT(ptr.size == 1, ("freeing more than one block"));
+
+	/* 
+	 * XXXETSAL Isn't this condition supposed to always be true,
+	 * otherwise this is a double free? Or is there some kind
+	 * of benign race?
+	 */
+	if (ch->cac_map[secind].cas_bmap & (1ULL << bind)) {
+		ch->cac_map[secind].cas_bmap &= ~(1ULL << bind);
+		ch->cac_blocks_used -= 1;
+	}
+
+	/* Did we free up an entire sector? */
+	if (ch->cac_map[secind].cas_bmap == 0)
+		ch->cac_sec_free += 1;
+
+	mtx_unlock(&ca->ca_mtx);
 }
 
 void

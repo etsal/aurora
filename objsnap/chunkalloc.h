@@ -31,10 +31,8 @@ struct ca_chunk {
 	struct ca_sector 	cac_map[CA_MAXSEC];
 	enum ca_chunk_state 	cac_state;
 
-	uint64_t 		cac_used;
-	uint64_t 		cac_freed;
-
 	/* Fields that are only valid when the chunk is not free. */
+	uint64_t 		cac_blocks_used;
 	uint8_t 		cac_sec_free;
 	uint8_t 		cac_sec_max;
 	uint32_t 		cac_txn_size;
