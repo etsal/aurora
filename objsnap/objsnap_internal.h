@@ -1,6 +1,5 @@
 #ifndef _OBJSNAP_INTERNAL_H_
 #define _OBJSNAP_INTERNAL_H_
-
 #include <sys/param.h>
 #include <sys/bitstring.h>
 #include <sys/condvar.h>
@@ -108,6 +107,21 @@ struct objsnap_vnode {
 	struct lock v_commit_lock;
 	enum VSTATE v_state;
 };
+
+#define MAXPOWEROFTWO (31)
+static inline int 
+determine_bucket(int numblocks)
+{
+    int i = 1;
+    int shift;
+    for (shift = 0; shift <= MAXPOWEROFTWO; shift++) {
+        if (numblocks <= (i << shift)) {
+            return (shift);
+        }
+    }
+
+    panic("Bucket could not be determined %d", numblocks);
+}
 
 
 extern struct objsnap_metadata osdata;
