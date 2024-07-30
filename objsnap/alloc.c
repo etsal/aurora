@@ -48,39 +48,16 @@ determine_bucket_max(int numblocks)
 void
 allocator_init()
 {
-    diskptr_t ptr;
-    size_t internalsize;
-    int bucket;
-
     bzero(&alloc, sizeof(struct allocator));
     alloc.alloc_size_total_blocks = superblock.super_size;
     mtx_init(&alloc.alloc_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
     alloc.alloc_bsize = BLOCKSIZE;
 
-    ca_init(&alloc.alloc_impl);
-
     // Start the offset after inodes and wal thread list
     uint32_t offset = superblock.super_max_inodes + MAX_WAL_ENTRIES + 2;
     uint32_t left = alloc.alloc_size_total_blocks - offset;
 
-    // Maximum allowed entry in the allocator
-    while (left) {
-        ptr.offset = offset;
-        bucket = determine_bucket_max(left);
-        internalsize = 1 << (bucket);
-        ptr.size = internalsize;
-
-        left -= ptr.size;
-        offset += ptr.size;
-        ca_free(&alloc.alloc_impl, ptr);
-    }
-
-    printf("Initial allocator State:\n");
-    /* XXX Implemnent ca_print */
-#if 0
-    ca_print(&alloc.alloc_impl);
-#endif
-
+    ca_init(&alloc.alloc_impl, offset, left);
 
     alloc.alloc_base = superblock.super_max_inodes + 2;
     alloc.alloc_walptr_head = 0; 

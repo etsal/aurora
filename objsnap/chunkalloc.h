@@ -4,6 +4,7 @@
 #define CA_CHUNKSZ (1UL * 1024 * 1024)
 #define CA_SECOBJS (64)
 #define CA_MAXSEC (CA_CHUNKSZ / BLOCKSIZE)
+#define CA_MAXBUCKETS (6)
 
 enum ca_chunk_state {
 	CH_FREE,
@@ -57,18 +58,19 @@ struct chunkallocator {
 	struct ca_chunk		**ca_cand_old;
 	uint64_t 		ca_cand_cnt;
 
-	uint64_t 		ca_num_chunks;
-	uint64_t 		ca_num_used;
+	uint64_t 		ca_used_cnt;
+
+	struct ca_chunk		*ca_move[CA_MAXBUCKETS];
 
 	/*
 	 * XXX Add stats back.
 	 */
 };
 
-void ca_init(struct chunkallocator *ba);
-int ca_alloc(struct chunkallocator *ba, int numblocks, diskptr_t *ptr);
-void ca_free(struct chunkallocator *ba, diskptr_t tofree);
-void ca_destroy(struct chunkallocator *ba);
-void ca_print(struct chunkallocator *ba);
+void ca_init(struct chunkallocator *ca, uint64_t offset, size_t numblocks);
+int ca_alloc(struct chunkallocator *ca, int numblocks, diskptr_t *ptr);
+void ca_free(struct chunkallocator *ca, diskptr_t tofree);
+void ca_destroy(struct chunkallocator *ca);
+void ca_print(struct chunkallocator *ca);
 
 #endif /* __CHUNKALLOCATOR_H_ */
