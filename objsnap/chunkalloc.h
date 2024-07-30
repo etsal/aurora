@@ -34,8 +34,8 @@ struct ca_chunk {
 
 	/* Fields that are only valid when the chunk is not free. */
 	uint64_t 		cac_blocks_used;
-	uint8_t 		cac_sec_free;
-	uint8_t 		cac_sec_max;
+	uint32_t 		cac_sec_free;
+	uint32_t 		cac_sec_max;
 	uint32_t 		cac_txn_size;
 };
 

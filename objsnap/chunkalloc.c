@@ -70,12 +70,6 @@ ca_get_free_chunk(struct chunkallocator *ca, struct ca_chunk **chp, int bucket)
 		return (ENOSPC);
 	}
 
-	/* 
-	 * XXXETSAL Is treating the next array like a queue a good idea? 
-	 * Chunk allocations cost linearly to the size of the entire 
-	 * allocator for lightly loaded systems. Implementing is as 
-	 * it was in the original for now till we discuss this.
-	 */
 	ch = ca->ca_next[0];
 	for (i = 0; i < ca->ca_next_cnt - 1; i++) {
 		ca->ca_next[i] = ca->ca_next[i + 1];
@@ -91,6 +85,7 @@ ca_get_free_chunk(struct chunkallocator *ca, struct ca_chunk **chp, int bucket)
 	ch->cac_txn_size = 1UL << bucket;
 	ch->cac_sec_max = ch->cac_ptr.size / ch->cac_txn_size;
 	ch->cac_sec_free = ch->cac_sec_max;
+	KASSERT(ch->cac_sec_max != 0, ("zero-length sector"));
 
 	mtx_unlock(&ca->ca_mtx);
 
@@ -163,7 +158,12 @@ ca_move_attempt_free(struct chunkallocator *ca, int bucket)
 {
 	struct ca_chunk *ch;
 
+	KASSERT(bucket < CA_MAXBUCKETS, ("invalid bucket %d", bucket));
+
 	ch = ca->ca_move[bucket];
+	if (ch == NULL)
+		return;
+
 	if (ch->cac_sec_free != ch->cac_sec_max)
 		return;
 
@@ -296,6 +296,7 @@ ca_move(struct chunkallocator *ca, int numblocks)
 	 * afterward. This means that picking out empty chunks from the old list and recycling
 	 * them into the free list is enough to support ObjSnap.
 	 */
+	mtx_unlock(&ca->ca_mtx);
 	return;
 
 
@@ -382,7 +383,6 @@ ca_tryalloc(struct chunkallocator *ca, int numblocks, int bucket, bool prio, dis
 	error = ca_blkalloc(ch, numblocks, ptrp);
 	if (error == 0) {
 		mtx_unlock(&ch->cac_mtx);
-		printf("%s: %d\n", __func__, __LINE__);
 		return (0);
 	}
 
@@ -391,7 +391,6 @@ ca_tryalloc(struct chunkallocator *ca, int numblocks, int bucket, bool prio, dis
 	error = ca_get_free_chunk(ca, &newch, bucket);
 	if (error != 0) {
 		mtx_unlock(&ch->cac_mtx);
-		printf("%s: %d\n", __func__, __LINE__);
 		return (ENOSPC);
 	}
 
@@ -407,7 +406,6 @@ ca_tryalloc(struct chunkallocator *ca, int numblocks, int bucket, bool prio, dis
 	KASSERT(ca->ca_cand[bucket]->cac_state == CH_ACTIVE, ("invalid candidate chunk"));
 
 	mtx_unlock(&ch->cac_mtx);
-	printf("%s: %d\n", __func__, __LINE__);
 
 	return (ENOSPC);
 }
