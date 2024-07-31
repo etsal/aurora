@@ -183,7 +183,7 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	return (0);
 }
 
-int MAX_WRITERS = 6;
+int MAX_WRITERS = 24;
 struct sema wr;
 
 static void
@@ -204,6 +204,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	OS_START(CHECKPOINT, &checkpoint);
 
+	pause_sbt("combiner wait", ( MAX_WRITERS - sema_value(&wr) )* SBT_1US, 0 ,0);
 	int is_writer = sema_trywait(&wr);
 	int complete = get_msg(tid) != MSG_CHECKPOINT;
 	while (!is_writer && !complete) {
@@ -575,12 +576,11 @@ static struct cdevsw objsnap_cdevsw = {
 };
 
 static int
-objsnap_sync_dirtylist(int threadlist_at) 
+objsnap_sync_dirtylist(int threadlist_at, index_t inode_i[], int *inode_cnt) 
 {
 	struct buf *bp;
 	struct threadcheckpoint set;
-	index_t inode_i[64];
-	int inode_cnt = 0;
+	int start = *inode_cnt;
 
 	int error;
 
@@ -599,26 +599,24 @@ objsnap_sync_dirtylist(int threadlist_at)
 	for (int i = 0; i < set.tckpt_cnt; i++) {
 		struct walptr *ptr = &set.tckpt_ptrs[i];
 		int found = false;
-		for (int t = 0; t < inode_cnt; t++) {
+		for (int t = 0; t < *inode_cnt; t++) {
 			if (inode_i[t] == ptr->w_inode) {
 				found = true;
 			}
 		}
 
 		if (!found) {
-			inode_i[inode_cnt] = ptr->w_inode;
-			inode_cnt += 1;
+			inode_i[*inode_cnt] = ptr->w_inode;
+			*inode_cnt += 1;
 		}
 	}
 
 	// We now go through every write it owns and update the tree
 	uint64_t before;
 	OS_START(INODE, &before);
-	for (int i = 0; i < inode_cnt; i++) {
+	for (int i = start; i < *inode_cnt; i++) {
 		// Grab our vnode
 		struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
-		osinode_t *inode = vnode->v_inode;
-
 		for (int t = 0; t < set.tckpt_cnt; t++) {
 			struct walptr *ptr = &set.tckpt_ptrs[t];
 			if (ptr->w_inode == inode_i[i]) {
@@ -627,47 +625,7 @@ objsnap_sync_dirtylist(int threadlist_at)
 			}
 		}
 
-		inode = vnode->v_inode;
-
-		// Update inodes to include checkpoint lists
-		for (int t = 0; t < inode_cnt; t++) {
-			inode->i_checkpointed_with[t] = inode_i[t];
-		}
 		
-		inode->i_cnt = inode_cnt;
-
-		// Set our inode to the correct value
-		inode->i_version = set.tckpt_txnid;
-
-		// Get the sibling inode and write to that instead.
-		inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
-		
-		// During inserting we likely COW faulted which means we need to update our treeptr;
-		inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
-		VTREE_CHECKPOINT(&vnode->v_tree);
-
-		if (write_ondisk_inode(inode)) {
-			printf("Issue writing inode!\n");
-		}
-
-		// GC Work Section
-		btree_t tree = vnode->v_tree.v_tree;
-
-		// We first free all value on the freelist 
-		// This is values that the old inode (that has now completely gone)
-		// and been rewritten, so we must free it.
-		// For example: 
-		// Epoch 1 (inode 1): 10 new writes, 0 COWS, 0 freeme, 0 deadlist
-		// Epoch 2 (inode 2): 5 new writes, 5 COWS, 0 freeme, 5 deadlist
-		// Epoch 3 (inode 1): 2 new writes, 2 COWS, 5 freeme, 2 deadlist
-		// Epoch 4 (inode 2): 1 new writes, 1 COWS, 2 freeme, 1 deadlist
-		for (int i = 0; i < tree->tr_freeme.cnt; i++) {
-			free_block(tree->tr_freeme.list[i]);
-		}
-
-		// Move the deadlist to free list
-		movelist(&tree->tr_freeme, &tree->tr_deadlist);
-
 	}
 
 	
@@ -686,7 +644,7 @@ check_within(uint64_t s, uint64_t e, int within, int mod) {
 	return ((s + within) % mod) >= e;
 }
 
-#define WAL_SYNCER_SIZE (1024)
+#define WAL_SYNCER_SIZE (1024 * 64)
 static void
 objsnap_wal_syncer(void *ctx)
 {
@@ -698,9 +656,54 @@ objsnap_wal_syncer(void *ctx)
 		// If the head ptr outpaces us we just keep staying in the while look clearing
 		// stuff out
 		if (!check_within(alloc.alloc_walptr_tail, alloc.alloc_walptr_head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+			index_t inode_i[256];
+			int inode_cnt = 0;
 			for (int i = alloc.alloc_walptr_tail; i < alloc.alloc_walptr_tail + WAL_SYNCER_SIZE; i++ ) {
-				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES) + alloc.alloc_base);
+				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES) + alloc.alloc_base, inode_i, &inode_cnt);
 			}
+			for (int i = 0; i < inode_cnt; i++) {
+				struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
+				osinode_t *inode = vnode->v_inode;
+				// Update inodes to include checkpoint lists
+				for (int t = 0; t < inode_cnt; t++) {
+					inode->i_checkpointed_with[t] = inode_i[t];
+				}
+				
+				inode->i_cnt = inode_cnt;
+
+				// Set our inode to the correct value
+				inode->i_version = get_txn_id();
+
+				// Get the sibling inode and write to that instead.
+				inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
+				
+				// During inserting we likely COW faulted which means we need to update our treeptr;
+				inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
+				VTREE_CHECKPOINT(&vnode->v_tree);
+
+				if (write_ondisk_inode(inode)) {
+					printf("Issue writing inode!\n");
+				}
+
+				// GC Work Section
+				btree_t tree = vnode->v_tree.v_tree;
+
+				// We first free all value on the freelist 
+				// This is values that the old inode (that has now completely gone)
+				// and been rewritten, so we must free it.
+				// For example: 
+				// Epoch 1 (inode 1): 10 new writes, 0 COWS, 0 freeme, 0 deadlist
+				// Epoch 2 (inode 2): 5 new writes, 5 COWS, 0 freeme, 5 deadlist
+				// Epoch 3 (inode 1): 2 new writes, 2 COWS, 5 freeme, 2 deadlist
+				// Epoch 4 (inode 2): 1 new writes, 1 COWS, 2 freeme, 1 deadlist
+				for (int i = 0; i < tree->tr_freeme.cnt; i++) {
+					free_block(tree->tr_freeme.list[i]);
+				}
+
+				// Move the deadlist to free list
+				movelist(&tree->tr_freeme, &tree->tr_deadlist);
+			}
+
   			VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
 			alloc.alloc_walptr_tail = (alloc.alloc_walptr_tail + WAL_SYNCER_SIZE) % MAX_WAL_ENTRIES;
 		}

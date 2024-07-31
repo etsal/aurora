@@ -16,6 +16,6 @@ kldload objsnap/objsnap.ko
 
 stat -x /dev/objsnap
 
-./tools/new_objsnap/new_objsnap $DISK $2 $3
+./tools/new_objsnap/new_objsnap $DISK $2 $3 $4
 
 kldunload objsnap

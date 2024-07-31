@@ -242,7 +242,7 @@ static inline void
 path_unacquire(bpath_t path, int acquire_as)
 {
   for (int i = 0; i < path->p_len; i++) {
-    brelse(path->p_nodes[i].n_bp);
+    	brelse(path->p_nodes[i].n_bp);
   }
 }
 

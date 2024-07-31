@@ -210,12 +210,13 @@ basicTest()
 	}
 }
 
-uint64_t
+
+std::pair<std::vector<uint64_t>, uint64_t>
 random_write_task(struct mapping *maps, 
 	int num_objs, int size_of_obj_in_blocks, 
 	int writes_per_iteration, int times, int tid) {
-	uint64_t cnt = 0;
-	uint64_t sum = 0;
+	std::vector<uint64_t> samples;
+	uint64_t throughput_start = rdtscp();	
 	for (int times_i = 0; times_i < times; times_i++) {
 		for (int w = 0; w < writes_per_iteration; w++) {
 			int obj_i = rand() % num_objs;
@@ -225,10 +226,13 @@ random_write_task(struct mapping *maps,
 		uint64_t before = rdtscp();	
 		objsnap_checkpoint(tid);
 		uint64_t after = rdtscp();
-		sum += (after - before);
-		cnt += 1;
+		if (times_i % 10000) {
+			samples.push_back(cycles_to_ns(after - before, clock_cycles));
+		}
 	}
-	return sum / cnt;
+	uint64_t throughput_end = rdtscp();	
+	auto total_time = cycles_to_s(throughput_end - throughput_start, clock_cycles);
+	return std::make_pair(samples, total_time);
 }
 
 void
@@ -276,14 +280,15 @@ printstats(uint64_t clock) {
 	}
 }
 
-uint64_t
+std::vector<std::pair<std::vector<uint64_t>, uint64_t>>
 threadedTest(int numthreads, int num_objs, 
 	int size_of_obj_in_blocks,
 	int writes_per_iteration, int times) {
 
 	// Vector to hold thread objects
 	std::vector<std::thread> threads;
-	uint64_t *avgs = (uint64_t *)malloc(sizeof(uint64_t)* numthreads);
+	std::mutex lock;
+	std::vector<std::pair<std::vector<uint64_t>, uint64_t>> avgs;
 	int error = 0;
 
 	srand(time(NULL));
@@ -296,14 +301,16 @@ threadedTest(int numthreads, int num_objs,
 
 	for (int i = 0; i < numthreads; ++i) {
 		// Using a lambda function for the thread's task
-		threads.emplace_back([avgs, maps, num_objs, 
+		threads.emplace_back([&lock, &avgs, maps, num_objs, 
 				size_of_obj_in_blocks, writes_per_iteration, times, i](){
 
-				uint64_t avg =  random_write_task(maps, num_objs, 
+				auto samples = random_write_task(maps, num_objs, 
 					size_of_obj_in_blocks,
 					writes_per_iteration, 
 					times, i);
-				avgs[i] = avg;
+				lock.lock();
+				avgs.push_back(samples);
+				lock.unlock();
 
 		});
 	}
@@ -313,21 +320,15 @@ threadedTest(int numthreads, int num_objs,
 		thread.join();
 	}
 
-	uint64_t sum_avg = 0;
-	for (int i = 0; i < numthreads; i++) {
-		//printf("[Thread %d] %f\n", i, cycles_to_us(avgs[i], clock_cycles));
-		sum_avg += cycles_to_us(avgs[i], clock_cycles);
-	}
-
-	return sum_avg / numthreads;
+	return avgs;
 }
 
 
 int
 main(int argc, char *argv[])
 {
-	if (argc != 4) {
-		printf("Usage: new_objsnap <disk> <threads> <dirty_set_size>");
+	if (argc != 5) {
+		printf("Usage: new_objsnap <disk> <threads> <dirty_set_size> <numCheckpoints>");
 		return (EX_USAGE);
 	}
 
@@ -344,25 +345,45 @@ main(int argc, char *argv[])
     	}
 
 	int totaldirtyset = atoi(argv[3]);
-	int numCheckpoints = 200000;
+	int numCheckpoints = atoi(argv[4]);
 	int numthreads = atoi(argv[2]);
 	int numobjs = 1;
 	
 	int numblocks_per_obj_per_ckpt = totaldirtyset;
 	int MiB = (1024 * 1024) / BLOCKSIZE;
 	int GiB = (1024 * MiB);
+	/*
 	printf("Threads(%d), Blocksize (%lu), Total Dirty Set in Blocks (%d), Checkpoints per thread(%d), Number of objects(%d)\n",
 		numthreads, BLOCKSIZE, totaldirtyset, numCheckpoints, numobjs);
-	uint64_t before = rdtscp();	
-	uint64_t avglat = threadedTest(numthreads, numobjs, 10 * GiB, 
+	*/
+	auto samples = threadedTest(numthreads, numobjs, 10 * GiB, 
 		numblocks_per_obj_per_ckpt, numCheckpoints);
-	uint64_t after = rdtscp();
-	double change = after - before;
-	change = cycles_to_s(change, clock_cycles);
-	printf("threads(%d), Ckpts/s(%f), latency(%lu), total(%d), seconds(%f)\n", 
-		numthreads, (numCheckpoints * numthreads) / change, avglat, (numCheckpoints * numthreads), change);
+	std::vector<uint64_t> totals_lat;
+	std::vector<uint64_t> total_times;
+	for (auto &s: samples) {
+		totals_lat.insert(totals_lat.begin(), std::get<0>(s).begin(), std::get<0>(s).end());
+		total_times.push_back(std::get<1>(s));
+	}
+	
+	std::sort(totals_lat.begin(), totals_lat.end());
+	double sum = 0;
+	for (auto &s: totals_lat) {
+		sum += s;
+	}
+	double lat_ns = sum / static_cast<double>(totals_lat.size());
+	int n99 = static_cast<int>(static_cast<double>(totals_lat.size()) * 0.99);
+	uint64_t lat_99_ns = totals_lat[n99];
 
-	printstats(clock_cycles);
+	double iops = 0;
+	double goodput = 0;
+	for (auto &s : total_times) {
+		iops += (double)numCheckpoints / s;
+		goodput += ((double)numCheckpoints * (double)4) / ((double)(s) * (double)1024) ;
+
+	}
+
+	printf("objsnap, %d, %f, %f, %lu, %f", numthreads, iops, lat_ns, lat_99_ns, goodput);
+	//printstats(clock_cycles);
 
 	return (EX_OK);
 }
