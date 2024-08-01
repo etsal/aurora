@@ -187,6 +187,22 @@ int MAX_WRITERS = 12;
 struct sema wr;
 
 static void
+objsnap_wait_completion(int tid)
+{
+	const int threshold = 100000;
+	int times = 0;
+
+	for (times = 0; times < threshold; times++) {
+		if (get_msg(tid) == MSG_NONE)
+			return;
+
+		pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
+	}
+
+	printf("%s:%d excessive waiting (%ld iterations)\n", threshold);
+}
+
+static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
 	uint64_t checkpoint;
@@ -204,32 +220,26 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	OS_START(CHECKPOINT, &checkpoint);
 
-	int is_writer = sema_trywait(&wr);
-	int complete = get_msg(tid) != MSG_CHECKPOINT;
-	while (!is_writer && !complete) {
+	/* Either become a writer or wait till our write is serviced by one. */
+	while (true) {
+		/* If someone picked up our write we're done. */
+		if (get_msg(tid) != MSG_CHECKPOINT) {
+			objsnap_wait_completion(tid);
+
+			OS_STOP(CHECKPOINT, &checkpoint);
+			return;
+		}
+
+		/* Else go for a promotion. */
+		if (sema_trywait(&wr))
+			break;
+
+		/* We are neither a writer not done, wait and try again. */
 		pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
-		complete = get_msg(tid) != MSG_CHECKPOINT;
-		is_writer = sema_trywait(&wr);
 	}
 
-	if (complete) {
-		if (is_writer)
-			sema_post(&wr);
 
-		times = 0;
-		while ((get_msg(tid) != MSG_NONE) && (times < 100000))  {
-			pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
-			times++;
-		}
-
-		if (times >= 100000) {
-			printf("WHAT THE HELL!?\n");
-		}
-
-		OS_STOP(CHECKPOINT, &checkpoint);
-		return;
-	}
-
+	/* Try to checkpoint ourselves, even if we fail we're still a writer. */
 	if (set_msg(tid, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
 		mytids[size_tids++] = tid;
 		total_size = threadsets[tid].d_cnt;
@@ -309,22 +319,13 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	}
 
 	sema_post(&wr);
-	{
-		int times = 0;
-		while ((get_msg(tid) != MSG_NONE) && (times < 100000))  {
-			pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
-			times++;
-		}
 
-		if (times >= 100000) {
-			printf("WHAT THE HELL!?\n");
-		}
-	}
+	objsnap_wait_completion(tid);
+	OS_STOP(CHECKPOINT, &checkpoint);
 
 	
 
 	OS_STOP(UNLOCK, &unlock);
-	OS_STOP(CHECKPOINT, &checkpoint);
 
 	return;
 }
