@@ -61,9 +61,13 @@ super_t superblock;
 struct objsnap_vnode *vnode_cache = NULL;
 static struct dirtyset threadsets[MAXTHREADS];
 
+#define OBJSNAP_MAXUIO (16)
 
 uint64_t transaction_size = 0;
 uint64_t transaction_size_cnt = 0;
+
+int MAX_WRITERS = 12;
+struct sema wr;
 
 struct checkpoint_data {
 	struct dirtyset *cp_d;
@@ -106,49 +110,59 @@ objsnap_syncer_wait_exit(void)
 }
 
 static void
-objsnap_threadwal_flush(struct checkpoint_data *set)
+objsnap_threadwal_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
 {
+	size_t resid = BLOCKSIZE * pgcnt;
+	struct iovec aiov[16];
 	uint64_t before;
 	struct uio uio;
+	int i;
+
+	for (i = 0; i < pgcnt; i++) {
+		aiov[i].iov_base = (void *)(uintptr_t)(pgset[i].offset);
+		aiov[i].iov_len = BLOCKSIZE;
+	}
+
+	uio.uio_iov = (struct iovec *)&aiov;
+	uio.uio_iovcnt = pgcnt;
+	uio.uio_resid = resid;
+	uio.uio_segflg = UIO_USERSPACE;
+	uio.uio_rw = UIO_WRITE;
+	uio.uio_td = curthread;
+	uio.uio_offset = 0;
+
+	OS_START(VNFAULTMOVE, &before);
+	vn_io_fault_pgmove(bp->b_pages, 0, resid, &uio);
+	OS_STOP(VNFAULTMOVE, &before);
+}
+
+static void
+objsnap_threadwal_flush(struct checkpoint_data *set)
+{
 	diskptr_t ptr = set->ptr;
+	uint64_t before;
+	int pagecnt;
+
 	int left = set->cp_d->d_cnt;	
+	int pgoff = 0;
+
 	atomic_fetchadd_64(&transaction_size, left);
 	atomic_fetchadd_64(&transaction_size_cnt, 1);
-	int i = 0;
-	while (left) {
-		int pagecnt = left > 16 ? 16 : left;
-		struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
 
-		OS_START(VNFAULTMOVE, &before);
+	while (left) {
+		pagecnt = min(OBJSNAP_MAXUIO, left);
+
 		struct buf *bp = getblk(osdata.os_vp, 
 			DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE * pagecnt, 
 			0, 0, GB_UNMAPPED);
-		OS_STOP(VNFAULTMOVE, &before);
 
-		for (int t = 0; t < pagecnt; t++) {
-			struct pageset *pinfo = &set->cp_d->d_pg[i + t];
-			aiov[t].iov_base = (void *)(uintptr_t)(pinfo->offset);
-			aiov[t].iov_len = BLOCKSIZE;
-		}
-
-		i += pagecnt;
-
-		uio.uio_iov = aiov;
-		uio.uio_iovcnt = pagecnt;
-		uio.uio_resid = BLOCKSIZE * pagecnt;
-		uio.uio_segflg = UIO_USERSPACE;
-		uio.uio_rw = UIO_WRITE;
-		uio.uio_td = curthread;
-		uio.uio_offset = 0;
-
-		vn_io_fault_pgmove(bp->b_pages, 
-			0, (int)BLOCKSIZE * pagecnt, 
-			&uio);
+		objsnap_threadwal_uio(bp, &set->cp_d->d_pg[pgoff], pagecnt);
 
 		OS_START(DATAWRITE, &before);
 		bawrite(bp);
 		OS_STOP(DATAWRITE, &before);
-		free(aiov, M_OBJSNAP);
+
+		pgoff += pagecnt;
 		left -= pagecnt;
 	}
 }
@@ -170,9 +184,6 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	args->os_cnt = OS_STAT_LAST;
 	return (0);
 }
-
-int MAX_WRITERS = 12;
-struct sema wr;
 
 static void
 objsnap_wait_completion(int tid)
