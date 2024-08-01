@@ -59,19 +59,31 @@ static uint64_t global_txnid;
 
 super_t superblock;
 struct objsnap_vnode *vnode_cache = NULL;
-static struct dirtyset threadsets[MAXTHREADS];
 
+#define MAX_WRITERS (12)
+#define MAXDRTYCNT (64)
 #define OBJSNAP_MAXUIO (16)
 
+struct sema wr;
 uint64_t transaction_size = 0;
 uint64_t transaction_size_cnt = 0;
 
-int MAX_WRITERS = 12;
-struct sema wr;
+struct dirtyset {
+	int d_cnt;
+	struct pageset d_pg[MAXDRTYCNT];
+};
+
+static struct dirtyset threadsets[MAXTHREADS];
 
 struct checkpoint_data {
 	struct dirtyset *cp_d;
 	diskptr_t ptr;
+};
+
+struct __attribute__((packed)) threadcheckpoint {
+	int tckpt_cnt;	
+	uint64_t tckpt_txnid;
+	struct walptr tckpt_ptrs[MAXDRTYCNT];
 };
 
 static uint64_t global_msgs[MAXTHREADS];
@@ -259,11 +271,12 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 
 	struct threadcheckpoint tckpt;
-	tckpt.tckpt_cnt = 0;
 	struct dirtyset combined_set;
+
+	tckpt.tckpt_cnt = 0;
 	combined_set.d_cnt = 0;
 	struct checkpoint_data data;
-	KASSERT(total_size <= 15, ("Total size too large"));
+	KASSERT(total_size < OBJSNAP_MAXUIO, ("Total size too large"));
 
 	diskptr_t ptr = allocate_block(total_size);
 	for (int s = 0; s < size_tids; s++) {
@@ -286,6 +299,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	KASSERT(total_size == combined_set.d_cnt, ("total size != combined_set"));
 	KASSERT(tckpt.tckpt_cnt == combined_set.d_cnt, ("tckpt cnt != combined_set cnt"));
 	diskptr_t threadblock = allocate_threadwal();
+
 	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock.offset), 
 		BLOCKSIZE, 0, 0, 0);
 
@@ -313,8 +327,6 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	objsnap_wait_completion(tid);
 	OS_STOP(CHECKPOINT, &checkpoint);
-
-	
 
 	OS_STOP(UNLOCK, &unlock);
 

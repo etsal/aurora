@@ -81,19 +81,6 @@ struct __attribute__((packed)) walptr {
 	index_t w_offset; // Ptr to the data holding the modified page
 };
 
-
-#define MAXDRTYCNT (64)
-struct __attribute__((packed)) threadcheckpoint {
-	int tckpt_cnt;	
-	uint64_t tckpt_txnid;
-	struct walptr tckpt_ptrs[MAXDRTYCNT];
-};
-
-struct dirtyset {
-	int d_cnt;
-	struct pageset d_pg[MAXDRTYCNT];
-};
-
 enum VSTATE {
 	VNULL = 0,
 	VALID = 1,
