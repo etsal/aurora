@@ -108,7 +108,6 @@ load.sh
 sky.sk
 sls.sh
 unload.sh
-out
 index*
 *.rdb
 *.aof
