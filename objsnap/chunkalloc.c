@@ -206,6 +206,7 @@ ca_move_pick_chunk(struct chunkallocator *ca)
 	return (minch);
 }
 
+#if 0
 static int
 ca_move_pick_blocks(struct ca_chunk *ch, size_t numblocks, struct threadcheckpoint *tckptp)
 {
@@ -253,14 +254,17 @@ ca_move_pick_blocks(struct ca_chunk *ch, size_t numblocks, struct threadcheckpoi
 
 	return (0);
 }
+#endif
 
 static void
 ca_move(struct chunkallocator *ca, int numblocks)
 {
+#if 0
 	struct threadcheckpoint tckpt;
+	int i;
+#endif
 	struct ca_chunk *ch;
 	int bucket; 
-	int i;
 
 	/* Clean a chunk of blocks of the same size as the one we're allocating. */
 	bucket = determine_bucket(numblocks);
@@ -303,23 +307,25 @@ ca_move(struct chunkallocator *ca, int numblocks)
 	/* Move as many blocks as are being requested by the top-level ca_alloc call.*/
 	ch->cac_state = CH_EMPTYING;
 
+#if 0
 	ca_move_pick_blocks(ch, numblocks, &tckpt);
 
 	/* 
 	 * XXX Somehow write out the tckpt, right now we don't have a clear block-to-block
 	 * write operation - see comment and code in ca_move_pick_blocks. 
 	 */
+#endif
 
 	mtx_unlock(&ca->ca_mtx);
 
+#if 0
 	/* XXX This assumes that tckpt doesn't get clobbered by the write, ensure that's true */
 	for (i = 0; i < tckpt.tckpt_cnt; i++) {
 		/* XXX Again, this shows that we need a diskptr_t to diskptr_t operation. */
 		panic("unimplemented");
-#if 0
 		ca_free(ca, tckpt.tckpt_ptrs[i].w_offset);
-#endif
 	}
+#endif
 
 }
 
