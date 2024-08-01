@@ -105,18 +105,6 @@ objsnap_syncer_wait_exit(void)
 	}
 }
 
-static int
-objsnap_sysctl_init(void)
-{
-    //struct sysctl_oid *root;
-	return (0);
-}
-
-static void
-objsnap_sysctl_fini(void)
-{
-}
-
 static void
 objsnap_threadwal_flush(struct checkpoint_data *set)
 {
@@ -199,7 +187,7 @@ objsnap_wait_completion(int tid)
 		pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
 	}
 
-	printf("%s:%d excessive waiting (%ld iterations)\n", threshold);
+	printf("WARNING: excessive waiting (%d iterations)\n", threshold);
 }
 
 static void
@@ -210,7 +198,6 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
 	int total_size = 0;
-	int times;
 
 	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
 	if (!success) {
@@ -239,30 +226,23 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	}
 
 
+	uint64_t unlock;	
+	OS_START(UNLOCK, &unlock);
+
 	/* Try to checkpoint ourselves, even if we fail we're still a writer. */
 	if (set_msg(tid, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
 		mytids[size_tids++] = tid;
 		total_size = threadsets[tid].d_cnt;
 	}
 
-	// We need to see if we can try to combine or wait on combine
-	uint64_t unlock;	
-	OS_START(UNLOCK, &unlock);
-	for (int i = 0; i < MAXTHREADS; i++) {
-		struct dirtyset *set = &threadsets[i];
-		// We cant have more the a 64KiB write combined chunk
-		if ((total_size + set->d_cnt) > MAXDRTYCNT) {
+	for (int i = 0; i < MAXTHREADS && total_size < MAXDRTYCNT; i++) {
+		/* We can't have more the a 64KiB write combined chunk */
+		if ((total_size + threadsets[i].d_cnt) > MAXDRTYCNT)
 			continue;
-		}
 
-		success = set_msg(i, MSG_CHECKPOINTING, MSG_CHECKPOINT);
-		if (success) {
+		if (set_msg(i, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
 			mytids[size_tids++] = i;
-			total_size += set->d_cnt;
-		}
-
-		if (total_size >= MAXDRTYCNT) {
-			break;
+			total_size += threadsets[i].d_cnt;
 		}
 	}
 
