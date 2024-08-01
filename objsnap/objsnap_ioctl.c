@@ -194,7 +194,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
 	int total_size = 0;
-
+	int times;
 
 	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
 	if (!success) {
@@ -212,24 +212,11 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		is_writer = sema_trywait(&wr);
 	}
 
-	if (is_writer && complete) {
-		sema_post(&wr);
-		int times = 0;
-		while ((get_msg(tid) != MSG_NONE) && (times < 100000))  {
-			pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
-			times++;
-		}
+	if (complete) {
+		if (is_writer)
+			sema_post(&wr);
 
-		if (times >= 100000) {
-			printf("WHAT THE HELL!?\n");
-		}
-		
-		OS_STOP(CHECKPOINT, &checkpoint);
-		return;
-	}
-
-	if (!is_writer && complete) {
-		int times = 0;
+		times = 0;
 		while ((get_msg(tid) != MSG_NONE) && (times < 100000))  {
 			pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
 			times++;
