@@ -245,6 +245,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	diskptr_t walblk;
 	struct buf *bp;
 	int i, j, ind;
+	int tmptid;
 
 	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
 	if (!success) {
@@ -300,10 +301,13 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	/* Step 1: Gather all the pages we will be using out into the IO struct. */
 	for (i = 0, ind = 0; i < size_tids; i++) {
-		for (j = 0; j < tpgs[i].d_cnt; j++)
-			txn_pg.d_pg[ind++] = tpgs[i].d_pg[j];
-		tpgs[i].d_cnt = 0;
+		tmptid = mytids[i];
+
+		for (j = 0; j < tpgs[tmptid].d_cnt; j++)
+			txn_pg.d_pg[ind++] = tpgs[tmptid].d_pg[j];
+		tpgs[tmptid].d_cnt = 0;
 	}
+
 	txn_pg.d_cnt = total_size;
 	txn_pg.d_ptr = ptr;
 
