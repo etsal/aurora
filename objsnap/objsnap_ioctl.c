@@ -68,17 +68,13 @@ struct sema wr;
 uint64_t transaction_size = 0;
 uint64_t transaction_size_cnt = 0;
 
-struct thread_pagearr {
+struct thread_txn_pages {
 	int d_cnt;
 	struct pageset d_pg[MAXDRTYCNT];
+	diskptr_t d_ptr;
 };
 
-static struct thread_pagearr tpgs[MAXTHREADS];
-
-struct checkpoint_data {
-	struct thread_pagearr *cp_d;
-	diskptr_t ptr;
-};
+static struct thread_txn_pages tpgs[MAXTHREADS];
 
 struct __attribute__((packed)) ckpt_diskheader {
 	int tckpt_cnt;	
@@ -149,13 +145,13 @@ objsnap_io_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
 }
 
 static void
-objsnap_io_init(struct checkpoint_data *set)
+objsnap_io_init(struct thread_txn_pages *set)
 {
-	diskptr_t ptr = set->ptr;
+	diskptr_t ptr = set->d_ptr;
 	uint64_t before;
 	int pagecnt;
 
-	int left = set->cp_d->d_cnt;	
+	int left = set->d_cnt;	
 	int pgoff = 0;
 
 	atomic_fetchadd_64(&transaction_size, left);
@@ -168,7 +164,7 @@ objsnap_io_init(struct checkpoint_data *set)
 			DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE * pagecnt, 
 			0, 0, GB_UNMAPPED);
 
-		objsnap_io_uio(bp, &set->cp_d->d_pg[pgoff], pagecnt);
+		objsnap_io_uio(bp, &set->d_pg[pgoff], pagecnt);
 
 		OS_START(DATAWRITE, &before);
 		bawrite(bp);
@@ -271,17 +267,16 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 
 	struct ckpt_diskheader tckpt;
-	struct thread_pagearr combined_set;
+	struct thread_txn_pages combined_set;
 
 	tckpt.tckpt_cnt = 0;
 	combined_set.d_cnt = 0;
-	struct checkpoint_data data;
 	KASSERT(total_size < OBJSNAP_MAXUIO, ("Total size too large"));
 
 	diskptr_t ptr = allocate_block(total_size);
 	for (int s = 0; s < size_tids; s++) {
 		int local_tid = mytids[s];
-		struct thread_pagearr *set = &tpgs[local_tid];
+		struct thread_txn_pages *set = &tpgs[local_tid];
 		for (int t = 0; t < set->d_cnt; t++) {
 			int i = tckpt.tckpt_cnt + t;
 			tckpt.tckpt_ptrs[i].w_inode = set->d_pg[t].inode;
@@ -306,10 +301,9 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	memcpy(bp->b_data, &tckpt, sizeof(struct ckpt_diskheader));
 	bawrite(bp);
 
-	data.cp_d = &combined_set;
-	data.ptr = ptr;
+	combined_set.d_ptr = ptr;
 
-	objsnap_io_init(&data);
+	objsnap_io_init(&combined_set);
 	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock.offset), 
 		BLOCKSIZE, 0, 0, 0);
 	brelse(bp);
@@ -389,7 +383,7 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 
 	struct pageset pageinfo;
 	pageinfo.inode = inode_i;
-	struct thread_pagearr *set = &tpgs[tid];
+	struct thread_txn_pages *set = &tpgs[tid];
 	int error = 0;
 	
 	error = usrptr_to_page(addr, &pageinfo);
@@ -840,7 +834,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 
-		bzero(tpgs, sizeof(struct thread_pagearr) * MAXTHREADS);
+		bzero(tpgs, sizeof(struct thread_txn_pages) * MAXTHREADS);
 		bzero(global_msgs, sizeof(uint64_t) * MAXTHREADS);
 
 		// TODO: FOR NOW JUST SET TO ZERO, During recovery we
