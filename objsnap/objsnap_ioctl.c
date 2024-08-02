@@ -209,6 +209,31 @@ objsnap_wait_completion(int tid)
 	printf("WARNING: excessive waiting (%d iterations)\n", threshold);
 }
 
+static diskptr_t
+objsnap_wal_log(struct objsnap_txn_pages *txn_pg, size_t npages)
+{
+	struct objsnap_wal_entry we;
+	struct buf *bp;
+	diskptr_t walblk;
+	int i;
+
+	for (i = 0; i < npages; i++) {
+		we.we_ptrs[i].w_inode = txn_pg->d_pg[i].inode;
+		we.we_ptrs[i].w_index = IDX_TO_OFF(txn_pg->d_pg[i].offset);
+	}
+
+	we.we_cnt = npages;
+	we.we_txnid = get_txn_id();
+
+	walblk = objsnap_blkalloc_wal();
+	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset), BLOCKSIZE, 0, 0, 0);
+
+	memcpy(bp->b_data, &we, sizeof(struct objsnap_wal_entry));
+	bawrite(bp);
+
+	return (walblk);
+}
+
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
@@ -217,6 +242,8 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
 	int total_size = 0;
+	diskptr_t walblk;
+	struct buf *bp;
 	int i, j, ind;
 
 	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
@@ -278,26 +305,12 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		tpgs[i].d_cnt = 0;
 	}
 	txn_pg.d_cnt = total_size;
+	txn_pg.d_ptr = ptr;
+
 	KASSERT(ind == total_size, ("pgset index (%d) != total size (%d)", ind, total_size));
 
 	/* Step 2: Construct the transaction entry on the WAL. */
-	struct objsnap_wal_entry we;
-	for (i = 0; i < total_size; i++) {
-		we.we_ptrs[i].w_inode = txn_pg.d_pg[i].inode;
-		we.we_ptrs[i].w_index = IDX_TO_OFF(txn_pg.d_pg[i].offset);
-	}
-	we.we_cnt = total_size;
-	we.we_txnid = get_txn_id();
-
-	/* Step 3: Flush out the WAL entry. */
-	diskptr_t walblk = objsnap_blkalloc_wal();
-	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset),
-		BLOCKSIZE, 0, 0, 0);
-
-	memcpy(bp->b_data, &we, sizeof(struct objsnap_wal_entry));
-	bawrite(bp);
-
-	txn_pg.d_ptr = ptr;
+	walblk = objsnap_wal_log(&txn_pg, total_size);
 
 	/* Step 4: Write out out the transaction. */
 	/* XXXETSAL: Is this correct? We are flushing the WAL entry before even filling in the buffer. */
