@@ -217,6 +217,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
 	int total_size = 0;
+	int i, j, ind;
 
 	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
 	if (!success) {
@@ -254,7 +255,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		total_size = tpgs[tid].d_cnt;
 	}
 
-	for (int i = 0; i < MAXTHREADS && total_size < MAXDRTYCNT; i++) {
+	for (i = 0; i < MAXTHREADS && total_size < MAXDRTYCNT; i++) {
 		/* We can't have more the a 64KiB write combined chunk */
 		if ((total_size + tpgs[i].d_cnt) > MAXDRTYCNT)
 			continue;
@@ -265,36 +266,35 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		}
 	}
 
+	KASSERT(total_size < OBJSNAP_MAXUIO, ("total_size too large %d", total_size));
 
-	struct objsnap_wal_entry tckpt;
-	struct thread_txn_pages txn_pg;
+	struct pageset pgset[MAXDRTYCNT];
 
-	tckpt.tckpt_cnt = 0;
-	txn_pg.d_cnt = 0;
-	KASSERT(total_size < OBJSNAP_MAXUIO, ("Total size too large"));
-
-	diskptr_t ptr = allocate_block(total_size);
-	for (int s = 0; s < size_tids; s++) {
-		int local_tid = mytids[s];
-		struct thread_txn_pages *set = &tpgs[local_tid];
-		for (int t = 0; t < set->d_cnt; t++) {
-			int i = tckpt.tckpt_cnt + t;
-			tckpt.tckpt_ptrs[i].w_inode = set->d_pg[t].inode;
-			tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(set->d_pg[t].offset);
-			tckpt.tckpt_ptrs[i].w_offset = ptr.offset + t;
-			txn_pg.d_pg[i] = set->d_pg[t];
-		}
-
-		tckpt.tckpt_cnt += set->d_cnt;
-		txn_pg.d_cnt += set->d_cnt;
-		set->d_cnt = 0;
+	/* Step 1: Gather all the pages we will be using out into a single array. */
+	for (i = 0, ind = 0; i < size_tids; i++) {
+		for (j = 0; j < tpgs[i].d_cnt; j++)
+			pgset[ind++] = tpgs[i].d_pg[j];
+		tpgs[i].d_cnt = 0;
 	}
+	KASSERT(ind == total_size, ("pgset index (%d) != total size (%d)", ind, total_size));
 
+	/* Step 2: Construct the transaction entry on the WAL. */
+	struct objsnap_wal_entry tckpt;
+	diskptr_t ptr = allocate_block(total_size);
+	for (i = 0; i < total_size; i++) {
+		tckpt.tckpt_ptrs[i].w_inode = pgset[i].inode;
+		tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(pgset[i].offset);
+		tckpt.tckpt_ptrs[i].w_offset = ptr.offset + i;
+	}
+	tckpt.tckpt_cnt = total_size;
 	tckpt.tckpt_txnid = get_txn_id();
-	KASSERT(total_size == txn_pg.d_cnt, ("total size != txn_pg.d_cnt"));
-	KASSERT(tckpt.tckpt_cnt == txn_pg.d_cnt, ("tckpt.tckpt_cnt != txn_pg.d_cnt"));
-	diskptr_t walblk = objsnap_blkalloc_wal();
 
+	struct thread_txn_pages txn_pg;
+	for (i = 0; i < total_size; i++)
+		txn_pg.d_pg[i] = pgset[i];
+	txn_pg.d_cnt = total_size;
+
+	diskptr_t walblk = objsnap_blkalloc_wal();
 	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset),
 		BLOCKSIZE, 0, 0, 0);
 
