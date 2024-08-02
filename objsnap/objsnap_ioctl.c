@@ -177,8 +177,6 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	STAT_TO_ARGS(args, BTINSERT);
 	STAT_TO_ARGS(args, CHECKPOINT);
 	STAT_TO_ARGS(args, ALLOCATE);
-	printf("Transaction sizes %lu\n", transaction_size);
-	printf("Transaction sizes cnt %lu\n", transaction_size_cnt);
 	args->os_cnt = OS_STAT_LAST;
 	return (0);
 }
@@ -203,8 +201,9 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	}
 
 	OS_START(CHECKPOINT, &checkpoint);
-
-	pause_sbt("combiner wait", ( MAX_WRITERS - sema_value(&wr) )* SBT_1US, 0 ,0);
+	int wait = (MAX_WRITERS - sema_value(&wr)) / 2;
+	if (wait)
+		pause_sbt("combiner wait", wait * SBT_1US, 0 ,0);
 	int is_writer = sema_trywait(&wr);
 	int complete = get_msg(tid) != MSG_CHECKPOINT;
 	while (!is_writer && !complete) {
@@ -644,7 +643,7 @@ check_within(uint64_t s, uint64_t e, int within, int mod) {
 	return ((s + within) % mod) >= e;
 }
 
-#define WAL_SYNCER_SIZE (1024 * 64)
+#define WAL_SYNCER_SIZE (512)
 static void
 objsnap_wal_syncer(void *ctx)
 {
@@ -880,6 +879,9 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		break;
 	case MOD_UNLOAD:
+		printf("Transaction sizes %lu\n", transaction_size);
+		printf("Transaction sizes cnt %lu\n", transaction_size_cnt);
+
 		objsnap_osdata_fini();
 
 		objsnap_vncache_fini();

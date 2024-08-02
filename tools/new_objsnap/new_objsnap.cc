@@ -216,8 +216,9 @@ random_write_task(struct mapping *maps,
 	int num_objs, int size_of_obj_in_blocks, 
 	int writes_per_iteration, int times, int tid) {
 	std::vector<uint64_t> samples;
-	uint64_t throughput_start = rdtscp();	
-	for (int times_i = 0; times_i < times; times_i++) {
+	auto start_time = std::chrono::high_resolution_clock::now();
+	uint64_t txns = 0;
+	while(true) {
 		for (int w = 0; w < writes_per_iteration; w++) {
 			int obj_i = rand() % num_objs;
 			int rand_offset = rand() % size_of_obj_in_blocks;
@@ -226,13 +227,16 @@ random_write_task(struct mapping *maps,
 		uint64_t before = rdtscp();	
 		objsnap_checkpoint(tid);
 		uint64_t after = rdtscp();
-		if (times_i % 10000) {
+		if (txns % 1000) {
 			samples.push_back(cycles_to_ns(after - before, clock_cycles));
 		}
+		auto current_time = std::chrono::high_resolution_clock::now();
+		if (std::chrono::duration<double>(current_time - start_time).count() >= times) {
+			break;
+		}
+		txns += 1;
 	}
-	uint64_t throughput_end = rdtscp();	
-	auto total_time = cycles_to_s(throughput_end - throughput_start, clock_cycles);
-	return std::make_pair(samples, total_time);
+	return std::make_pair(samples, txns);
 }
 
 void
@@ -328,7 +332,7 @@ int
 main(int argc, char *argv[])
 {
 	if (argc != 5) {
-		printf("Usage: new_objsnap <disk> <threads> <dirty_set_size> <numCheckpoints>");
+		printf("Usage: new_objsnap <disk> <threads> <dirty_set_size> <runFor>");
 		return (EX_USAGE);
 	}
 
@@ -345,7 +349,7 @@ main(int argc, char *argv[])
     	}
 
 	int totaldirtyset = atoi(argv[3]);
-	int numCheckpoints = atoi(argv[4]);
+	int runFor = atoi(argv[4]);
 	int numthreads = atoi(argv[2]);
 	int numobjs = 1;
 	
@@ -357,12 +361,12 @@ main(int argc, char *argv[])
 		numthreads, BLOCKSIZE, totaldirtyset, numCheckpoints, numobjs);
 	*/
 	auto samples = threadedTest(numthreads, numobjs, 10 * GiB, 
-		numblocks_per_obj_per_ckpt, numCheckpoints);
+		numblocks_per_obj_per_ckpt, runFor);
 	std::vector<uint64_t> totals_lat;
-	std::vector<uint64_t> total_times;
+	std::vector<uint64_t> total_txns;
 	for (auto &s: samples) {
 		totals_lat.insert(totals_lat.begin(), std::get<0>(s).begin(), std::get<0>(s).end());
-		total_times.push_back(std::get<1>(s));
+		total_txns.push_back(std::get<1>(s));
 	}
 	
 	std::sort(totals_lat.begin(), totals_lat.end());
@@ -376,9 +380,9 @@ main(int argc, char *argv[])
 
 	double iops = 0;
 	double goodput = 0;
-	for (auto &s : total_times) {
-		iops += (double)numCheckpoints / s;
-		goodput += ((double)numCheckpoints * (double)4) / ((double)(s) * (double)1024) ;
+	for (auto &s : total_txns) {
+		iops += s / runFor;
+		goodput += ((double)s * (double)4) / ((double)1024) ;
 
 	}
 
