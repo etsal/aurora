@@ -68,19 +68,19 @@ struct sema wr;
 uint64_t transaction_size = 0;
 uint64_t transaction_size_cnt = 0;
 
-struct dirtyset {
+struct thread_pagearr {
 	int d_cnt;
 	struct pageset d_pg[MAXDRTYCNT];
 };
 
-static struct dirtyset threadsets[MAXTHREADS];
+static struct thread_pagearr tpgs[MAXTHREADS];
 
 struct checkpoint_data {
-	struct dirtyset *cp_d;
+	struct thread_pagearr *cp_d;
 	diskptr_t ptr;
 };
 
-struct __attribute__((packed)) threadcheckpoint {
+struct __attribute__((packed)) ckpt_diskheader {
 	int tckpt_cnt;	
 	uint64_t tckpt_txnid;
 	struct walptr tckpt_ptrs[MAXDRTYCNT];
@@ -122,7 +122,7 @@ objsnap_syncer_wait_exit(void)
 }
 
 static void
-objsnap_threadwal_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
+objsnap_io_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
 {
 	size_t resid = BLOCKSIZE * pgcnt;
 	struct iovec aiov[16];
@@ -149,7 +149,7 @@ objsnap_threadwal_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
 }
 
 static void
-objsnap_threadwal_flush(struct checkpoint_data *set)
+objsnap_io_init(struct checkpoint_data *set)
 {
 	diskptr_t ptr = set->ptr;
 	uint64_t before;
@@ -168,7 +168,7 @@ objsnap_threadwal_flush(struct checkpoint_data *set)
 			DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE * pagecnt, 
 			0, 0, GB_UNMAPPED);
 
-		objsnap_threadwal_uio(bp, &set->cp_d->d_pg[pgoff], pagecnt);
+		objsnap_io_uio(bp, &set->cp_d->d_pg[pgoff], pagecnt);
 
 		OS_START(DATAWRITE, &before);
 		bawrite(bp);
@@ -255,23 +255,23 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	/* Try to checkpoint ourselves, even if we fail we're still a writer. */
 	if (set_msg(tid, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
 		mytids[size_tids++] = tid;
-		total_size = threadsets[tid].d_cnt;
+		total_size = tpgs[tid].d_cnt;
 	}
 
 	for (int i = 0; i < MAXTHREADS && total_size < MAXDRTYCNT; i++) {
 		/* We can't have more the a 64KiB write combined chunk */
-		if ((total_size + threadsets[i].d_cnt) > MAXDRTYCNT)
+		if ((total_size + tpgs[i].d_cnt) > MAXDRTYCNT)
 			continue;
 
 		if (set_msg(i, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
 			mytids[size_tids++] = i;
-			total_size += threadsets[i].d_cnt;
+			total_size += tpgs[i].d_cnt;
 		}
 	}
 
 
-	struct threadcheckpoint tckpt;
-	struct dirtyset combined_set;
+	struct ckpt_diskheader tckpt;
+	struct thread_pagearr combined_set;
 
 	tckpt.tckpt_cnt = 0;
 	combined_set.d_cnt = 0;
@@ -281,7 +281,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	diskptr_t ptr = allocate_block(total_size);
 	for (int s = 0; s < size_tids; s++) {
 		int local_tid = mytids[s];
-		struct dirtyset *set = &threadsets[local_tid];
+		struct thread_pagearr *set = &tpgs[local_tid];
 		for (int t = 0; t < set->d_cnt; t++) {
 			int i = tckpt.tckpt_cnt + t;
 			tckpt.tckpt_ptrs[i].w_inode = set->d_pg[t].inode;
@@ -303,13 +303,13 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock.offset), 
 		BLOCKSIZE, 0, 0, 0);
 
-	memcpy(bp->b_data, &tckpt, sizeof(struct threadcheckpoint));
+	memcpy(bp->b_data, &tckpt, sizeof(struct ckpt_diskheader));
 	bawrite(bp);
 
 	data.cp_d = &combined_set;
 	data.ptr = ptr;
 
-	objsnap_threadwal_flush(&data);
+	objsnap_io_init(&data);
 	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock.offset), 
 		BLOCKSIZE, 0, 0, 0);
 	brelse(bp);
@@ -389,7 +389,7 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 
 	struct pageset pageinfo;
 	pageinfo.inode = inode_i;
-	struct dirtyset *set = &threadsets[tid];
+	struct thread_pagearr *set = &tpgs[tid];
 	int error = 0;
 	
 	error = usrptr_to_page(addr, &pageinfo);
@@ -569,7 +569,7 @@ static int
 objsnap_sync_dirtylist(int threadlist_at) 
 {
 	struct buf *bp;
-	struct threadcheckpoint set;
+	struct ckpt_diskheader set;
 	index_t inode_i[64];
 	int inode_cnt = 0;
 
@@ -583,7 +583,7 @@ objsnap_sync_dirtylist(int threadlist_at)
 		return error;
 	}
 
-	memcpy(&set, bp->b_data, sizeof(struct threadcheckpoint));
+	memcpy(&set, bp->b_data, sizeof(struct ckpt_diskheader));
 	brelse(bp);
 
 	// Create out list of inode objects
@@ -840,7 +840,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 
-		bzero(threadsets, sizeof(struct dirtyset) * MAXTHREADS);
+		bzero(tpgs, sizeof(struct thread_pagearr) * MAXTHREADS);
 		bzero(global_msgs, sizeof(uint64_t) * MAXTHREADS);
 
 		// TODO: FOR NOW JUST SET TO ZERO, During recovery we
