@@ -268,32 +268,30 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	KASSERT(total_size < OBJSNAP_MAXUIO, ("total_size too large %d", total_size));
 
-	struct pageset pgset[MAXDRTYCNT];
+	diskptr_t ptr = allocate_block(total_size);
+	struct thread_txn_pages txn_pg;
 
-	/* Step 1: Gather all the pages we will be using out into a single array. */
+	/* Step 1: Gather all the pages we will be using out into the IO struct. */
 	for (i = 0, ind = 0; i < size_tids; i++) {
 		for (j = 0; j < tpgs[i].d_cnt; j++)
-			pgset[ind++] = tpgs[i].d_pg[j];
+			txn_pg.d_pg[ind++] = tpgs[i].d_pg[j];
 		tpgs[i].d_cnt = 0;
 	}
+	txn_pg.d_cnt = total_size;
 	KASSERT(ind == total_size, ("pgset index (%d) != total size (%d)", ind, total_size));
 
 	/* Step 2: Construct the transaction entry on the WAL. */
 	struct objsnap_wal_entry tckpt;
-	diskptr_t ptr = allocate_block(total_size);
 	for (i = 0; i < total_size; i++) {
-		tckpt.tckpt_ptrs[i].w_inode = pgset[i].inode;
-		tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(pgset[i].offset);
+		tckpt.tckpt_ptrs[i].w_inode = txn_pg.d_pg[i].inode;
+		tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(txn_pg.d_pg[i].offset);
 		tckpt.tckpt_ptrs[i].w_offset = ptr.offset + i;
 	}
 	tckpt.tckpt_cnt = total_size;
 	tckpt.tckpt_txnid = get_txn_id();
 
-	struct thread_txn_pages txn_pg;
-	for (i = 0; i < total_size; i++)
-		txn_pg.d_pg[i] = pgset[i];
-	txn_pg.d_cnt = total_size;
 
+	/* Step 3: Flush out the WAL entry. */
 	diskptr_t walblk = objsnap_blkalloc_wal();
 	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset),
 		BLOCKSIZE, 0, 0, 0);
@@ -303,6 +301,8 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	txn_pg.d_ptr = ptr;
 
+	/* Step 4: Write out out the transaction. */
+	/* XXXETSAL: Is this correct? We are flushing the WAL entry before even filling in the buffer. */
 	objsnap_io_init(&txn_pg);
 
 	/*
