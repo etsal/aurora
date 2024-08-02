@@ -68,18 +68,18 @@ struct sema wr;
 uint64_t transaction_size = 0;
 uint64_t transaction_size_cnt = 0;
 
-struct thread_txn_pages {
+struct objsnap_txn_pages {
 	int d_cnt;
 	struct pageset d_pg[MAXDRTYCNT];
 	diskptr_t d_ptr;
 };
 
-static struct thread_txn_pages tpgs[MAXTHREADS];
+static struct objsnap_txn_pages tpgs[MAXTHREADS];
 
 struct __attribute__((packed)) objsnap_wal_entry {
-	int tckpt_cnt;	
-	uint64_t tckpt_txnid;
-	struct walptr tckpt_ptrs[MAXDRTYCNT];
+	int we_cnt;	
+	uint64_t we_txnid;
+	struct walptr we_ptrs[MAXDRTYCNT];
 };
 
 static uint64_t global_msgs[MAXTHREADS];
@@ -145,7 +145,7 @@ objsnap_io_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
 }
 
 static void
-objsnap_io_init(struct thread_txn_pages *set)
+objsnap_io_init(struct objsnap_txn_pages *set)
 {
 	diskptr_t ptr = set->d_ptr;
 	uint64_t before;
@@ -269,7 +269,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	KASSERT(total_size < OBJSNAP_MAXUIO, ("total_size too large %d", total_size));
 
 	diskptr_t ptr = allocate_block(total_size);
-	struct thread_txn_pages txn_pg;
+	struct objsnap_txn_pages txn_pg;
 
 	/* Step 1: Gather all the pages we will be using out into the IO struct. */
 	for (i = 0, ind = 0; i < size_tids; i++) {
@@ -281,22 +281,20 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	KASSERT(ind == total_size, ("pgset index (%d) != total size (%d)", ind, total_size));
 
 	/* Step 2: Construct the transaction entry on the WAL. */
-	struct objsnap_wal_entry tckpt;
+	struct objsnap_wal_entry we;
 	for (i = 0; i < total_size; i++) {
-		tckpt.tckpt_ptrs[i].w_inode = txn_pg.d_pg[i].inode;
-		tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(txn_pg.d_pg[i].offset);
-		tckpt.tckpt_ptrs[i].w_offset = ptr.offset + i;
+		we.we_ptrs[i].w_inode = txn_pg.d_pg[i].inode;
+		we.we_ptrs[i].w_index = IDX_TO_OFF(txn_pg.d_pg[i].offset);
 	}
-	tckpt.tckpt_cnt = total_size;
-	tckpt.tckpt_txnid = get_txn_id();
-
+	we.we_cnt = total_size;
+	we.we_txnid = get_txn_id();
 
 	/* Step 3: Flush out the WAL entry. */
 	diskptr_t walblk = objsnap_blkalloc_wal();
 	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset),
 		BLOCKSIZE, 0, 0, 0);
 
-	memcpy(bp->b_data, &tckpt, sizeof(struct objsnap_wal_entry));
+	memcpy(bp->b_data, &we, sizeof(struct objsnap_wal_entry));
 	bawrite(bp);
 
 	txn_pg.d_ptr = ptr;
@@ -388,7 +386,7 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 
 	struct pageset pageinfo;
 	pageinfo.inode = inode_i;
-	struct thread_txn_pages *set = &tpgs[tid];
+	struct objsnap_txn_pages *set = &tpgs[tid];
 	int error = 0;
 	
 	error = usrptr_to_page(addr, &pageinfo);
@@ -586,8 +584,8 @@ objsnap_sync_dirtylist(int threadlist_at)
 	brelse(bp);
 
 	// Create out list of inode objects
-	for (int i = 0; i < set.tckpt_cnt; i++) {
-		struct walptr *ptr = &set.tckpt_ptrs[i];
+	for (int i = 0; i < set.we_cnt; i++) {
+		struct walptr *ptr = &set.we_ptrs[i];
 		int found = false;
 		for (int t = 0; t < inode_cnt; t++) {
 			if (inode_i[t] == ptr->w_inode) {
@@ -607,8 +605,8 @@ objsnap_sync_dirtylist(int threadlist_at)
 		struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
 		osinode_t *inode = vnode->v_inode;
 
-		for (int t = 0; t < set.tckpt_cnt; t++) {
-			struct walptr *ptr = &set.tckpt_ptrs[t];
+		for (int t = 0; t < set.we_cnt; t++) {
+			struct walptr *ptr = &set.we_ptrs[t];
 			if (ptr->w_inode == inode_i[i]) {
 				VTREE_INSERT(&vnode->v_tree, 
 					IDX_TO_OFF(ptr->w_index) / BLOCKSIZE, &ptr->w_offset);
@@ -625,7 +623,7 @@ objsnap_sync_dirtylist(int threadlist_at)
 		inode->i_cnt = inode_cnt;
 
 		// Set our inode to the correct value
-		inode->i_version = set.tckpt_txnid;
+		inode->i_version = set.we_txnid;
 
 		// Get the sibling inode and write to that instead.
 		inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
@@ -839,7 +837,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 
-		bzero(tpgs, sizeof(struct thread_txn_pages) * MAXTHREADS);
+		bzero(tpgs, sizeof(struct objsnap_txn_pages) * MAXTHREADS);
 		bzero(global_msgs, sizeof(uint64_t) * MAXTHREADS);
 
 		// TODO: FOR NOW JUST SET TO ZERO, During recovery we
