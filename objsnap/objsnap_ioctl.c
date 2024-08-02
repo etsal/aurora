@@ -209,6 +209,48 @@ objsnap_wait_completion(int tid)
 	printf("WARNING: excessive waiting (%d iterations)\n", threshold);
 }
 
+static bool
+objsnap_wait_entry(int tid)
+{
+	/* Either become a writer or wait till our write is serviced by one. */
+	while (true) {
+		/* If someone picked up our write we're done. */
+		if (get_msg(tid) != MSG_CHECKPOINT) {
+			objsnap_wait_completion(tid);
+
+			return (true);
+		}
+
+		/* Else go for a promotion to writer. */
+		if (sema_trywait(&wr))
+			return (false);
+
+		/* We are neither a writer not done, wait and try again. */
+		pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
+	}
+}
+
+static void
+objsnap_mktxn_pages(int *mytids, size_t size_tids, size_t total_size,
+		diskptr_t ptr, struct objsnap_txn_pages *txn_pg)
+{
+	int i, j, ind;
+	int tmptid;
+
+	for (i = 0, ind = 0; i < size_tids; i++) {
+		tmptid = mytids[i];
+
+		for (j = 0; j < tpgs[tmptid].d_cnt; j++)
+			txn_pg->d_pg[ind++] = tpgs[tmptid].d_pg[j];
+		tpgs[tmptid].d_cnt = 0;
+	}
+
+	txn_pg->d_cnt = total_size;
+	txn_pg->d_ptr = ptr;
+
+	KASSERT(ind == total_size, ("pgset index (%d) != total size (%ld)", ind, total_size));
+}
+
 static diskptr_t
 objsnap_wal_log(struct objsnap_txn_pages *txn_pg, size_t npages)
 {
@@ -244,8 +286,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	int total_size = 0;
 	diskptr_t walblk;
 	struct buf *bp;
-	int i, j, ind;
-	int tmptid;
+	int i;
 
 	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
 	if (!success) {
@@ -255,24 +296,11 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	OS_START(CHECKPOINT, &checkpoint);
 
-	/* Either become a writer or wait till our write is serviced by one. */
-	while (true) {
-		/* If someone picked up our write we're done. */
-		if (get_msg(tid) != MSG_CHECKPOINT) {
-			objsnap_wait_completion(tid);
-
-			OS_STOP(CHECKPOINT, &checkpoint);
-			return;
-		}
-
-		/* Else go for a promotion. */
-		if (sema_trywait(&wr))
-			break;
-
-		/* We are neither a writer not done, wait and try again. */
-		pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
+	if (objsnap_wait_entry(tid)) {
+		/* Our write is fully serviced, we're done. */
+		OS_STOP(CHECKPOINT, &checkpoint);
+		return;
 	}
-
 
 	uint64_t unlock;	
 	OS_START(UNLOCK, &unlock);
@@ -296,27 +324,16 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	KASSERT(total_size < OBJSNAP_MAXUIO, ("total_size too large %d", total_size));
 
+	/* Step 1: Gather all the pages we will be using out into the IO struct. */
 	diskptr_t ptr = allocate_block(total_size);
 	struct objsnap_txn_pages txn_pg;
 
-	/* Step 1: Gather all the pages we will be using out into the IO struct. */
-	for (i = 0, ind = 0; i < size_tids; i++) {
-		tmptid = mytids[i];
+	objsnap_mktxn_pages((int *)mytids, size_tids, total_size, ptr, &txn_pg);
 
-		for (j = 0; j < tpgs[tmptid].d_cnt; j++)
-			txn_pg.d_pg[ind++] = tpgs[tmptid].d_pg[j];
-		tpgs[tmptid].d_cnt = 0;
-	}
-
-	txn_pg.d_cnt = total_size;
-	txn_pg.d_ptr = ptr;
-
-	KASSERT(ind == total_size, ("pgset index (%d) != total size (%d)", ind, total_size));
-
-	/* Step 2: Construct the transaction entry on the WAL. */
+	/* Step 2: Construct the transaction entry on the WAL and flush it. */
 	walblk = objsnap_wal_log(&txn_pg, total_size);
 
-	/* Step 4: Write out out the transaction. */
+	/* Step 3: Write out out the transaction. */
 	/* XXXETSAL: Is this correct? We are flushing the WAL entry before even filling in the buffer. */
 	objsnap_io_init(&txn_pg);
 
