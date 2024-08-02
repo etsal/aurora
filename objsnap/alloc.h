@@ -33,7 +33,7 @@ void allocator_destroy(void);
 int write_ondisk_inode(osinode_t *inode);
 diskptr_t allocate_block(int num);
 void free_block(diskptr_t ptr);
-diskptr_t allocate_threadwal(void);
+diskptr_t objsnap_blkalloc_wal(void);
 osinode_t *allocate_inode(void);
 
 #endif

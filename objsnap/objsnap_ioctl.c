@@ -76,7 +76,7 @@ struct thread_txn_pages {
 
 static struct thread_txn_pages tpgs[MAXTHREADS];
 
-struct __attribute__((packed)) ckpt_diskheader {
+struct __attribute__((packed)) objsnap_wal_entry {
 	int tckpt_cnt;	
 	uint64_t tckpt_txnid;
 	struct walptr tckpt_ptrs[MAXDRTYCNT];
@@ -266,11 +266,11 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	}
 
 
-	struct ckpt_diskheader tckpt;
-	struct thread_txn_pages combined_set;
+	struct objsnap_wal_entry tckpt;
+	struct thread_txn_pages txn_pg;
 
 	tckpt.tckpt_cnt = 0;
-	combined_set.d_cnt = 0;
+	txn_pg.d_cnt = 0;
 	KASSERT(total_size < OBJSNAP_MAXUIO, ("Total size too large"));
 
 	diskptr_t ptr = allocate_block(total_size);
@@ -282,29 +282,34 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 			tckpt.tckpt_ptrs[i].w_inode = set->d_pg[t].inode;
 			tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(set->d_pg[t].offset);
 			tckpt.tckpt_ptrs[i].w_offset = ptr.offset + t;
-			combined_set.d_pg[i] = set->d_pg[t];
+			txn_pg.d_pg[i] = set->d_pg[t];
 		}
 
 		tckpt.tckpt_cnt += set->d_cnt;
-		combined_set.d_cnt += set->d_cnt;
+		txn_pg.d_cnt += set->d_cnt;
 		set->d_cnt = 0;
 	}
 
 	tckpt.tckpt_txnid = get_txn_id();
-	KASSERT(total_size == combined_set.d_cnt, ("total size != combined_set"));
-	KASSERT(tckpt.tckpt_cnt == combined_set.d_cnt, ("tckpt cnt != combined_set cnt"));
-	diskptr_t threadblock = allocate_threadwal();
+	KASSERT(total_size == txn_pg.d_cnt, ("total size != txn_pg.d_cnt"));
+	KASSERT(tckpt.tckpt_cnt == txn_pg.d_cnt, ("tckpt.tckpt_cnt != txn_pg.d_cnt"));
+	diskptr_t walblk = objsnap_blkalloc_wal();
 
-	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock.offset), 
+	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset),
 		BLOCKSIZE, 0, 0, 0);
 
-	memcpy(bp->b_data, &tckpt, sizeof(struct ckpt_diskheader));
+	memcpy(bp->b_data, &tckpt, sizeof(struct objsnap_wal_entry));
 	bawrite(bp);
 
-	combined_set.d_ptr = ptr;
+	txn_pg.d_ptr = ptr;
 
-	objsnap_io_init(&combined_set);
-	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock.offset), 
+	objsnap_io_init(&txn_pg);
+
+	/*
+	 * XXXETSAL: Is this a kind of barrier? It doesn't seem to do anything apart from attempting
+	 * to page in the WAL header.
+	 */
+	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset),
 		BLOCKSIZE, 0, 0, 0);
 	brelse(bp);
 
@@ -563,7 +568,7 @@ static int
 objsnap_sync_dirtylist(int threadlist_at) 
 {
 	struct buf *bp;
-	struct ckpt_diskheader set;
+	struct objsnap_wal_entry set;
 	index_t inode_i[64];
 	int inode_cnt = 0;
 
@@ -577,7 +582,7 @@ objsnap_sync_dirtylist(int threadlist_at)
 		return error;
 	}
 
-	memcpy(&set, bp->b_data, sizeof(struct ckpt_diskheader));
+	memcpy(&set, bp->b_data, sizeof(struct objsnap_wal_entry));
 	brelse(bp);
 
 	// Create out list of inode objects

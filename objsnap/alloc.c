@@ -71,7 +71,7 @@ allocator_destroy()
 }
 
 diskptr_t
-allocate_threadwal()
+objsnap_blkalloc_wal()
 {
     int check_behind;
     diskptr_t ptr;
