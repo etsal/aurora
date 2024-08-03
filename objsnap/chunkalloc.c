@@ -15,7 +15,6 @@
 #define CA_TXNSIZE (64)
 #define CA_CRITICAL_WATERMARK (4)
 #define CA_NEEDCLEAN_RATIO (4)
-#define CA_EMEGMOVE_NUMBLOCKS (32)
 
 MALLOC_DEFINE(M_CHUNKALLOC, "Chunk allocator", "chunkalloc");
 
@@ -206,20 +205,27 @@ ca_move_pick_chunk(struct chunkallocator *ca)
 	return (minch);
 }
 
-#if 0
+struct objsnap_txn_block {
+	int d_cnt;
+	struct blockset d_blk[MAXDRTYCNT];
+	diskptr_t d_ptr;
+};
+
 static int
-ca_move_pick_blocks(struct ca_chunk *ch, size_t numblocks, struct threadcheckpoint *tckptp)
+ca_move_pick_blocks(struct ca_chunk *ch, size_t numblocks, struct objsnap_txn_block *txn)
 {
-	struct threadcheckpoint tckpt;
 	struct ca_sector *sec;
+	uint64_t offset;
 	struct txn;
+	size_t ind;
 	int i, j;
 
-	bzero(&tckpt, sizeof(tckpt));
+	bzero(txn, sizeof(*txn));
 
 	/* Find enough blocks to move. */
+	ind = 0;
 	for (i = 0; i < ch->cac_sec_max; i++) {
-		if (tckpt.tckpt_cnt == numblocks)
+		if (ind == numblocks)
 			break;
 
 		sec = &ch->cac_map[i];
@@ -231,40 +237,56 @@ ca_move_pick_blocks(struct ca_chunk *ch, size_t numblocks, struct threadcheckpoi
 			if ((sec->cas_bmap & (1ULL << j)) == 0)
 				continue;
 
-			/* 
-			 * XXX Block moves are not easy to describe here rn, because 
-			 * transactions in objsnap are described in terms of pages.
-			 * We need a block-to-block copy abstraction to be able to
-			 * move the data.
-			 */
-			panic("unimplemented");
-#if 0
 			offset = ch->cac_ptr.offset + (ch->cac_txn_size * i) + j;
-			tckpt.tckpt_ptrs[tckpt.tckpt_cnt].ptr.offset = offset;
-			tckpt.tckpt_ptrs[tckpt.tckpt_cnt].ptr.size = 1;
-			tckpt.tckpt_ptrs[tckpt.tckpt_cnt].w_inode = sec->cas_objs[i].cao_ino;
-			tckpt.tckpt_ptrs[tckpt.tckpt_cnt].w_offset = sec->cas_objs[i].cao_off;
-			tckpt.tckpt_cnt += 1;
-			KASSERT(tckpt.tckpt_cnt < MAXDRTYCNT, ("tckpt_cnt overflow"));
-#endif
+			txn->d_blk[ind].blkoff = offset;
+			txn->d_blk[ind].objoff = sec->cas_objs[j].cao_ino;
+			txn->d_blk[ind].objino = sec->cas_objs[j].cao_off;
+			ind += 1;
+
+			KASSERT(ind < MAXDRTYCNT, ("transaction too large"));
 		}
 	}
 
-	*tckptp = tckpt;
+	KASSERT(ind < MAXDRTYCNT, ("transaction too large"));
+	txn->d_cnt = ind;
 
 	return (0);
 }
-#endif
+
+static void
+ca_move_io(struct chunkallocator *ca, int numblocks, struct objsnap_txn_block *txn)
+{
+	struct buf *src, *dst;
+	int error;
+	int i;
+
+	error = ca_alloc(ca, numblocks, &txn->d_ptr);
+	KASSERT(error == 0, ("out of space"));
+
+	/* XXX Get a buffer for the new data. */
+	dst = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(txn->d_ptr.offset), BLOCKSIZE * numblocks,
+			0, 0, GB_UNMAPPED);
+	KASSERT(dst != NULL, ("failed to get buffer"));
+
+	for (i = 0; i < txn->d_cnt; i++) {
+		src = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(txn->d_blk[i].blkoff), BLOCKSIZE,
+				0, 0, GB_UNMAPPED);
+		/* XXX The actual copy. */
+		brelse(src);
+	}
+
+	bwrite(dst);
+	brelse(dst);
+}
 
 static void
 ca_move(struct chunkallocator *ca, int numblocks)
 {
-#if 0
-	struct threadcheckpoint tckpt;
-	int i;
-#endif
+	struct objsnap_txn_block txn;
 	struct ca_chunk *ch;
+	diskptr_t ptr;
 	int bucket; 
+	int i;
 
 	/* Clean a chunk of blocks of the same size as the one we're allocating. */
 	bucket = determine_bucket(numblocks);
@@ -293,39 +315,22 @@ ca_move(struct chunkallocator *ca, int numblocks)
 		}
 	}
 
-	/* 
-	 * XXX TEMPORARY MEASURE: We cannot flesh out the move path yet because we need
-	 * to implement block transactions. However, the original allocator seems to
-	 * work fine w/o the moves, because the original blocks are accidentally not freed
-	 * afterward. This means that picking out empty chunks from the old list and recycling
-	 * them into the free list is enough to support ObjSnap.
-	 */
-	mtx_unlock(&ca->ca_mtx);
-	return;
-
-
 	/* Move as many blocks as are being requested by the top-level ca_alloc call.*/
 	ch->cac_state = CH_EMPTYING;
 
-#if 0
-	ca_move_pick_blocks(ch, numblocks, &tckpt);
-
-	/* 
-	 * XXX Somehow write out the tckpt, right now we don't have a clear block-to-block
-	 * write operation - see comment and code in ca_move_pick_blocks. 
-	 */
-#endif
+	ca_move_pick_blocks(ch, numblocks, &txn);
 
 	mtx_unlock(&ca->ca_mtx);
 
-#if 0
-	/* XXX This assumes that tckpt doesn't get clobbered by the write, ensure that's true */
-	for (i = 0; i < tckpt.tckpt_cnt; i++) {
-		/* XXX Again, this shows that we need a diskptr_t to diskptr_t operation. */
-		panic("unimplemented");
-		ca_free(ca, tckpt.tckpt_ptrs[i].w_offset);
+	ca_move_io(ca, numblocks, &txn);
+
+	for (i = 0; i < txn.d_cnt; i++) {
+		ptr = (diskptr_t) {
+			.offset = txn.d_blk[i].blkoff,
+			.size = 1,
+		};
+		ca_free(ca, ptr);
 	}
-#endif
 
 }
 
