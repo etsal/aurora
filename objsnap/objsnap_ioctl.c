@@ -228,7 +228,7 @@ objsnap_wait_entry(int tid)
 }
 
 static void
-objsnap_mktxn_pages(int *mytids, size_t size_tids, struct objsnap_txn *txn_pg)
+objsnap_checkpoint_mktxn(int *mytids, size_t size_tids, struct objsnap_txn *txn_pg)
 {
 	int i, j, ind;
 	int tmptid;
@@ -356,7 +356,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	KASSERT(total_size < OBJSNAP_MAXUIO, ("total_size too large %d", total_size));
 
-	objsnap_mktxn_pages((int *)mytids, size_tids, &txn_pg);
+	objsnap_checkpoint_mktxn((int *)mytids, size_tids, &txn_pg);
 	objsnap_txn_commit(&txn_pg);
 
 	for (i = 0; i < size_tids; i++) {
