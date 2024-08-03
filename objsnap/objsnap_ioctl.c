@@ -345,8 +345,8 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	objsnap_mktxn_pages((int *)mytids, size_tids, &txn_pg);
 	objsnap_txn(&txn_pg);
 
-	for (int s = 0; s < size_tids; s++) {
-		int local_tid = mytids[s];
+	for (i = 0; i < size_tids; i++) {
+		int local_tid = mytids[i];
 		success = set_msg(local_tid, MSG_NONE, MSG_CHECKPOINTING);
 		if (!success) {
 			printf("Msg should be checkpointing for %u (%lu), i am %d, but isnt\n", 
