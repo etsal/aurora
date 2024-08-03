@@ -97,6 +97,7 @@ struct objsnap_txn {
 	diskptr_t d_ptr; /* Backing disk pointer. */
 	enum objsnap_txn_type d_type; /* Transaction data format. */
 };
+void objsnap_txn_commit(struct objsnap_txn *txn);
 
 struct __attribute__((packed)) walptr {
 	index_t w_inode; // Object being modified

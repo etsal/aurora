@@ -271,7 +271,7 @@ objsnap_wal_log(struct objsnap_txn *txn_pg, size_t npages)
 	return (walblk);
 }
 
-static void
+void
 objsnap_txn_commit(struct objsnap_txn *txn)
 {
 	diskptr_t walblk;

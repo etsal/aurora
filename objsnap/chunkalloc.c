@@ -205,14 +205,8 @@ ca_move_pick_chunk(struct chunkallocator *ca)
 	return (minch);
 }
 
-struct objsnap_txn_block {
-	int d_cnt;
-	struct blockset d_blk[MAXDRTYCNT];
-	diskptr_t d_ptr;
-};
-
 static int
-ca_move_pick_blocks(struct ca_chunk *ch, size_t numblocks, struct objsnap_txn_block *txn)
+ca_move_mktxn(struct ca_chunk *ch, size_t numblocks, struct objsnap_txn *txn)
 {
 	struct ca_sector *sec;
 	uint64_t offset;
@@ -221,6 +215,7 @@ ca_move_pick_blocks(struct ca_chunk *ch, size_t numblocks, struct objsnap_txn_bl
 	int i, j;
 
 	bzero(txn, sizeof(*txn));
+	txn->d_type = OBJTXN_BLOCK;
 
 	/* Find enough blocks to move. */
 	ind = 0;
@@ -254,7 +249,7 @@ ca_move_pick_blocks(struct ca_chunk *ch, size_t numblocks, struct objsnap_txn_bl
 }
 
 static void
-ca_move_io(struct chunkallocator *ca, int numblocks, struct objsnap_txn_block *txn)
+ca_move_io(struct chunkallocator *ca, int numblocks, struct objsnap_txn *txn)
 {
 	struct buf *src, *dst;
 	int error;
@@ -282,7 +277,7 @@ ca_move_io(struct chunkallocator *ca, int numblocks, struct objsnap_txn_block *t
 static void
 ca_move(struct chunkallocator *ca, int numblocks)
 {
-	struct objsnap_txn_block txn;
+	struct objsnap_txn txn;
 	struct ca_chunk *ch;
 	diskptr_t ptr;
 	int bucket; 
@@ -318,11 +313,11 @@ ca_move(struct chunkallocator *ca, int numblocks)
 	/* Move as many blocks as are being requested by the top-level ca_alloc call.*/
 	ch->cac_state = CH_EMPTYING;
 
-	ca_move_pick_blocks(ch, numblocks, &txn);
+	ca_move_mktxn(ch, numblocks, &txn);
 
 	mtx_unlock(&ca->ca_mtx);
 
-	ca_move_io(ca, numblocks, &txn);
+	objsnap_txn_commit(&txn);
 
 	for (i = 0; i < txn.d_cnt; i++) {
 		ptr = (diskptr_t) {
