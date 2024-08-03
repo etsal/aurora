@@ -61,7 +61,6 @@ super_t superblock;
 struct objsnap_vnode *vnode_cache = NULL;
 
 #define MAX_WRITERS (12)
-#define MAXDRTYCNT (64)
 #define OBJSNAP_MAXUIO (16)
 
 struct sema wr;
@@ -231,8 +230,7 @@ objsnap_wait_entry(int tid)
 }
 
 static void
-objsnap_mktxn_pages(int *mytids, size_t size_tids, size_t total_size,
-		diskptr_t ptr, struct objsnap_txn_pages *txn_pg)
+objsnap_mktxn_pages(int *mytids, size_t size_tids, struct objsnap_txn_pages *txn_pg)
 {
 	int i, j, ind;
 	int tmptid;
@@ -245,10 +243,7 @@ objsnap_mktxn_pages(int *mytids, size_t size_tids, size_t total_size,
 		tpgs[tmptid].d_cnt = 0;
 	}
 
-	txn_pg->d_cnt = total_size;
-	txn_pg->d_ptr = ptr;
-
-	KASSERT(ind == total_size, ("pgset index (%d) != total size (%ld)", ind, total_size));
+	txn_pg->d_cnt = ind;
 }
 
 static diskptr_t
@@ -277,15 +272,38 @@ objsnap_wal_log(struct objsnap_txn_pages *txn_pg, size_t npages)
 }
 
 static void
+objsnap_txn(struct objsnap_txn_pages *txn_pg)
+{
+	diskptr_t walblk;
+	struct buf *bp;
+
+	txn_pg->d_ptr = allocate_block(txn_pg->d_cnt);
+
+	/* Construct the transaction entry on the WAL and flush it. */
+	walblk = objsnap_wal_log(txn_pg, txn_pg->d_cnt);
+
+	/* Write out out the transaction. */
+	/* XXXETSAL: Is this correct? We are flushing the WAL entry before even filling in the buffer. */
+	objsnap_io_init(txn_pg);
+
+	/*
+	 * XXXETSAL: Is this a kind of barrier? It doesn't seem to do anything apart from attempting
+	 * to page in the WAL header.
+	 */
+	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset),
+		BLOCKSIZE, 0, 0, 0);
+	brelse(bp);
+}
+
+static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
+	struct objsnap_txn_pages txn_pg;
 	uint64_t checkpoint;
 	int tid = args->tid;
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
 	int total_size = 0;
-	diskptr_t walblk;
-	struct buf *bp;
 	int i;
 
 	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
@@ -324,26 +342,8 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	KASSERT(total_size < OBJSNAP_MAXUIO, ("total_size too large %d", total_size));
 
-	/* Step 1: Gather all the pages we will be using out into the IO struct. */
-	diskptr_t ptr = allocate_block(total_size);
-	struct objsnap_txn_pages txn_pg;
-
-	objsnap_mktxn_pages((int *)mytids, size_tids, total_size, ptr, &txn_pg);
-
-	/* Step 2: Construct the transaction entry on the WAL and flush it. */
-	walblk = objsnap_wal_log(&txn_pg, total_size);
-
-	/* Step 3: Write out out the transaction. */
-	/* XXXETSAL: Is this correct? We are flushing the WAL entry before even filling in the buffer. */
-	objsnap_io_init(&txn_pg);
-
-	/*
-	 * XXXETSAL: Is this a kind of barrier? It doesn't seem to do anything apart from attempting
-	 * to page in the WAL header.
-	 */
-	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset),
-		BLOCKSIZE, 0, 0, 0);
-	brelse(bp);
+	objsnap_mktxn_pages((int *)mytids, size_tids, &txn_pg);
+	objsnap_txn(&txn_pg);
 
 	for (int s = 0; s < size_tids; s++) {
 		int local_tid = mytids[s];
