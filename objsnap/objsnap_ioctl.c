@@ -67,13 +67,8 @@ struct sema wr;
 uint64_t transaction_size = 0;
 uint64_t transaction_size_cnt = 0;
 
-struct objsnap_txn_pages {
-	int d_cnt;
-	struct pageset d_pg[MAXDRTYCNT];
-	diskptr_t d_ptr;
-};
 
-static struct objsnap_txn_pages tpgs[MAXTHREADS];
+static struct objsnap_txn tpgs[MAXTHREADS];
 
 struct __attribute__((packed)) objsnap_wal_entry {
 	int we_cnt;	
@@ -144,7 +139,13 @@ objsnap_io_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
 }
 
 static void
-objsnap_io_init(struct objsnap_txn_pages *set)
+objsnap_io_block(struct objsnap_txn *set)
+{
+	panic("unimplemented");
+}
+
+static void
+objsnap_io_page(struct objsnap_txn *set)
 {
 	diskptr_t ptr = set->d_ptr;
 	uint64_t before;
@@ -152,9 +153,6 @@ objsnap_io_init(struct objsnap_txn_pages *set)
 
 	int left = set->d_cnt;	
 	int pgoff = 0;
-
-	atomic_fetchadd_64(&transaction_size, left);
-	atomic_fetchadd_64(&transaction_size_cnt, 1);
 
 	while (left) {
 		pagecnt = min(OBJSNAP_MAXUIO, left);
@@ -230,10 +228,12 @@ objsnap_wait_entry(int tid)
 }
 
 static void
-objsnap_mktxn_pages(int *mytids, size_t size_tids, struct objsnap_txn_pages *txn_pg)
+objsnap_mktxn_pages(int *mytids, size_t size_tids, struct objsnap_txn *txn_pg)
 {
 	int i, j, ind;
 	int tmptid;
+
+	txn_pg->d_type = OBJTXN_PAGE;
 
 	for (i = 0, ind = 0; i < size_tids; i++) {
 		tmptid = mytids[i];
@@ -247,7 +247,7 @@ objsnap_mktxn_pages(int *mytids, size_t size_tids, struct objsnap_txn_pages *txn
 }
 
 static diskptr_t
-objsnap_wal_log(struct objsnap_txn_pages *txn_pg, size_t npages)
+objsnap_wal_log(struct objsnap_txn *txn_pg, size_t npages)
 {
 	struct objsnap_wal_entry we;
 	struct buf *bp;
@@ -272,19 +272,33 @@ objsnap_wal_log(struct objsnap_txn_pages *txn_pg, size_t npages)
 }
 
 static void
-objsnap_txn(struct objsnap_txn_pages *txn_pg)
+objsnap_txn_commit(struct objsnap_txn *txn)
 {
 	diskptr_t walblk;
 	struct buf *bp;
 
-	txn_pg->d_ptr = allocate_block(txn_pg->d_cnt);
+	atomic_fetchadd_64(&transaction_size, txn->d_cnt * BLOCKSIZE);
+	atomic_fetchadd_64(&transaction_size_cnt, 1);
+
+	txn->d_ptr = allocate_block(txn->d_cnt);
 
 	/* Construct the transaction entry on the WAL and flush it. */
-	walblk = objsnap_wal_log(txn_pg, txn_pg->d_cnt);
+	walblk = objsnap_wal_log(txn, txn->d_cnt);
 
 	/* Write out out the transaction. */
 	/* XXXETSAL: Is this correct? We are flushing the WAL entry before even filling in the buffer. */
-	objsnap_io_init(txn_pg);
+	switch (txn->d_type) {
+	case OBJTXN_PAGE:
+		objsnap_io_page(txn);
+		break;
+
+	case OBJTXN_BLOCK:
+		objsnap_io_block(txn);
+		break;
+
+	default:
+		panic("invalid transaction data type %d\n", txn->d_type);
+	}
 
 	/*
 	 * XXXETSAL: Is this a kind of barrier? It doesn't seem to do anything apart from attempting
@@ -298,7 +312,7 @@ objsnap_txn(struct objsnap_txn_pages *txn_pg)
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
-	struct objsnap_txn_pages txn_pg;
+	struct objsnap_txn txn_pg;
 	uint64_t checkpoint;
 	int tid = args->tid;
 	int mytids[MAXTHREADS];
@@ -343,7 +357,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	KASSERT(total_size < OBJSNAP_MAXUIO, ("total_size too large %d", total_size));
 
 	objsnap_mktxn_pages((int *)mytids, size_tids, &txn_pg);
-	objsnap_txn(&txn_pg);
+	objsnap_txn_commit(&txn_pg);
 
 	for (i = 0; i < size_tids; i++) {
 		int local_tid = mytids[i];
@@ -420,7 +434,7 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 
 	struct pageset pageinfo;
 	pageinfo.inode = inode_i;
-	struct objsnap_txn_pages *set = &tpgs[tid];
+	struct objsnap_txn *set = &tpgs[tid];
 	int error = 0;
 	
 	error = usrptr_to_page(addr, &pageinfo);
@@ -871,7 +885,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 
-		bzero(tpgs, sizeof(struct objsnap_txn_pages) * MAXTHREADS);
+		bzero(tpgs, sizeof(struct objsnap_txn) * MAXTHREADS);
 		bzero(global_msgs, sizeof(uint64_t) * MAXTHREADS);
 
 		// TODO: FOR NOW JUST SET TO ZERO, During recovery we

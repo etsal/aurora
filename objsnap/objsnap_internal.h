@@ -75,6 +75,29 @@ struct pageset {
 	index_t inode;
 };
 
+struct blockset {
+	uint64_t blkoff; 
+	uint64_t objoff;
+	index_t objino;
+};
+
+enum objsnap_txn_type {
+	OBJTXN_PAGE,
+	OBJTXN_BLOCK,
+};
+
+#define MAXDRTYCNT (64)
+
+struct objsnap_txn {
+	int d_cnt;	/* Size of the working set in disk blocks. */
+	union {
+		struct pageset d_pg[MAXDRTYCNT];
+		struct blockset d_blk[MAXDRTYCNT];
+	};
+	diskptr_t d_ptr; /* Backing disk pointer. */
+	enum objsnap_txn_type d_type; /* Transaction data format. */
+};
+
 struct __attribute__((packed)) walptr {
 	index_t w_inode; // Object being modified
 	index_t	w_index;  // Index into the object the modification occurs
