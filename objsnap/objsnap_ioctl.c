@@ -191,7 +191,7 @@ objsnap_io_page(struct objsnap_txn *set)
 
 		/* XXX This is wrong, doesn't adjust the block offset. */
 		struct buf *bp = getblk(osdata.os_vp, 
-			DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE * pagecnt, 
+			DEVICE_BLOCK_NUM(ptr.offset + set->d_cnt - left), BLOCKSIZE * pagecnt, 
 			0, 0, GB_UNMAPPED);
 
 		objsnap_io_uio(bp, &set->d_pg[pgoff], pagecnt);
