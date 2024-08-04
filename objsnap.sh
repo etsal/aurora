@@ -26,10 +26,10 @@ else
 	DSS="$3"
 fi
 
-NUMCKPT=""
+ITERATIONS=""
 if [ -z $3 ]; then
-	NUMCKPT=$(( 200 * 1000 ))
-	echo "Number of checkpoints not specified, defaulting to $NUMCKPT"
+	ITERSIONS=$(( 10 ))
+	echo "Number of write passes on object not specified, defaulting to $ITERATIONS"
 else
 	DSS="$3"
 fi
@@ -39,6 +39,6 @@ kldload objsnap
 
 stat -x /dev/objsnap
 
-./tools/new_objsnap/new_objsnap /dev/$DISK $THREADS $DSS $NUMCKPT
+./tools/new_objsnap/new_objsnap /dev/$DISK $THREADS $DSS $ITERATIONS
 
 kldunload objsnap
