@@ -26,11 +26,19 @@ else
 	DSS="$3"
 fi
 
+NUMCKPT=""
+if [ -z $3 ]; then
+	NUMCKPT=$(( 200 * 1000 ))
+	echo "Number of checkpoints not specified, defaulting to $NUMCKPT"
+else
+	DSS="$3"
+fi
+
 kldunload objsnap > /dev/null 2> /dev/null
 kldload objsnap
 
 stat -x /dev/objsnap
 
-./tools/new_objsnap/new_objsnap /dev/$DISK $THREADS $DSS
+./tools/new_objsnap/new_objsnap /dev/$DISK $THREADS $DSS $NUMCKPT
 
 kldunload objsnap

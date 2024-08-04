@@ -241,7 +241,7 @@ static inline void
 path_unacquire(bpath_t path, int acquire_as)
 {
   for (int i = 0; i < path->p_len; i++) {
-    brelse(path->p_nodes[i].n_bp);
+    	brelse(path->p_nodes[i].n_bp);
   }
 }
 
@@ -843,7 +843,6 @@ btree_checkpoint(void* treep)
 {
   btree_t tree = (btree_t)treep;
   btree_bumpversion(treep);
-  VOP_FSYNC(tree->tr_vp, MNT_WAIT, curthread);
 
   return (tree->tr_ptr);
 }
