@@ -253,9 +253,7 @@ ca_move(struct chunkallocator *ca, int numblocks)
 {
 	struct objsnap_txn txn;
 	struct ca_chunk *ch;
-	diskptr_t ptr;
 	int bucket; 
-	int i;
 
 	/* Clean a chunk of blocks of the same size as the one we're allocating. */
 	bucket = determine_bucket(numblocks);
