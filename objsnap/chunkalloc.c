@@ -292,15 +292,6 @@ ca_move(struct chunkallocator *ca, int numblocks)
 	mtx_unlock(&ca->ca_mtx);
 
 	objsnap_txn_commit(&txn);
-
-	for (i = 0; i < txn.d_cnt; i++) {
-		ptr = (diskptr_t) {
-			.offset = txn.d_blk[i].blkoff,
-			.size = 1,
-		};
-		ca_free(ca, ptr);
-	}
-
 }
 
 static int
