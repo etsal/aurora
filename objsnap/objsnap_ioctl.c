@@ -166,8 +166,6 @@ objsnap_io_block(struct objsnap_txn *set)
 			brelse(src);
 		}
 
-		/* XXX Keep loading the buffer till it's full. */
-
 		OS_START(DATAWRITE, &before);
 		bawrite(dst);
 		OS_STOP(DATAWRITE, &before);
@@ -189,7 +187,6 @@ objsnap_io_page(struct objsnap_txn *set)
 	while (left) {
 		pagecnt = min(OBJSNAP_MAXUIO, left);
 
-		/* XXX This is wrong, doesn't adjust the block offset. */
 		struct buf *bp = getblk(osdata.os_vp, 
 			DEVICE_BLOCK_NUM(ptr.offset + set->d_cnt - left), BLOCKSIZE * pagecnt, 
 			0, 0, GB_UNMAPPED);
@@ -435,8 +432,6 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 			total_size += tpgs[i].d_cnt;
 		}
 	}
-
-	KASSERT(total_size < OBJSNAP_MAXUIO, ("total_size too large %d", total_size));
 
 	objsnap_checkpoint_mktxn((int *)mytids, size_tids, &txn_pg);
 	objsnap_txn_commit(&txn_pg);
