@@ -11,7 +11,7 @@ fi
 
 THREADS=""
 if [ -z $2 ]; then
-	THREADS="1"
+	THREADS="4"
 	echo "Thread number not specified, defaulting to $THREADS"
 else
 	THREADS="$2"
@@ -19,7 +19,7 @@ fi
 
 DSS=""
 if [ -z $3 ]; then
-	DSS=$(( 1 ))
+	DSS=$(( 16 ))
 	BYTES=$(( $DSS * 4096 ))
 	echo "Dirty set size not specified, defaulting to $DSS 4KiB blocks ($BYTES bytes)"
 else

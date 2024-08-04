@@ -25,24 +25,6 @@
 
 struct allocator alloc;
 
-static int 
-determine_bucket_max(int numblocks)
-{
-    int i = 1;
-    int shift;
-    for (shift = 0; shift <= MAXPOWEROFTWO; shift++) {
-        if (numblocks == (i << shift)) {
-            return (shift);
-        }
-
-        if (numblocks < (i << shift)) {
-            return (shift - 1);
-        }
-    }
-
-    return MAXPOWEROFTWO;
-}
-
 // We need to allocate inodes and jazz in a SSD block size (256 MB), or rather 
 // the WALs should definately be allocated serially
 void
@@ -57,7 +39,7 @@ allocator_init()
     uint32_t offset = superblock.super_max_inodes + MAX_WAL_ENTRIES + 2;
     uint32_t left = alloc.alloc_size_total_blocks - offset;
 
-    ca_init(&alloc.alloc_impl, offset, left);
+    ba_init(&alloc.alloc_impl, offset, left);
 
     alloc.alloc_base = superblock.super_max_inodes + 2;
     alloc.alloc_walptr_head = 0; 
@@ -67,7 +49,7 @@ allocator_init()
 void 
 allocator_destroy()
 {
-    ca_destroy(&alloc.alloc_impl);
+    ba_destroy(&alloc.alloc_impl);
 }
 
 diskptr_t
@@ -109,7 +91,7 @@ allocate_block(int i)
 {
     diskptr_t ptr;
     int error;
-    error = ca_alloc(&alloc.alloc_impl, i, &ptr);
+    error = ba_alloc(&alloc.alloc_impl, i, &ptr);
     if (error) {
         panic("Problem allocating!");
     }
@@ -120,7 +102,7 @@ allocate_block(int i)
 void 
 free_block(diskptr_t ptr)
 {
-    ca_free(&alloc.alloc_impl, ptr);
+    ba_free(&alloc.alloc_impl, ptr);
 }
 
 int 

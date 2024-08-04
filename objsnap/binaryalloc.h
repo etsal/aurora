@@ -25,7 +25,7 @@ struct binaryallocator {
     struct arraylist ba_flists[MAXPOWEROFTWO + 1];
 };
 
-void ba_init(struct binaryallocator *ba);
+void ba_init(struct binaryallocator *ba, uint32_t offset, uint32_t left);
 int ba_alloc(struct binaryallocator *ba, int numblocks, diskptr_t *ptr);
 void ba_free(struct binaryallocator *ba, diskptr_t tofree);
 void ba_destroy(struct binaryallocator *ba);
