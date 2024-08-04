@@ -26,12 +26,12 @@ else
 	DSS="$3"
 fi
 
-ITERATIONS=""
+RUNFOR=""
 if [ -z $4 ]; then
-	ITERATIONS=$(( 10 ))
-	echo "Number of write passes on object not specified, defaulting to $ITERATIONS"
+	RUNFOR=$(( 30 ))
+	echo "Number of write passes on object not specified, defaulting to $RUNFOR"
 else
-	DSS="$3"
+	RUNFOR="$4"
 fi
 
 kldunload objsnap > /dev/null 2> /dev/null
@@ -39,6 +39,6 @@ kldload objsnap
 
 stat -x /dev/objsnap
 
-./tools/new_objsnap/new_objsnap $DISK $THREADS $DSS $ITERATIONS
+./tools/new_objsnap/new_objsnap $DISK $THREADS $DSS $RUNFOR
 
 kldunload objsnap
