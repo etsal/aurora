@@ -249,32 +249,6 @@ ca_move_mktxn(struct ca_chunk *ch, size_t numblocks, struct objsnap_txn *txn)
 }
 
 static void
-ca_move_io(struct chunkallocator *ca, int numblocks, struct objsnap_txn *txn)
-{
-	struct buf *src, *dst;
-	int error;
-	int i;
-
-	error = ca_alloc(ca, numblocks, &txn->d_ptr);
-	KASSERT(error == 0, ("out of space"));
-
-	/* XXX Get a buffer for the new data. */
-	dst = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(txn->d_ptr.offset), BLOCKSIZE * numblocks,
-			0, 0, GB_UNMAPPED);
-	KASSERT(dst != NULL, ("failed to get buffer"));
-
-	for (i = 0; i < txn->d_cnt; i++) {
-		src = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(txn->d_blk[i].blkoff), BLOCKSIZE,
-				0, 0, GB_UNMAPPED);
-		/* XXX The actual copy. */
-		brelse(src);
-	}
-
-	bwrite(dst);
-	brelse(dst);
-}
-
-static void
 ca_move(struct chunkallocator *ca, int numblocks)
 {
 	struct objsnap_txn txn;

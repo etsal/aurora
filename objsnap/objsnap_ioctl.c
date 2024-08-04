@@ -40,7 +40,6 @@
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
 
-
 #include "objsnap_internal.h"
 #include "objsnap_ioctl.h"
 #include "alloc.h"
@@ -141,7 +140,38 @@ objsnap_io_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
 static void
 objsnap_io_block(struct objsnap_txn *set)
 {
-	panic("unimplemented");
+	diskptr_t ptr = set->d_ptr;
+	struct buf *src, *dst;
+	uint64_t before;
+	uint64_t off;
+	uint64_t ind;
+	int cnt;
+	int i;
+
+	KASSERT(set->d_type == OBJTXN_BLOCK, ("not a block transaction"));
+
+	for (ind = 0, cnt = 0; ind < set->d_cnt; ind += cnt) {
+		off = DEVICE_BLOCK_NUM(ptr.offset + ind);
+		cnt = min(MAXDRTYCNT, set->d_cnt - ind);
+
+		dst = getblk(osdata.os_vp, off, cnt * BLOCKSIZE, 
+			0, 0, GB_UNMAPPED);
+
+		for (i = 0; i < cnt; i++) {
+			src = getblk(osdata.os_vp, set->d_blk[ind + i].blkoff,
+				BLOCKSIZE, 0, 0, GB_UNMAPPED);
+
+			memcpy(dst->b_pages[i], src->b_pages[0], PAGE_SIZE);
+
+			brelse(src);
+		}
+
+		/* XXX Keep loading the buffer till it's full. */
+
+		OS_START(DATAWRITE, &before);
+		bawrite(dst);
+		OS_STOP(DATAWRITE, &before);
+	}
 }
 
 static void
@@ -154,9 +184,12 @@ objsnap_io_page(struct objsnap_txn *set)
 	int left = set->d_cnt;	
 	int pgoff = 0;
 
+	KASSERT(set->d_type == OBJTXN_PAGE, ("not a page transaction"));
+
 	while (left) {
 		pagecnt = min(OBJSNAP_MAXUIO, left);
 
+		/* XXX This is wrong, doesn't adjust the block offset. */
 		struct buf *bp = getblk(osdata.os_vp, 
 			DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE * pagecnt, 
 			0, 0, GB_UNMAPPED);
@@ -247,7 +280,7 @@ objsnap_checkpoint_mktxn(int *mytids, size_t size_tids, struct objsnap_txn *txn_
 }
 
 static diskptr_t
-objsnap_wal_log(struct objsnap_txn *txn_pg, size_t npages)
+objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 {
 	struct objsnap_wal_entry we;
 	struct buf *bp;
@@ -255,8 +288,18 @@ objsnap_wal_log(struct objsnap_txn *txn_pg, size_t npages)
 	int i;
 
 	for (i = 0; i < npages; i++) {
-		we.we_ptrs[i].w_inode = txn_pg->d_pg[i].inode;
-		we.we_ptrs[i].w_index = IDX_TO_OFF(txn_pg->d_pg[i].offset);
+		switch (txn->d_type) {
+		case OBJTXN_PAGE:
+			we.we_ptrs[i].w_inode = txn->d_pg[i].inode;
+			we.we_ptrs[i].w_index = IDX_TO_OFF(txn->d_pg[i].offset);
+			break;
+		case OBJTXN_BLOCK:
+			we.we_ptrs[i].w_inode = txn->d_blk[i].objino;
+			we.we_ptrs[i].w_index = IDX_TO_OFF(txn->d_blk[i].objoff);
+			break;
+		default:
+			panic("invalid txn type %d\n", txn->d_type);
+		}
 	}
 
 	we.we_cnt = npages;
