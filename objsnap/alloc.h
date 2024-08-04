@@ -10,8 +10,7 @@
 #include <sys/lock.h>
 #include <sys/mutex.h>
 
-
-#include "binaryalloc.h"
+#include "chunkalloc.h"
 #include "objsnap_internal.h"
 #include "objsnap_ioctl.h"
 
@@ -22,7 +21,7 @@ struct allocator {
   size_t alloc_size_total_blocks;
   size_t alloc_bsize;
   struct mtx alloc_lk;
-  struct binaryallocator alloc_impl;
+  struct chunkallocator alloc_impl;
 
   volatile size_t alloc_walptr_head;
   volatile size_t alloc_walptr_tail;
@@ -33,10 +32,9 @@ void allocator_init(void);
 void allocator_destroy(void);
     
 int write_ondisk_inode(osinode_t *inode);
-int flush(void);
 diskptr_t allocate_block(int num);
 void free_block(diskptr_t ptr);
-diskptr_t allocate_threadwal(void);
+diskptr_t objsnap_blkalloc_wal(void);
 osinode_t *allocate_inode(void);
 
 #endif

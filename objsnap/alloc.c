@@ -18,8 +18,8 @@
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
 
-#include "alloc.h"
 #include "objsnap_internal.h"
+#include "alloc.h"
 #include "vtree.h"
 #include "btree.h"
 
@@ -48,36 +48,16 @@ determine_bucket_max(int numblocks)
 void
 allocator_init()
 {
-    diskptr_t ptr;
-    size_t internalsize;
-    int bucket;
-
-	bzero(&alloc, sizeof(struct allocator));
-	alloc.alloc_size_total_blocks = superblock.super_size;
-	mtx_init(&alloc.alloc_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
-	alloc.alloc_bsize = BLOCKSIZE;
-
-    ba_init(&alloc.alloc_impl);
+    bzero(&alloc, sizeof(struct allocator));
+    alloc.alloc_size_total_blocks = superblock.super_size;
+    mtx_init(&alloc.alloc_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
+    alloc.alloc_bsize = BLOCKSIZE;
 
     // Start the offset after inodes and wal thread list
     uint32_t offset = superblock.super_max_inodes + MAX_WAL_ENTRIES + 2;
     uint32_t left = alloc.alloc_size_total_blocks - offset;
 
-    // Maximum allowed entry in the allocator
-    while (left) {
-        ptr.offset = offset;
-        bucket = determine_bucket_max(left);
-        internalsize = 1 << (bucket);
-        ptr.size = internalsize;
-
-        left -= ptr.size;
-        offset += ptr.size;
-        ba_free(&alloc.alloc_impl, ptr);
-    }
-
-    printf("Initial allocator State:\n");
-    ba_print(&alloc.alloc_impl);
-
+    ca_init(&alloc.alloc_impl, offset, left);
 
     alloc.alloc_base = superblock.super_max_inodes + 2;
     alloc.alloc_walptr_head = 0; 
@@ -87,11 +67,11 @@ allocator_init()
 void 
 allocator_destroy()
 {
-    ba_destroy(&alloc.alloc_impl);
+    ca_destroy(&alloc.alloc_impl);
 }
 
 diskptr_t
-allocate_threadwal()
+objsnap_blkalloc_wal()
 {
     uint64_t before;
     int check_behind;
@@ -128,14 +108,11 @@ diskptr_t
 allocate_block(int i)
 {
     diskptr_t ptr;
-    uint64_t before;
     int error;
-    OS_START(ALLOCATE, &before);
-    error = ba_alloc(&alloc.alloc_impl, i, &ptr);
+    error = ca_alloc(&alloc.alloc_impl, i, &ptr);
     if (error) {
         panic("Problem allocating!");
     }
-    OS_STOP(ALLOCATE, &before);
 
     return ptr;
 }
@@ -143,7 +120,7 @@ allocate_block(int i)
 void 
 free_block(diskptr_t ptr)
 {
-    ba_free(&alloc.alloc_impl, ptr);
+    ca_free(&alloc.alloc_impl, ptr);
 }
 
 int 
@@ -165,8 +142,8 @@ write_ondisk_inode(osinode_t *inode)
     return (0);
 }
 
-int 
-flush() {
+static int 
+flush(void) {
     struct buf *bp = NULL; // *nbp;
     struct bufobj *bo = &osdata.os_vp->v_bufobj;
 

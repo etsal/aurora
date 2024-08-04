@@ -7,7 +7,6 @@
 
 #define NULLDISKPTR ((diskptr_t)-1)
 #define BADINDEX ((index_t)(-1))
-#define MAXPOWEROFTWO (31)
 
 typedef struct diskptr
 {

@@ -20,7 +20,6 @@
 #include <sys/vnode.h>
 
 #include "vtree.h"
-#include "binaryalloc.h"
 
 #define BT_MAX_KEY_SIZE (8L)
 #define BT_MAX_HDR_SIZE (64L)
