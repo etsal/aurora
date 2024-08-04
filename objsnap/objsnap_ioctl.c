@@ -369,7 +369,7 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 static void
 print_stat(struct timerstat stat, uint64_t to_unit)
 {
-	printf("Timer %s: avg(%lu), cnt(%lu), sum(%lu)\n", stat.name, stat.avg / to_unit, stat_cnt, stat.sum / to_unit);
+	printf("Timer %s: avg(%lu), cnt(%lu), sum(%lu)\n", stat.name, stat.avg / to_unit, stat.cnt, stat.sum / to_unit);
 }
 
 static void
@@ -759,7 +759,7 @@ check_within(uint64_t s, uint64_t e, uint64_t within, int mod) {
 	return ((s + within) % mod) >= e;
 }
 
-#define WAL_SYNCER_SIZE (512 * WAL_SYNCER_SIZE)
+#define WAL_SYNCER_SIZE (512 * MAX_WRITERS)
 static void
 objsnap_wal_syncer(void *ctx)
 {
