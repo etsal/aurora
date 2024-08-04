@@ -48,40 +48,40 @@ determine_bucket_max(int numblocks)
 void
 allocator_init()
 {
-    diskptr_t ptr;
-    size_t internalsize;
-    int bucket;
+	diskptr_t ptr;
+	size_t internalsize;
+	int bucket;
 
 	bzero(&alloc, sizeof(struct allocator));
 	alloc.alloc_size_total_blocks = superblock.super_size;
-	mtx_init(&alloc.alloc_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
+	lockinit(&alloc.alloc_lk, 0, "Objsnap Syncer Lock", 0, 0); 
 	alloc.alloc_bsize = BLOCKSIZE;
 
-    ba_init(&alloc.alloc_impl);
+	ba_init(&alloc.alloc_impl);
 
-    // Start the offset after inodes and wal thread list
-    uint32_t offset = superblock.super_max_inodes + MAX_WAL_ENTRIES + 2;
-    uint32_t left = alloc.alloc_size_total_blocks - offset;
+	// Start the offset after inodes and wal thread list
+	uint32_t offset = superblock.super_max_inodes + MAX_WAL_ENTRIES + 2;
+	uint32_t left = alloc.alloc_size_total_blocks - offset;
 
-    // Maximum allowed entry in the allocator
-    while (left) {
-        ptr.offset = offset;
-        bucket = determine_bucket_max(left);
-        internalsize = 1 << (bucket);
-        ptr.size = internalsize;
+	// Maximum allowed entry in the allocator
+	while (left) {
+		ptr.offset = offset;
+		bucket = determine_bucket_max(left);
+		internalsize = 1 << (bucket);
+		ptr.size = internalsize;
 
-        left -= ptr.size;
-        offset += ptr.size;
-        ba_free(&alloc.alloc_impl, ptr);
-    }
+		left -= ptr.size;
+		offset += ptr.size;
+		ba_free(&alloc.alloc_impl, ptr);
+	}
 
-    printf("Initial allocator State:\n");
-    ba_print(&alloc.alloc_impl);
+	printf("Initial allocator State:\n");
+	ba_print(&alloc.alloc_impl);
 
 
-    alloc.alloc_base = superblock.super_max_inodes + 2;
-    alloc.alloc_walptr_head = 0; 
-    alloc.alloc_walptr_tail = 0;
+	alloc.alloc_base = superblock.super_max_inodes + 2;
+	alloc.alloc_walptr_head = 0; 
+	alloc.alloc_walptr_tail = 0;
 };
 
 void 
@@ -97,15 +97,15 @@ allocate_threadwal()
     int check_behind;
     diskptr_t ptr;
 
-    mtx_lock(&alloc.alloc_lk);
+    lockmgr(&alloc.alloc_lk, LK_EXCLUSIVE, 0);
     size_t curhead = alloc.alloc_walptr_head;
     size_t curtail = alloc.alloc_walptr_tail;
     check_behind = ((curhead + 1) % MAX_WAL_ENTRIES) == curtail;
     while (check_behind) {
     	OS_START(LOCKANDCOPY, &before);
-    	mtx_unlock(&alloc.alloc_lk);
+    	lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
 	pause_sbt("combiner wait", 10 * SBT_1US, 0 ,0);
-    	mtx_lock(&alloc.alloc_lk);
+    	lockmgr(&alloc.alloc_lk, LK_EXCLUSIVE, 0);
         curhead = alloc.alloc_walptr_head;
         curtail = alloc.alloc_walptr_tail;
         check_behind = ((curhead + 1) % MAX_WAL_ENTRIES) == curtail;
@@ -115,9 +115,11 @@ allocate_threadwal()
     ptr.offset = alloc.alloc_walptr_head;
     ptr.size = 1; 
 
+    /*
     alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAX_WAL_ENTRIES;
 
     mtx_unlock(&alloc.alloc_lk);
+    */
 
     ptr.offset += alloc.alloc_base;
 

@@ -21,7 +21,7 @@
 struct allocator {
   size_t alloc_size_total_blocks;
   size_t alloc_bsize;
-  struct mtx alloc_lk;
+  struct lock alloc_lk;
   struct binaryallocator alloc_impl;
 
   volatile size_t alloc_walptr_head;

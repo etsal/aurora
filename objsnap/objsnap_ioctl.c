@@ -314,6 +314,9 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		BLOCKSIZE, 0, 0, 0);
 	OS_STOP(VNFAULTMOVE, &before);
 	memcpy(bp->b_data, &tckpt, sizeof(struct threadcheckpoint));
+	atomic_store_64(&alloc.alloc_walptr_head, (alloc.alloc_walptr_head + 1) % MAX_WAL_ENTRIES);
+	lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
+
 	bwrite(bp);
 
 	data.cp_d = &combined_set;
@@ -666,8 +669,12 @@ objsnap_wal_syncer(void *ctx)
 	while (osdata.os_syncer_exit == OBJSYNC_RUNNING) {
 		mtx_unlock(&osdata.os_syncer_lk);
 
+		lockmgr(&alloc.alloc_lk, LK_SHARED, 0);
+
 		uint64_t head = atomic_load_64(&alloc.alloc_walptr_head);
 		uint64_t tail = atomic_load_64(&alloc.alloc_walptr_tail);
+		
+		lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
 		// Clear out current tail to head of Wal entrys, no need for a lock
 		// If the head ptr outpaces us we just keep staying in the while look clearing
 		// stuff out
