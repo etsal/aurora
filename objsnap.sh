@@ -27,8 +27,8 @@ else
 fi
 
 ITERATIONS=""
-if [ -z $3 ]; then
-	ITERSIONS=$(( 10 ))
+if [ -z $4 ]; then
+	ITERATIONS=$(( 10 ))
 	echo "Number of write passes on object not specified, defaulting to $ITERATIONS"
 else
 	DSS="$3"
@@ -39,6 +39,6 @@ kldload objsnap
 
 stat -x /dev/objsnap
 
-./tools/new_objsnap/new_objsnap /dev/$DISK $THREADS $DSS $ITERATIONS
+./tools/new_objsnap/new_objsnap $DISK $THREADS $DSS $ITERATIONS
 
 kldunload objsnap
