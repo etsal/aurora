@@ -287,6 +287,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 {
 	struct objsnap_wal_entry we;
 	struct buf *bp;
+	uint64_t before;
 	diskptr_t walblk;
 	int i;
 
@@ -309,7 +310,10 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 	we.we_txnid = get_txn_id();
 
 	walblk = objsnap_blkalloc_wal();
+	OS_START(VNFAULTMOVE, &before);
+	BACKOFF();
 	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset), BLOCKSIZE, 0, 0, 0);
+	OS_STOP(VNFAULTMOVE, &before);
 
 	memcpy(bp->b_data, &we, sizeof(struct objsnap_wal_entry));
 	bawrite(bp);
@@ -322,11 +326,14 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 {
 	diskptr_t walblk;
 	struct buf *bp;
+	uint64_t before;
 
 	atomic_fetchadd_64(&transaction_size, txn->d_cnt * BLOCKSIZE);
 	atomic_fetchadd_64(&transaction_size_cnt, 1);
 
+	OS_START(ALLOCATE, &before);
 	txn->d_ptr = allocate_block(txn->d_cnt);
+	OS_STOP(ALLOCATE, &before);
 
 	/* Construct the transaction entry on the WAL and flush it. */
 	walblk = objsnap_wal_log(txn, txn->d_cnt);
@@ -350,9 +357,38 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 	 * XXXETSAL: Is this a kind of barrier? It doesn't seem to do anything apart from attempting
 	 * to page in the WAL header.
 	 */
+	OS_START(VNFAULTMOVE, &before);
+	BACKOFF();
 	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset),
 		BLOCKSIZE, 0, 0, 0);
+	OS_STOP(VNFAULTMOVE, &before);
+
 	brelse(bp);
+}
+
+static void
+print_stat(struct timerstat stat, uint64_t to_unit)
+{
+	printf("Timer %s: avg(%lu), cnt(%lu), sum(%lu)\n", stat.name, stat.avg / to_unit, stat_cnt, stat.sum / to_unit);
+}
+
+static void
+objsnap_printstats(void)
+{
+	uint64_t before = rdtscp();
+	pause_sbt("combiner wait", SBT_1US, 0, 0);
+	uint64_t per_us = rdtscp() - before;
+	per_us = 1;
+	print_stat(OS_TOSTAT_LOCKANDCOPY(), per_us);
+	print_stat(OS_TOSTAT_DATAWRITE(), per_us);
+	print_stat(OS_TOSTAT_UNLOCK(), per_us);
+	print_stat(OS_TOSTAT_VNFAULTMOVE(), per_us);
+	print_stat(OS_TOSTAT_INODE(), per_us);
+	print_stat(OS_TOSTAT_BTFIND(), per_us);
+	print_stat(OS_TOSTAT_BTCOW(), per_us);
+	print_stat(OS_TOSTAT_BTINSERT(), per_us);
+	print_stat(OS_TOSTAT_CHECKPOINT(), per_us);
+	print_stat(OS_TOSTAT_ALLOCATE(), per_us);
 }
 
 static void
@@ -661,7 +697,6 @@ objsnap_sync_dirtylist(int threadlist_at, index_t inode_i[], int *inode_cnt)
 {
 	struct buf *bp;
 	struct objsnap_wal_entry set;
-	int start = *inode_cnt;
 
 	int error;
 
@@ -695,7 +730,7 @@ objsnap_sync_dirtylist(int threadlist_at, index_t inode_i[], int *inode_cnt)
 	// We now go through every write it owns and update the tree
 	uint64_t before;
 	OS_START(INODE, &before);
-	for (int i = start; i < *inode_cnt; i++) {
+	for (int i = 0; i < *inode_cnt; i++) {
 		// Grab our vnode
 		struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
 
@@ -709,13 +744,12 @@ objsnap_sync_dirtylist(int threadlist_at, index_t inode_i[], int *inode_cnt)
 
 	}
 
-	
-	OS_STOP(INODE, &before);
+	OS_STOP_SAMPLE(INODE, &before, 1000);
 	return (0);
 }
 
 static int
-check_within(uint64_t s, uint64_t e, int within, int mod) {
+check_within(uint64_t s, uint64_t e, uint64_t within, int mod) {
 	if (e == s) {
 		return (1);
 	}
@@ -725,10 +759,11 @@ check_within(uint64_t s, uint64_t e, int within, int mod) {
 	return ((s + within) % mod) >= e;
 }
 
-#define WAL_SYNCER_SIZE (512)
+#define WAL_SYNCER_SIZE (512 * WAL_SYNCER_SIZE)
 static void
 objsnap_wal_syncer(void *ctx)
 {
+	index_t inode_i[256];
 	mtx_lock(&osdata.os_syncer_lk);
 	while (osdata.os_syncer_exit == OBJSYNC_RUNNING) {
 		mtx_unlock(&osdata.os_syncer_lk);
@@ -737,7 +772,6 @@ objsnap_wal_syncer(void *ctx)
 		// If the head ptr outpaces us we just keep staying in the while look clearing
 		// stuff out
 		if (!check_within(alloc.alloc_walptr_tail, alloc.alloc_walptr_head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
-			index_t inode_i[256];
 			int inode_cnt = 0;
 			for (int i = alloc.alloc_walptr_tail; i < alloc.alloc_walptr_tail + WAL_SYNCER_SIZE; i++ ) {
 				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES) + alloc.alloc_base, inode_i, &inode_cnt);
@@ -963,6 +997,8 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	case MOD_UNLOAD:
 		printf("Transaction sizes %lu\n", transaction_size);
 		printf("Transaction sizes cnt %lu\n", transaction_size_cnt);
+
+		objsnap_printstats();
 
 		objsnap_osdata_fini();
 

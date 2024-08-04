@@ -108,14 +108,11 @@ diskptr_t
 allocate_block(int i)
 {
     diskptr_t ptr;
-    uint64_t before;
     int error;
-    OS_START(ALLOCATE, &before);
     error = ca_alloc(&alloc.alloc_impl, i, &ptr);
     if (error) {
         panic("Problem allocating!");
     }
-    OS_STOP(ALLOCATE, &before);
 
     return ptr;
 }
