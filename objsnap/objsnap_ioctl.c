@@ -266,7 +266,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	struct dirtyset combined_set;
 	combined_set.d_cnt = 0;
 	struct checkpoint_data data;
-	KASSERT(total_size <= 15, ("Total size too large"));
+	KASSERT(total_size <= MAXDRTYCNT, ("Total size too large"));
 
 	diskptr_t ptr = allocate_block(total_size);
 	for (int s = 0; s < size_tids; s++) {
