@@ -10,6 +10,8 @@ if [ -z $DISK ]; then
 fi
 
 
+zpool destroy test 2> /dev/null
+umount /testmnt 2> /dev/null
 kldunload objsnap > /dev/null 2> /dev/null
 
 kldload objsnap/objsnap.ko
