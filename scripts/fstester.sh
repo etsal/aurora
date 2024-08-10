@@ -16,13 +16,14 @@ run() {
 	grep -v 'nvd0' /tmp/gstat.out > /tmp/temp
 	grep -v 'tps' /tmp/temp > /tmp/gstat.out
 	throughput_mib=$(cat /tmp/gstat.out | tail -n +2 | awk '{ sum += $3} END { print sum }')
+	disk_iops=$(cat /tmp/gstat.out | tail -n +2 | awk '{ sum += $2 } END { print sum }')
 	iops=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write iops)
 	lat_ns=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write clat_ns mean)
 	lat_99=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write clat_ns percentile string:99.000000)
 	iokbytes=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write clat_ns percentile string:99.000000)
 	goodput_kib=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write io_kbytes)
 	goodput_mib=$(expr $goodput_kib / 1024)
-	echo "$3, $i, $iops, $lat_ns, $lat_99, $goodput_mib, $throughput_mib" >> "$2"
+	echo "$3, $i, $iops, $lat_ns, $lat_99, $goodput_mib, $throughput_mib, $disk_iops" >> "$2"
 }
 
 test_zfs() {
@@ -71,19 +72,20 @@ test_objsnap() {
 		grep -v 'tps' /tmp/temp > /tmp/gstat.out
 		lines=$(wc -l /tmp/gstat.out | awk '{ print $1}')
 		throughput_mbs=$(cat /tmp/gstat.out | tail -n +2 | awk '{ sum += $3 } END { print sum }')
+		disk_iops=$(cat /tmp/gstat.out | tail -n +2 | awk '{ sum += $2 } END { print sum }')
 		rm /tmp/temp
 
 		exec 3< backingfile
 		rm backingfile
 
-		echo "$(cat <&3), $throughput_mbs" >> "$2"
+		echo "$(cat <&3), $throughput_mbs, $disk_iops" >> "$2"
 	done
 }
 
 
 OUT="out"
 truncate -s 0 "$OUT"
-echo "fs, num_threads, iops, lat_ns, lat_99_ns, goodput_mib, throughput_mib," >> "$OUT"
+echo "fs,num_threads,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib," >> "$OUT"
 test_objsnap 24 "$OUT"
 test_zfs 24 "$OUT"
 test_ffs 24 "$OUT"

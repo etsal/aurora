@@ -8,7 +8,7 @@ from matplotlib.ticker import MultipleLocator
 df = pd.read_csv(sys.argv[1])
 
 fses = ["objsnap", "ffs", "zfs"]
-plots = [" iops", " lat_ns", " lat_99_ns"]
+plots = ["iops", "lat_ns", "lat_99_ns"]
 threads = [ t for t in range(1, df[df["fs"] == "objsnap"].shape[0] + 1) ]
 for p in plots:
     fig, ax = plt.subplots()
@@ -19,8 +19,8 @@ for p in plots:
 
 fig, ax = plt.subplots()
 for fs in fses:
-    good = df[df["fs"] == fs][" goodput_mib"]
-    throughput = df[df["fs"] == fs][" throughput_mib"]
+    good = df[df["fs"] == fs]["goodput_mib"]
+    throughput = df[df["fs"] == fs]["throughput_mib"]
     total = throughput / good
     ax.plot(threads, total.tolist(), label=fs)
     ax.set_ylim(0, 7)
