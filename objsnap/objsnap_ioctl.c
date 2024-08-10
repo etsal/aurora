@@ -96,23 +96,6 @@ set_msg(int tid, uint64_t msg, uint64_t expected)
 	return atomic_fcmpset_64(dst, &expected, msg);
 }
 
-static void
-objsnap_syncer_trigger_exit(void)
-{
-	osdata.os_syncer_exit = OBJSYNC_EXITING;
-	wakeup(&osdata);
-}
-	
-static void
-objsnap_syncer_wait_exit(void)
-{
-	while(osdata.os_syncer_exit != OBJSYNC_EXITED) {
-		mtx_lock(&osdata.os_syncer_lk);
-		msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-exit-wait", SBT_1MS, 0, C_HARDCLOCK);
-		mtx_unlock(&osdata.os_syncer_lk);
-	}
-}
-
 static int
 objsnap_sysctl_init(void)
 {
@@ -550,9 +533,7 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 
 	case OBJSNAP_INIT:
 		objsnap_init((struct objsnap_init_args *)data);
-		sema_init(&wr, MAX_WRITERS, "writers_sema");
 
-		mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
 		/* XXXETSAL Handle errors during syncer initialization. */
 		objsnap_osdata_init_syncer();
 
@@ -666,6 +647,8 @@ objsnap_wal_syncer(void *ctx)
 {
 	index_t inode_i[32];
 	mtx_lock(&osdata.os_syncer_lk);
+	osdata.os_syncer_exit = OBJSYNC_RUNNING;
+
 	while (osdata.os_syncer_exit == OBJSYNC_RUNNING) {
 		mtx_unlock(&osdata.os_syncer_lk);
 
@@ -789,12 +772,8 @@ objsnap_osdata_init_syncer(void)
 	error = kthread_add((void (*)(void *))objsnap_wal_syncer, &osdata, NULL,
 		&osdata.os_syncertd, 0, 0, "objsnap wal syncer");
 
-	if (error != 0) {
+	if (error != 0)
 		printf("Syncer could not start");
-
-		mtx_destroy(&osdata.os_syncer_lk);
-		bzero(&osdata.os_syncer_lk, sizeof(osdata.os_syncer_lk));
-	}
 
 	return (error);
 }
@@ -802,11 +781,21 @@ objsnap_osdata_init_syncer(void)
 static void
 objsnap_osdata_fini_syncer(void)
 {
-	osdata.os_syncer_exit = OBJSYNC_EXITING;
-	objsnap_syncer_trigger_exit();
-	objsnap_syncer_wait_exit();
+
+	mtx_lock(&osdata.os_syncer_lk);
+	if (osdata.os_syncer_exit != OBJSYNC_UNINIT) {
+		osdata.os_syncer_exit = OBJSYNC_EXITING;
+		wakeup(&osdata);
+
+		while(osdata.os_syncer_exit != OBJSYNC_EXITED)
+			msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-exit-wait", SBT_1MS, 0, C_HARDCLOCK);
+	}
+
+	mtx_unlock(&osdata.os_syncer_lk);
 
 	mtx_destroy(&osdata.os_syncer_lk);
+	sema_destroy(&wr);
+
 	bzero(&osdata.os_syncer_lk, sizeof(osdata.os_syncer_lk));
 }
 
@@ -816,11 +805,13 @@ objsnap_osdata_init(void)
 	int error;
 	bzero(&osdata, sizeof(osdata));
 
+	mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
+	sema_init(&wr, MAX_WRITERS, "writers_sema");
+
 	osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
 		taskqueue_thread_enqueue, &osdata.os_tq);
 
 	taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
-
 	
 	/* Make the SLS available to userspace. */
 	error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
@@ -911,9 +902,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		allocator_destroy();
 
-		sema_destroy(&wr);
-
-    	break;
+    		break;
 	default:
 		error = EOPNOTSUPP;
 		break;

@@ -50,6 +50,7 @@
 #define OS_STOP(name, before) do {ctstop(OS_STAT_GET_##name(), before); } while(0)
 
 enum objsync_state {
+	OBJSYNC_UNINIT = 0,
 	OBJSYNC_RUNNING,
 	OBJSYNC_EXITING,
 	OBJSYNC_EXITED,
