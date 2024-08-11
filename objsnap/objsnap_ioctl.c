@@ -289,7 +289,7 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	tckpt.tckpt_txnid = get_txn_id();
 	KASSERT(total_size == combined_set.d_cnt, ("total size != combined_set"));
 	KASSERT(tckpt.tckpt_cnt == combined_set.d_cnt, ("tckpt cnt != combined_set cnt"));
-	diskptr_t threadblock = allocate_threadwal();
+	diskptr_t threadblock = objsnap_blkalloc_wal();
 
 	uint64_t before;
 	struct buf *bp = NULL;
