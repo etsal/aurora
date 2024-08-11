@@ -51,6 +51,8 @@
 #define MSG_FORCED (0xFUL)
 #define MSG_MASK (0x3UL)
 
+static int objsnap_osdata_init_syncer(void);
+
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
 
 struct objsnap_metadata osdata;
@@ -91,23 +93,6 @@ set_msg(int tid, uint64_t msg, uint64_t expected)
 {
 	uint64_t *dst = &global_msgs[tid];
 	return atomic_fcmpset_64(dst, &expected, msg);
-}
-
-static void
-objsnap_syncer_trigger_exit(void)
-{
-	osdata.os_syncer_exit = OBJSYNC_EXITING;
-	wakeup(&osdata);
-}
-	
-static void
-objsnap_syncer_wait_exit(void)
-{
-	while(osdata.os_syncer_exit != OBJSYNC_EXITED) {
-		mtx_lock(&osdata.os_syncer_lk);
-		msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-exit-wait", SBT_1MS, 0, C_HARDCLOCK);
-		mtx_unlock(&osdata.os_syncer_lk);
-	}
 }
 
 static void
@@ -655,6 +640,10 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 		objsnap_init((struct objsnap_init_args *)data);
 		sema_init(&wr, MAX_WRITERS, "writers_sema");
 		// We did not create the FS!
+
+		/* XXXETSAL Handle errors during syncer initialization. */
+		objsnap_osdata_init_syncer();
+
 		if (superblock.super_bsize == 0) {
 			error = -1;
 		}
@@ -694,6 +683,7 @@ objsnap_sync_dirtylist(int threadlist_at, index_t inode_i[], int *inode_cnt)
 {
 	struct buf *bp;
 	struct objsnap_wal_entry set;
+	int start = *inode_cnt;
 
 	int error;
 
@@ -727,7 +717,7 @@ objsnap_sync_dirtylist(int threadlist_at, index_t inode_i[], int *inode_cnt)
 	// We now go through every write it owns and update the tree
 	uint64_t before;
 	OS_START(INODE, &before);
-	for (int i = 0; i < *inode_cnt; i++) {
+	for (int i = start; i < *inode_cnt; i++) {
 		// Grab our vnode
 		struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
 
@@ -741,12 +731,12 @@ objsnap_sync_dirtylist(int threadlist_at, index_t inode_i[], int *inode_cnt)
 
 	}
 
-	OS_STOP_SAMPLE(INODE, &before, 1000);
+	OS_STOP(INODE, &before);
 	return (0);
 }
 
 static int
-check_within(uint64_t s, uint64_t e, uint64_t within, int mod) {
+check_within(uint64_t s, uint64_t e, int within, int mod) {
 	if (e == s) {
 		return (1);
 	}
@@ -755,22 +745,32 @@ check_within(uint64_t s, uint64_t e, uint64_t within, int mod) {
 	}
 	return ((s + within) % mod) >= e;
 }
+ 
 
-#define WAL_SYNCER_SIZE (512 * MAX_WRITERS)
+#define WAL_SYNCER_SIZE (512)
 static void
 objsnap_wal_syncer(void *ctx)
 {
-	index_t inode_i[256];
+	index_t inode_i[32];
 	mtx_lock(&osdata.os_syncer_lk);
+	osdata.os_syncer_exit = OBJSYNC_RUNNING;
+
 	while (osdata.os_syncer_exit == OBJSYNC_RUNNING) {
 		mtx_unlock(&osdata.os_syncer_lk);
+
+		lockmgr(&alloc.alloc_lk, LK_SHARED, 0);
+
+		uint64_t head = atomic_load_64(&alloc.alloc_walptr_head);
+		uint64_t tail = atomic_load_64(&alloc.alloc_walptr_tail);
+		
+		lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
 
 		// Clear out current tail to head of Wal entrys, no need for a lock
 		// If the head ptr outpaces us we just keep staying in the while look clearing
 		// stuff out
-		if (!check_within(alloc.alloc_walptr_tail, alloc.alloc_walptr_head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+		if (!check_within(head, tail, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
 			int inode_cnt = 0;
-			for (int i = alloc.alloc_walptr_tail; i < alloc.alloc_walptr_tail + WAL_SYNCER_SIZE; i++ ) {
+			for (int i = head; i < (tail + WAL_SYNCER_SIZE); i++ ) {
 				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES) + alloc.alloc_base, inode_i, &inode_cnt);
 			}
 			for (int i = 0; i < inode_cnt; i++) {
@@ -791,7 +791,6 @@ objsnap_wal_syncer(void *ctx)
 				
 				// During inserting we likely COW faulted which means we need to update our treeptr;
 				inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
-				VTREE_CHECKPOINT(&vnode->v_tree);
 
 				if (write_ondisk_inode(inode)) {
 					printf("Issue writing inode!\n");
@@ -817,12 +816,16 @@ objsnap_wal_syncer(void *ctx)
 			}
 
   			VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
-			alloc.alloc_walptr_tail = (alloc.alloc_walptr_tail + WAL_SYNCER_SIZE) % MAX_WAL_ENTRIES;
+			atomic_store_64(&alloc.alloc_walptr_tail, (alloc.alloc_walptr_tail + WAL_SYNCER_SIZE) % MAX_WAL_ENTRIES);
 		}
+
+		head = atomic_load_64(&alloc.alloc_walptr_head);
+		tail = atomic_load_64(&alloc.alloc_walptr_tail);
+		if (check_within(head, tail, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+			pause_sbt("Sync-wait", SBT_1US * 10, 0, C_HARDCLOCK);
+		}
+
 		mtx_lock(&osdata.os_syncer_lk);
-		if (check_within(alloc.alloc_walptr_tail, alloc.alloc_walptr_head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) 
-			msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-wait", SBT_1US * 10, 0,
-				C_HARDCLOCK);
 	}
 
 	osdata.os_syncer_exit = OBJSYNC_EXITED;
@@ -872,17 +875,11 @@ objsnap_osdata_init_syncer(void)
 {
 	int error;
 
-	mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
-
 	error = kthread_add((void (*)(void *))objsnap_wal_syncer, &osdata, NULL,
 		&osdata.os_syncertd, 0, 0, "objsnap wal syncer");
 
-	if (error != 0) {
+	if (error != 0)
 		printf("Syncer could not start");
-
-		mtx_destroy(&osdata.os_syncer_lk);
-		bzero(&osdata.os_syncer_lk, sizeof(osdata.os_syncer_lk));
-	}
 
 	return (error);
 }
@@ -890,11 +887,18 @@ objsnap_osdata_init_syncer(void)
 static void
 objsnap_osdata_fini_syncer(void)
 {
-	osdata.os_syncer_exit = OBJSYNC_EXITING;
-	objsnap_syncer_trigger_exit();
-	objsnap_syncer_wait_exit();
+	mtx_lock(&osdata.os_syncer_lk);
+	if (osdata.os_syncer_exit != OBJSYNC_UNINIT) {
+		osdata.os_syncer_exit = OBJSYNC_EXITING;
+		wakeup(&osdata);
 
+		while(osdata.os_syncer_exit != OBJSYNC_EXITED)
+			msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-exit-wait", SBT_1MS, 0, C_HARDCLOCK);
+	}
+
+	mtx_unlock(&osdata.os_syncer_lk);
 	mtx_destroy(&osdata.os_syncer_lk);
+	sema_destroy(&wr);
 	bzero(&osdata.os_syncer_lk, sizeof(osdata.os_syncer_lk));
 }
 
@@ -904,13 +908,13 @@ objsnap_osdata_init(void)
 	int error;
 	bzero(&osdata, sizeof(osdata));
 
+	mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
+	sema_init(&wr, MAX_WRITERS, "writers_sema");
+
 	osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
 		taskqueue_thread_enqueue, &osdata.os_tq);
 
 	taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
-
-	/* XXXETSAL Handle errors during syncer initialization. */
-	objsnap_osdata_init_syncer();
 
 	/* Make the SLS available to userspace. */
 	error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
@@ -995,17 +999,13 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		printf("Transaction sizes %lu\n", transaction_size);
 		printf("Transaction sizes cnt %lu\n", transaction_size_cnt);
 
-		objsnap_printstats();
-
 		objsnap_osdata_fini();
 
 		objsnap_vncache_fini();
 
 		allocator_destroy();
 
-		sema_destroy(&wr);
-
-    	break;
+    		break;
 	default:
 		error = EOPNOTSUPP;
 		break;
