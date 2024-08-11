@@ -144,12 +144,12 @@ struct timerstat {
   uint64_t sum;
 };
 
-static inline __attribute__((always_inline)) void 
+static inline __attribute__((always_inline, unused)) void 
 ctstart(struct cycletimer *ct, uint64_t *b) {
   *b = rdtscp();
 }
 
-static inline __attribute__((always_inline)) void 
+static inline __attribute__((always_inline, unused)) void 
 ctstop(struct cycletimer *ct, uint64_t *before) {
 #ifdef _KERNEL
   atomic_fetchadd_64(&ct->ct_sum, rdtscp() - *before);
