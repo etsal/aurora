@@ -110,6 +110,21 @@ struct objsnap_vnode {
 	enum VSTATE v_state;
 };
 
+#define MAXPOWEROFTWO (31)
+static inline int 
+determine_bucket(int numblocks)
+{
+    int i = 1;
+    int shift;
+    for (shift = 0; shift <= MAXPOWEROFTWO; shift++) {
+        if (numblocks <= (i << shift)) {
+            return (shift);
+        }
+    }
+
+    panic("Bucket could not be determined %d", numblocks);
+}
+
 
 extern struct objsnap_metadata osdata;
 extern struct allocator alloc;

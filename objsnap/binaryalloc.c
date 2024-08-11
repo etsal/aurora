@@ -93,20 +93,6 @@ ba_destroy(struct binaryallocator *ba)
 }
 
 static int 
-determine_bucket(int numblocks)
-{
-    int i = 1;
-    int shift;
-    for (shift = 0; shift <= MAXPOWEROFTWO; shift++) {
-        if (numblocks <= (i << shift)) {
-            return (shift);
-        }
-    }
-
-    panic("Bucket could not be determined %d", numblocks);
-}
-
-static int 
 allocate_from_bucket(struct arraylist *f, diskptr_t *ptr)
 {
     if (f->cnt) {
