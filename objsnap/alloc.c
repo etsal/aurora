@@ -19,6 +19,7 @@
 #include <geom/geom_vfs.h>
 
 #include "objsnap_internal.h"
+#include "arraylist.h"
 #include "alloc.h"
 #include "vtree.h"
 #include "btree.h"
