@@ -18,62 +18,28 @@
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
 
-#include "alloc.h"
 #include "objsnap_internal.h"
+#include "alloc.h"
 #include "vtree.h"
 #include "btree.h"
 
 struct allocator alloc;
-
-static int 
-determine_bucket_max(int numblocks)
-{
-    int i = 1;
-    int shift;
-    for (shift = 0; shift <= MAXPOWEROFTWO; shift++) {
-        if (numblocks == (i << shift)) {
-            return (shift);
-        }
-
-        if (numblocks < (i << shift)) {
-            return (shift - 1);
-        }
-    }
-
-    return MAXPOWEROFTWO;
-}
 
 // We need to allocate inodes and jazz in a SSD block size (256 MB), or rather 
 // the WALs should definately be allocated serially
 void
 allocator_init()
 {
-	diskptr_t ptr;
-	size_t internalsize;
-	int bucket;
-
 	bzero(&alloc, sizeof(struct allocator));
 	alloc.alloc_size_total_blocks = superblock.super_size;
 	lockinit(&alloc.alloc_lk, 0, "Objsnap Syncer Lock", 0, 0); 
 	alloc.alloc_bsize = BLOCKSIZE;
 
-	ba_init(&alloc.alloc_impl);
-
 	// Start the offset after inodes and wal thread list
 	uint32_t offset = superblock.super_max_inodes + MAX_WAL_ENTRIES + 2;
 	uint32_t left = alloc.alloc_size_total_blocks - offset;
 
-	// Maximum allowed entry in the allocator
-	while (left) {
-		ptr.offset = offset;
-		bucket = determine_bucket_max(left);
-		internalsize = 1 << (bucket);
-		ptr.size = internalsize;
-
-		left -= ptr.size;
-		offset += ptr.size;
-		ba_free(&alloc.alloc_impl, ptr);
-	}
+	ba_init(&alloc.alloc_impl, offset, left);
 
 	printf("Initial allocator State:\n");
 	ba_print(&alloc.alloc_impl);
