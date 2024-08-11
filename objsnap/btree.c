@@ -12,6 +12,7 @@
 #include <sys/bufobj.h>
 
 #include "objsnap_internal.h"
+#include "arraylist.h"
 #include "binaryalloc.h"
 #include "btree.h"
 #include "alloc.h"

@@ -22,7 +22,6 @@
 
 #include "objsnap_ioctl.h"
 #include "vtree.h"
-#include "binaryalloc.h"
 
 
 #define OBJMAGIC (0xdeadbeef)

@@ -43,6 +43,7 @@
 
 #include "objsnap_internal.h"
 #include "objsnap_ioctl.h"
+#include "arraylist.h"
 #include "alloc.h"
 #include "btree.h"
 
