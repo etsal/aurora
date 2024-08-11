@@ -128,3 +128,5 @@ __pycache__
 sls/opt_global.h
 metropolis/opt_global.h
 objsnap/opt_global.h
+out
+objsnap/i386

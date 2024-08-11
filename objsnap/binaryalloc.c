@@ -17,6 +17,7 @@
 
 #include "objsnap_internal.h"
 
+#include "alloc.h"
 #include "binaryalloc.h"
 
 MALLOC_DEFINE(M_ARRAY, "Array allocator", "array allocator");
@@ -35,15 +36,50 @@ ba_print(struct binaryallocator *ba)
     }
 }
 
-void 
-ba_init(struct binaryallocator *ba)
+static int 
+determine_bucket_max(int numblocks)
 {
-    struct arraylist *f;
-	mtx_init(&ba->ba_lock, "Binary allocator Lock", NULL, MTX_DEF);
-    for (int i = 0; i < (MAXPOWEROFTWO + 1); i++) {
-        f = &ba->ba_flists[i];
-        initlist(f, INITLISTSIZE);
+    int i = 1;
+    int shift;
+    for (shift = 0; shift <= MAXPOWEROFTWO; shift++) {
+        if (numblocks == (i << shift)) {
+            return (shift);
+        }
+
+        if (numblocks < (i << shift)) {
+            return (shift - 1);
+        }
     }
+
+    return MAXPOWEROFTWO;
+}
+
+void 
+ba_init(struct binaryallocator *ba, uint32_t offset, uint32_t left)
+{
+	diskptr_t ptr;
+	size_t internalsize;
+	int bucket;
+
+    	struct arraylist *f;
+	mtx_init(&ba->ba_lock, "Binary allocator Lock", NULL, MTX_DEF);
+
+	for (int i = 0; i < (MAXPOWEROFTWO + 1); i++) {
+		f = &ba->ba_flists[i];
+		initlist(f, INITLISTSIZE);
+	}
+
+	// Maximum allowed entry in the allocator
+	while (left) {
+		ptr.offset = offset;
+		bucket = determine_bucket_max(left);
+		internalsize = 1 << (bucket);
+		ptr.size = internalsize;
+
+		left -= ptr.size;
+		offset += ptr.size;
+		ba_free(&alloc.alloc_impl, ptr);
+	}
 }
 
 void 
