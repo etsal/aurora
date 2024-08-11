@@ -1,6 +1,5 @@
 #ifndef _OBJSNAP_INTERNAL_H_
 #define _OBJSNAP_INTERNAL_H_
-
 #include <sys/param.h>
 #include <sys/bitstring.h>
 #include <sys/condvar.h>
@@ -21,8 +20,8 @@
 #include <vm/vm_object.h>
 
 #include "objsnap_ioctl.h"
+#include "arraylist.h"
 #include "vtree.h"
-
 
 #define OBJMAGIC (0xdeadbeef)
 #define MAXTHREADS (64)
@@ -47,9 +46,15 @@
 
 #define OS_START(name, before) do { ctstart(OS_STAT_GET_##name(), before); } while(0)
 #define OS_STOP(name, before) do {ctstop(OS_STAT_GET_##name(), before); } while(0)
+#define OS_STOP_SAMPLE(name, before, sample) do { if ((*before % sample) == 0) ctstop(OS_STAT_GET_##name(), before); } while(0)
+#define BACKOFF() \
+       do { \
+               for (int i = 0; i < 10; i++) \
+                       __asm__ volatile ("pause" ::: ); \
+       } while(0)
+
 
 enum objsync_state {
-	OBJSYNC_UNINIT = 0,
 	OBJSYNC_RUNNING,
 	OBJSYNC_EXITING,
 	OBJSYNC_EXITED,
@@ -77,23 +82,34 @@ struct pageset {
 	index_t inode;
 };
 
+struct blockset {
+	uint64_t blkoff; 
+	uint64_t objoff;
+	index_t objino;
+};
+
+enum objsnap_txn_type {
+	OBJTXN_PAGE,
+	OBJTXN_BLOCK,
+};
+
+#define MAXDRTYCNT (64)
+
+struct objsnap_txn {
+	int d_cnt;	/* Size of the working set in disk blocks. */
+	union {
+		struct pageset d_pg[MAXDRTYCNT];
+		struct blockset d_blk[MAXDRTYCNT];
+	};
+	diskptr_t d_ptr; /* Backing disk pointer. */
+	enum objsnap_txn_type d_type; /* Transaction data format. */
+};
+void objsnap_txn_commit(struct objsnap_txn *txn);
+
 struct __attribute__((packed)) walptr {
 	index_t w_inode; // Object being modified
 	index_t	w_index;  // Index into the object the modification occurs
 	index_t w_offset; // Ptr to the data holding the modified page
-};
-
-
-#define MAXDRTYCNT (64)
-struct __attribute__((packed)) threadcheckpoint {
-	int tckpt_cnt;	
-	uint64_t tckpt_txnid;
-	struct walptr tckpt_ptrs[MAXDRTYCNT];
-};
-
-struct dirtyset {
-	int d_cnt;
-	struct pageset d_pg[MAXDRTYCNT];
 };
 
 enum VSTATE {

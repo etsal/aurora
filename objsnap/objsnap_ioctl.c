@@ -40,10 +40,8 @@
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
 
-
 #include "objsnap_internal.h"
 #include "objsnap_ioctl.h"
-#include "arraylist.h"
 #include "alloc.h"
 #include "btree.h"
 
@@ -52,14 +50,6 @@
 #define MSG_CHECKPOINTING (0x2UL)
 #define MSG_FORCED (0xFUL)
 #define MSG_MASK (0x3UL)
-#define BACKOFF() \
-	do { \
-		for (int i = 0; i < 10; i++) \
-			__asm__ volatile ("pause" :::); \
-	} while(0)
-
-
-static int objsnap_osdata_init_syncer(void);
 
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
 
@@ -68,15 +58,21 @@ static uint64_t global_txnid;
 
 super_t superblock;
 struct objsnap_vnode *vnode_cache = NULL;
-static struct dirtyset threadsets[MAXTHREADS];
 
+#define MAX_WRITERS (24)
+#define OBJSNAP_MAXUIO (16)
 
+struct sema wr;
 uint64_t transaction_size = 0;
 uint64_t transaction_size_cnt = 0;
 
-struct checkpoint_data {
-	struct dirtyset *cp_d;
-	diskptr_t ptr;
+
+static struct objsnap_txn tpgs[MAXTHREADS];
+
+struct __attribute__((packed)) objsnap_wal_entry {
+	int we_cnt;	
+	uint64_t we_txnid;
+	struct walptr we_ptrs[MAXDRTYCNT];
 };
 
 static uint64_t global_msgs[MAXTHREADS];
@@ -97,62 +93,111 @@ set_msg(int tid, uint64_t msg, uint64_t expected)
 	return atomic_fcmpset_64(dst, &expected, msg);
 }
 
-static int
-objsnap_sysctl_init(void)
+static void
+objsnap_syncer_trigger_exit(void)
 {
-    //struct sysctl_oid *root;
-	return (0);
+	osdata.os_syncer_exit = OBJSYNC_EXITING;
+	wakeup(&osdata);
+}
+	
+static void
+objsnap_syncer_wait_exit(void)
+{
+	while(osdata.os_syncer_exit != OBJSYNC_EXITED) {
+		mtx_lock(&osdata.os_syncer_lk);
+		msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-exit-wait", SBT_1MS, 0, C_HARDCLOCK);
+		mtx_unlock(&osdata.os_syncer_lk);
+	}
 }
 
 static void
-objsnap_sysctl_fini(void)
+objsnap_io_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
 {
-}
-
-static void
-objsnap_threadwal_flush(struct checkpoint_data *set)
-{
+	size_t resid = BLOCKSIZE * pgcnt;
+	struct iovec aiov[16];
 	uint64_t before;
 	struct uio uio;
-	diskptr_t ptr = set->ptr;
-	int left = set->cp_d->d_cnt;	
-	atomic_fetchadd_64(&transaction_size, left);
-	atomic_fetchadd_64(&transaction_size_cnt, 1);
-	int i = 0;
-	while (left) {
-		int pagecnt = left > 16 ? 16 : left;
-		struct iovec *aiov = malloc(sizeof(struct iovec) * pagecnt , M_OBJSNAP, M_WAITOK);
+	int i;
 
-		OS_START(VNFAULTMOVE, &before);
-		struct buf *bp = getblk(osdata.os_vp, 
-			DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE * pagecnt, 
+	for (i = 0; i < pgcnt; i++) {
+		aiov[i].iov_base = (void *)(uintptr_t)(pgset[i].offset);
+		aiov[i].iov_len = BLOCKSIZE;
+	}
+
+	uio.uio_iov = (struct iovec *)&aiov;
+	uio.uio_iovcnt = pgcnt;
+	uio.uio_resid = resid;
+	uio.uio_segflg = UIO_USERSPACE;
+	uio.uio_rw = UIO_WRITE;
+	uio.uio_td = curthread;
+	uio.uio_offset = 0;
+
+	OS_START(VNFAULTMOVE, &before);
+	vn_io_fault_pgmove(bp->b_pages, 0, resid, &uio);
+	OS_STOP(VNFAULTMOVE, &before);
+}
+
+static void
+objsnap_io_block(struct objsnap_txn *set)
+{
+	diskptr_t ptr = set->d_ptr;
+	struct buf *src, *dst;
+	uint64_t before;
+	uint64_t off;
+	uint64_t ind;
+	int cnt;
+	int i;
+
+	KASSERT(set->d_type == OBJTXN_BLOCK, ("not a block transaction"));
+
+	for (ind = 0, cnt = 0; ind < set->d_cnt; ind += cnt) {
+		off = DEVICE_BLOCK_NUM(ptr.offset + ind);
+		cnt = min(MAXDRTYCNT, set->d_cnt - ind);
+
+		dst = getblk(osdata.os_vp, off, cnt * BLOCKSIZE, 
 			0, 0, GB_UNMAPPED);
-		OS_STOP(VNFAULTMOVE, &before);
 
-		for (int t = 0; t < pagecnt; t++) {
-			struct pageset *pinfo = &set->cp_d->d_pg[i + t];
-			aiov[t].iov_base = (void *)(uintptr_t)(pinfo->offset);
-			aiov[t].iov_len = BLOCKSIZE;
+		for (i = 0; i < cnt; i++) {
+			src = getblk(osdata.os_vp, set->d_blk[ind + i].blkoff,
+				BLOCKSIZE, 0, 0, GB_UNMAPPED);
+
+			memcpy(dst->b_pages[i], src->b_pages[0], PAGE_SIZE);
+
+			brelse(src);
 		}
 
-		i += pagecnt;
+		OS_START(DATAWRITE, &before);
+		bawrite(dst);
+		OS_STOP(DATAWRITE, &before);
+	}
+}
 
-		uio.uio_iov = aiov;
-		uio.uio_iovcnt = pagecnt;
-		uio.uio_resid = BLOCKSIZE * pagecnt;
-		uio.uio_segflg = UIO_USERSPACE;
-		uio.uio_rw = UIO_WRITE;
-		uio.uio_td = curthread;
-		uio.uio_offset = 0;
+static void
+objsnap_io_page(struct objsnap_txn *set)
+{
+	diskptr_t ptr = set->d_ptr;
+	uint64_t before;
+	int pagecnt;
 
-		vn_io_fault_pgmove(bp->b_pages, 
-			0, (int)BLOCKSIZE * pagecnt, 
-			&uio);
+	int left = set->d_cnt;	
+	int pgoff = 0;
+
+	KASSERT(set->d_type == OBJTXN_PAGE, ("not a page transaction"));
+
+	while (left) {
+		pagecnt = min(OBJSNAP_MAXUIO, left);
+
+		struct buf *bp = getblk(osdata.os_vp, 
+			DEVICE_BLOCK_NUM(ptr.offset + set->d_cnt - left), BLOCKSIZE * pagecnt, 
+			0, 0, GB_UNMAPPED);
+
+		objsnap_io_uio(bp, &set->d_pg[pgoff], pagecnt);
 
 		OS_START(DATAWRITE, &before);
-		bwrite(bp);
+		bawrite(bp);
 		OS_STOP(DATAWRITE, &before);
-		free(aiov, M_OBJSNAP);
+
+		pgoff += pagecnt;
 		left -= pagecnt;
 	}
 }
@@ -173,17 +218,188 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	return (0);
 }
 
-int MAX_WRITERS = 24;
-struct sema wr;
+static void
+objsnap_wait_completion(int tid)
+{
+	const int threshold = 100000;
+	int times = 0;
+
+	for (times = 0; times < threshold; times++) {
+		if (get_msg(tid) == MSG_NONE)
+			return;
+
+		pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
+	}
+
+	printf("WARNING: excessive waiting (%d iterations)\n", threshold);
+}
+
+static bool
+objsnap_wait_entry(int tid)
+{
+	int wait = (MAX_WRITERS - sema_value(&wr)) / 2;
+
+	if (wait > 0)
+		pause_sbt("combiner wait", wait * SBT_1US, 0 ,0);
+
+	/* Either become a writer or wait till our write is serviced by one. */
+	while (true) {
+		/* If someone picked up our write we're done. */
+		if (get_msg(tid) != MSG_CHECKPOINT) {
+			objsnap_wait_completion(tid);
+
+			return (true);
+		}
+
+		/* Else go for a promotion to writer. */
+		if (sema_trywait(&wr))
+			return (false);
+
+		/* We are neither a writer not done, wait and try again. */
+		pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
+	}
+}
+
+static void
+objsnap_checkpoint_mktxn(int *mytids, size_t size_tids, struct objsnap_txn *txn_pg)
+{
+	int i, j, ind;
+	int tmptid;
+
+	txn_pg->d_type = OBJTXN_PAGE;
+
+	for (i = 0, ind = 0; i < size_tids; i++) {
+		tmptid = mytids[i];
+
+		for (j = 0; j < tpgs[tmptid].d_cnt; j++)
+			txn_pg->d_pg[ind++] = tpgs[tmptid].d_pg[j];
+		tpgs[tmptid].d_cnt = 0;
+	}
+
+	txn_pg->d_cnt = ind;
+}
+
+static diskptr_t
+objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
+{
+	struct objsnap_wal_entry we;
+	struct buf *bp;
+	uint64_t before;
+	diskptr_t walblk;
+	int i;
+
+	for (i = 0; i < npages; i++) {
+		switch (txn->d_type) {
+		case OBJTXN_PAGE:
+			we.we_ptrs[i].w_inode = txn->d_pg[i].inode;
+			we.we_ptrs[i].w_index = IDX_TO_OFF(txn->d_pg[i].offset);
+			break;
+		case OBJTXN_BLOCK:
+			we.we_ptrs[i].w_inode = txn->d_blk[i].objino;
+			we.we_ptrs[i].w_index = IDX_TO_OFF(txn->d_blk[i].objoff);
+			break;
+		default:
+			panic("invalid txn type %d\n", txn->d_type);
+		}
+	}
+
+	we.we_cnt = npages;
+	we.we_txnid = get_txn_id();
+
+	walblk = objsnap_blkalloc_wal();
+	OS_START(VNFAULTMOVE, &before);
+	BACKOFF();
+	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset), BLOCKSIZE, 0, 0, 0);
+	OS_STOP(VNFAULTMOVE, &before);
+
+	memcpy(bp->b_data, &we, sizeof(struct objsnap_wal_entry));
+	bawrite(bp);
+
+	return (walblk);
+}
+
+void
+objsnap_txn_commit(struct objsnap_txn *txn)
+{
+	diskptr_t walblk;
+	struct buf *bp;
+	uint64_t before;
+
+	atomic_fetchadd_64(&transaction_size, txn->d_cnt * BLOCKSIZE);
+	atomic_fetchadd_64(&transaction_size_cnt, 1);
+
+	OS_START(ALLOCATE, &before);
+	txn->d_ptr = allocate_block(txn->d_cnt);
+	OS_STOP(ALLOCATE, &before);
+
+	/* Construct the transaction entry on the WAL and flush it. */
+	walblk = objsnap_wal_log(txn, txn->d_cnt);
+
+	/* Write out out the transaction. */
+	/* XXXETSAL: Is this correct? We are flushing the WAL entry before even filling in the buffer. */
+	switch (txn->d_type) {
+	case OBJTXN_PAGE:
+		objsnap_io_page(txn);
+		break;
+
+	case OBJTXN_BLOCK:
+		objsnap_io_block(txn);
+		break;
+
+	default:
+		panic("invalid transaction data type %d\n", txn->d_type);
+	}
+
+	/*
+	 * XXXETSAL: Is this a kind of barrier? It doesn't seem to do anything apart from attempting
+	 * to page in the WAL header.
+	 */
+	OS_START(VNFAULTMOVE, &before);
+	BACKOFF();
+	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset),
+		BLOCKSIZE, 0, 0, 0);
+	OS_STOP(VNFAULTMOVE, &before);
+
+    	lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
+
+	brelse(bp);
+}
+
+static void
+print_stat(struct timerstat stat, uint64_t to_unit)
+{
+	printf("Timer %s: avg(%lu), cnt(%lu), sum(%lu)\n", stat.name, stat.avg / to_unit, stat.cnt, stat.sum / to_unit);
+}
+
+static void
+objsnap_printstats(void)
+{
+	uint64_t before = rdtscp();
+	pause_sbt("combiner wait", SBT_1US, 0, 0);
+	uint64_t per_us = rdtscp() - before;
+	per_us = 1;
+	print_stat(OS_TOSTAT_LOCKANDCOPY(), per_us);
+	print_stat(OS_TOSTAT_DATAWRITE(), per_us);
+	print_stat(OS_TOSTAT_UNLOCK(), per_us);
+	print_stat(OS_TOSTAT_VNFAULTMOVE(), per_us);
+	print_stat(OS_TOSTAT_INODE(), per_us);
+	print_stat(OS_TOSTAT_BTFIND(), per_us);
+	print_stat(OS_TOSTAT_BTCOW(), per_us);
+	print_stat(OS_TOSTAT_BTINSERT(), per_us);
+	print_stat(OS_TOSTAT_CHECKPOINT(), per_us);
+	print_stat(OS_TOSTAT_ALLOCATE(), per_us);
+}
 
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
+	struct objsnap_txn txn_pg;
 	uint64_t checkpoint;
 	int tid = args->tid;
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
 	int total_size = 0;
+	int i;
 
 	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
 	if (!success) {
@@ -192,124 +408,38 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	}
 
 	OS_START(CHECKPOINT, &checkpoint);
-	int wait = (MAX_WRITERS - sema_value(&wr)) / 2;
-	if (wait)
-		pause_sbt("combiner wait", wait * SBT_1US, 0 ,0);
-	int is_writer = sema_trywait(&wr);
-	int complete = get_msg(tid) != MSG_CHECKPOINT;
 
-	while (!is_writer && !complete) {
-		pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
-		complete = get_msg(tid) != MSG_CHECKPOINT;
-		is_writer = sema_trywait(&wr);
-	}
-
-	if (is_writer && complete) {
-		sema_post(&wr);
-		int times = 0;
-		while ((get_msg(tid) != MSG_NONE) && (times < 100000))  {
-			pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
-			times++;
-		}
-
-		if (times >= 100000) {
-			printf("WHAT THE HELL!?\n");
-		}
-		
+	if (objsnap_wait_entry(tid)) {
+		/* Our write is fully serviced, we're done. */
 		OS_STOP(CHECKPOINT, &checkpoint);
 		return;
 	}
 
-	if (!is_writer && complete) {
-		int times = 0;
-		while ((get_msg(tid) != MSG_NONE) && (times < 100000))  {
-			pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
-			times++;
-		}
-
-		if (times >= 100000) {
-			printf("WHAT THE HELL!?\n");
-		}
-
-		OS_STOP(CHECKPOINT, &checkpoint);
-		return;
-	}
-
-	if (set_msg(tid, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
-		mytids[size_tids++] = tid;
-		total_size = threadsets[tid].d_cnt;
-	}
-
-	// We need to see if we can try to combine or wait on combine
 	uint64_t unlock;	
 	OS_START(UNLOCK, &unlock);
-	for (int i = 0; i < MAXTHREADS; i++) {
-		struct dirtyset *set = &threadsets[i];
-		// We cant have more the a 64KiB write combined chunk
-		if ((total_size + set->d_cnt) > MAXDRTYCNT) {
+
+	/* Try to checkpoint ourselves, even if we fail we're still a writer. */
+	if (set_msg(tid, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
+		mytids[size_tids++] = tid;
+		total_size = tpgs[tid].d_cnt;
+	}
+
+	for (i = 0; i < MAXTHREADS && total_size < MAXDRTYCNT; i++) {
+		/* We can't have more the a 64KiB write combined chunk */
+		if ((total_size + tpgs[i].d_cnt) > MAXDRTYCNT)
 			continue;
-		}
 
-		success = set_msg(i, MSG_CHECKPOINTING, MSG_CHECKPOINT);
-		if (success) {
+		if (set_msg(i, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
 			mytids[size_tids++] = i;
-			total_size += set->d_cnt;
-		}
-
-		if (total_size >= MAXDRTYCNT) {
-			break;
+			total_size += tpgs[i].d_cnt;
 		}
 	}
 
+	objsnap_checkpoint_mktxn((int *)mytids, size_tids, &txn_pg);
+	objsnap_txn_commit(&txn_pg);
 
-	struct threadcheckpoint tckpt;
-	tckpt.tckpt_cnt = 0;
-	struct dirtyset combined_set;
-	combined_set.d_cnt = 0;
-	struct checkpoint_data data;
-	KASSERT(total_size <= MAXDRTYCNT, ("Total size too large"));
-
-	diskptr_t ptr = allocate_block(total_size);
-	for (int s = 0; s < size_tids; s++) {
-		int local_tid = mytids[s];
-		struct dirtyset *set = &threadsets[local_tid];
-		for (int t = 0; t < set->d_cnt; t++) {
-			int i = tckpt.tckpt_cnt + t;
-			tckpt.tckpt_ptrs[i].w_inode = set->d_pg[t].inode;
-			tckpt.tckpt_ptrs[i].w_index = IDX_TO_OFF(set->d_pg[t].offset);
-			tckpt.tckpt_ptrs[i].w_offset = ptr.offset + t;
-			combined_set.d_pg[i] = set->d_pg[t];
-		}
-
-		tckpt.tckpt_cnt += set->d_cnt;
-		combined_set.d_cnt += set->d_cnt;
-		set->d_cnt = 0;
-	}
-
-	tckpt.tckpt_txnid = get_txn_id();
-	KASSERT(total_size == combined_set.d_cnt, ("total size != combined_set"));
-	KASSERT(tckpt.tckpt_cnt == combined_set.d_cnt, ("tckpt cnt != combined_set cnt"));
-	diskptr_t threadblock = objsnap_blkalloc_wal();
-
-	uint64_t before;
-	struct buf *bp = NULL;
-	OS_START(VNFAULTMOVE, &before);
-	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(threadblock.offset), 
-		BLOCKSIZE, 0, 0, 0);
-	OS_STOP(VNFAULTMOVE, &before);
-	memcpy(bp->b_data, &tckpt, sizeof(struct threadcheckpoint));
-	atomic_store_64(&alloc.alloc_walptr_head, (alloc.alloc_walptr_head + 1) % MAX_WAL_ENTRIES);
-	lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
-
-	bwrite(bp);
-
-	data.cp_d = &combined_set;
-	data.ptr = ptr;
-
-	objsnap_threadwal_flush(&data);
-
-	for (int s = 0; s < size_tids; s++) {
-		int local_tid = mytids[s];
+	for (i = 0; i < size_tids; i++) {
+		int local_tid = mytids[i];
 		success = set_msg(local_tid, MSG_NONE, MSG_CHECKPOINTING);
 		if (!success) {
 			printf("Msg should be checkpointing for %u (%lu), i am %d, but isnt\n", 
@@ -318,22 +448,11 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	}
 
 	sema_post(&wr);
-	{
-		int times = 0;
-		while ((get_msg(tid) != MSG_NONE) && (times < 100000))  {
-			pause_sbt("combiner wait", 1 * SBT_1US, 0 ,0);
-			times++;
-		}
 
-		if (times >= 100000) {
-			printf("WHAT THE HELL!?\n");
-		}
-	}
-
-	
+	objsnap_wait_completion(tid);
+	OS_STOP(CHECKPOINT, &checkpoint);
 
 	OS_STOP(UNLOCK, &unlock);
-	OS_STOP(CHECKPOINT, &checkpoint);
 
 	return;
 }
@@ -394,7 +513,7 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 
 	struct pageset pageinfo;
 	pageinfo.inode = inode_i;
-	struct dirtyset *set = &threadsets[tid];
+	struct objsnap_txn *set = &tpgs[tid];
 	int error = 0;
 	
 	error = usrptr_to_page(addr, &pageinfo);
@@ -534,10 +653,7 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 
 	case OBJSNAP_INIT:
 		objsnap_init((struct objsnap_init_args *)data);
-
-		/* XXXETSAL Handle errors during syncer initialization. */
-		objsnap_osdata_init_syncer();
-
+		sema_init(&wr, MAX_WRITERS, "writers_sema");
 		// We did not create the FS!
 		if (superblock.super_bsize == 0) {
 			error = -1;
@@ -577,8 +693,7 @@ static int
 objsnap_sync_dirtylist(int threadlist_at, index_t inode_i[], int *inode_cnt) 
 {
 	struct buf *bp;
-	struct threadcheckpoint set;
-	int start = *inode_cnt;
+	struct objsnap_wal_entry set;
 
 	int error;
 
@@ -590,12 +705,12 @@ objsnap_sync_dirtylist(int threadlist_at, index_t inode_i[], int *inode_cnt)
 		return error;
 	}
 
-	memcpy(&set, bp->b_data, sizeof(struct threadcheckpoint));
+	memcpy(&set, bp->b_data, sizeof(struct objsnap_wal_entry));
 	brelse(bp);
 
 	// Create out list of inode objects
-	for (int i = 0; i < set.tckpt_cnt; i++) {
-		struct walptr *ptr = &set.tckpt_ptrs[i];
+	for (int i = 0; i < set.we_cnt; i++) {
+		struct walptr *ptr = &set.we_ptrs[i];
 		int found = false;
 		for (int t = 0; t < *inode_cnt; t++) {
 			if (inode_i[t] == ptr->w_inode) {
@@ -612,27 +727,26 @@ objsnap_sync_dirtylist(int threadlist_at, index_t inode_i[], int *inode_cnt)
 	// We now go through every write it owns and update the tree
 	uint64_t before;
 	OS_START(INODE, &before);
-	for (int i = start; i < *inode_cnt; i++) {
+	for (int i = 0; i < *inode_cnt; i++) {
 		// Grab our vnode
 		struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
-		for (int t = 0; t < set.tckpt_cnt; t++) {
-			struct walptr *ptr = &set.tckpt_ptrs[t];
+
+		for (int t = 0; t < set.we_cnt; t++) {
+			struct walptr *ptr = &set.we_ptrs[t];
 			if (ptr->w_inode == inode_i[i]) {
 				VTREE_INSERT(&vnode->v_tree, 
 					IDX_TO_OFF(ptr->w_index) / BLOCKSIZE, &ptr->w_offset);
 			}
 		}
 
-		
 	}
 
-	
-	OS_STOP(INODE, &before);
+	OS_STOP_SAMPLE(INODE, &before, 1000);
 	return (0);
 }
 
 static int
-check_within(uint64_t s, uint64_t e, int within, int mod) {
+check_within(uint64_t s, uint64_t e, uint64_t within, int mod) {
 	if (e == s) {
 		return (1);
 	}
@@ -642,30 +756,21 @@ check_within(uint64_t s, uint64_t e, int within, int mod) {
 	return ((s + within) % mod) >= e;
 }
 
-#define WAL_SYNCER_SIZE (512)
+#define WAL_SYNCER_SIZE (512 * MAX_WRITERS)
 static void
 objsnap_wal_syncer(void *ctx)
 {
-	index_t inode_i[32];
+	index_t inode_i[256];
 	mtx_lock(&osdata.os_syncer_lk);
-	osdata.os_syncer_exit = OBJSYNC_RUNNING;
-
 	while (osdata.os_syncer_exit == OBJSYNC_RUNNING) {
 		mtx_unlock(&osdata.os_syncer_lk);
 
-		lockmgr(&alloc.alloc_lk, LK_SHARED, 0);
-
-		uint64_t head = atomic_load_64(&alloc.alloc_walptr_head);
-		uint64_t tail = atomic_load_64(&alloc.alloc_walptr_tail);
-		
-		lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
 		// Clear out current tail to head of Wal entrys, no need for a lock
 		// If the head ptr outpaces us we just keep staying in the while look clearing
 		// stuff out
-		
-		if (!check_within(head, tail, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+		if (!check_within(alloc.alloc_walptr_tail, alloc.alloc_walptr_head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
 			int inode_cnt = 0;
-			for (int i = head; i < (tail + WAL_SYNCER_SIZE); i++ ) {
+			for (int i = alloc.alloc_walptr_tail; i < alloc.alloc_walptr_tail + WAL_SYNCER_SIZE; i++ ) {
 				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES) + alloc.alloc_base, inode_i, &inode_cnt);
 			}
 			for (int i = 0; i < inode_cnt; i++) {
@@ -686,6 +791,7 @@ objsnap_wal_syncer(void *ctx)
 				
 				// During inserting we likely COW faulted which means we need to update our treeptr;
 				inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);
+				VTREE_CHECKPOINT(&vnode->v_tree);
 
 				if (write_ondisk_inode(inode)) {
 					printf("Issue writing inode!\n");
@@ -711,15 +817,12 @@ objsnap_wal_syncer(void *ctx)
 			}
 
   			VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
-			atomic_store_64(&alloc.alloc_walptr_tail, (alloc.alloc_walptr_tail + WAL_SYNCER_SIZE) % MAX_WAL_ENTRIES);
-		}
-
-		head = atomic_load_64(&alloc.alloc_walptr_head);
-		tail = atomic_load_64(&alloc.alloc_walptr_tail);
-		if (check_within(head, tail, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
-			pause_sbt("Sync-wait", SBT_1US * 10, 0, C_HARDCLOCK);
+			alloc.alloc_walptr_tail = (alloc.alloc_walptr_tail + WAL_SYNCER_SIZE) % MAX_WAL_ENTRIES;
 		}
 		mtx_lock(&osdata.os_syncer_lk);
+		if (check_within(alloc.alloc_walptr_tail, alloc.alloc_walptr_head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) 
+			msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-wait", SBT_1US * 10, 0,
+				C_HARDCLOCK);
 	}
 
 	osdata.os_syncer_exit = OBJSYNC_EXITED;
@@ -769,12 +872,17 @@ objsnap_osdata_init_syncer(void)
 {
 	int error;
 
+	mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
 
 	error = kthread_add((void (*)(void *))objsnap_wal_syncer, &osdata, NULL,
 		&osdata.os_syncertd, 0, 0, "objsnap wal syncer");
 
-	if (error != 0)
+	if (error != 0) {
 		printf("Syncer could not start");
+
+		mtx_destroy(&osdata.os_syncer_lk);
+		bzero(&osdata.os_syncer_lk, sizeof(osdata.os_syncer_lk));
+	}
 
 	return (error);
 }
@@ -782,21 +890,11 @@ objsnap_osdata_init_syncer(void)
 static void
 objsnap_osdata_fini_syncer(void)
 {
-
-	mtx_lock(&osdata.os_syncer_lk);
-	if (osdata.os_syncer_exit != OBJSYNC_UNINIT) {
-		osdata.os_syncer_exit = OBJSYNC_EXITING;
-		wakeup(&osdata);
-
-		while(osdata.os_syncer_exit != OBJSYNC_EXITED)
-			msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-exit-wait", SBT_1MS, 0, C_HARDCLOCK);
-	}
-
-	mtx_unlock(&osdata.os_syncer_lk);
+	osdata.os_syncer_exit = OBJSYNC_EXITING;
+	objsnap_syncer_trigger_exit();
+	objsnap_syncer_wait_exit();
 
 	mtx_destroy(&osdata.os_syncer_lk);
-	sema_destroy(&wr);
-
 	bzero(&osdata.os_syncer_lk, sizeof(osdata.os_syncer_lk));
 }
 
@@ -806,14 +904,14 @@ objsnap_osdata_init(void)
 	int error;
 	bzero(&osdata, sizeof(osdata));
 
-	mtx_init(&osdata.os_syncer_lk, "Objsnap Syncer Lock", NULL, MTX_DEF);
-	sema_init(&wr, MAX_WRITERS, "writers_sema");
-
 	osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
 		taskqueue_thread_enqueue, &osdata.os_tq);
 
 	taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
-	
+
+	/* XXXETSAL Handle errors during syncer initialization. */
+	objsnap_osdata_init_syncer();
+
 	/* Make the SLS available to userspace. */
 	error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
 		&osdata.os_cdev, &objsnap_cdevsw, 0, UID_ROOT, GID_WHEEL, 
@@ -879,7 +977,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 
-		bzero(threadsets, sizeof(struct dirtyset) * MAXTHREADS);
+		bzero(tpgs, sizeof(struct objsnap_txn) * MAXTHREADS);
 		bzero(global_msgs, sizeof(uint64_t) * MAXTHREADS);
 
 		// TODO: FOR NOW JUST SET TO ZERO, During recovery we
@@ -897,13 +995,17 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		printf("Transaction sizes %lu\n", transaction_size);
 		printf("Transaction sizes cnt %lu\n", transaction_size_cnt);
 
+		objsnap_printstats();
+
 		objsnap_osdata_fini();
 
 		objsnap_vncache_fini();
 
 		allocator_destroy();
 
-    		break;
+		sema_destroy(&wr);
+
+    	break;
 	default:
 		error = EOPNOTSUPP;
 		break;
