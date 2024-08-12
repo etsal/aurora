@@ -47,12 +47,6 @@
 #define OS_START(name, before) do { ctstart(OS_STAT_GET_##name(), before); } while(0)
 #define OS_STOP(name, before) do {ctstop(OS_STAT_GET_##name(), before); } while(0)
 #define OS_STOP_SAMPLE(name, before, sample) do { if ((*before % sample) == 0) ctstop(OS_STAT_GET_##name(), before); } while(0)
-#define BACKOFF() \
-       do { \
-               for (int i = 0; i < 10; i++) \
-                       __asm__ volatile ("pause" ::: ); \
-       } while(0)
-
 
 enum objsync_state {
 	OBJSYNC_UNINIT = 0,
