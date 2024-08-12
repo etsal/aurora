@@ -158,7 +158,7 @@ objsnap_io_block(struct objsnap_txn *set)
 		}
 
 		OS_START(DATAWRITE, &before);
-		bawrite(dst);
+		bwrite(dst);
 		OS_STOP(DATAWRITE, &before);
 	}
 }
@@ -178,15 +178,15 @@ objsnap_io_page(struct objsnap_txn *set)
 	while (left) {
 		pagecnt = min(OBJSNAP_MAXUIO, left);
 
+		OS_START(DATAWRITE, &before);
 		struct buf *bp = getblk(osdata.os_vp, 
 			DEVICE_BLOCK_NUM(ptr.offset + set->d_cnt - left), BLOCKSIZE * pagecnt, 
 			0, 0, GB_UNMAPPED);
+		OS_STOP(DATAWRITE, &before);
 
 		objsnap_io_uio(bp, &set->d_pg[pgoff], pagecnt);
 
-		OS_START(DATAWRITE, &before);
-		bawrite(bp);
-		OS_STOP(DATAWRITE, &before);
+		bwrite(bp);
 
 		pgoff += pagecnt;
 		left -= pagecnt;
@@ -270,7 +270,7 @@ objsnap_checkpoint_mktxn(int *mytids, size_t size_tids, struct objsnap_txn *txn_
 	txn_pg->d_cnt = ind;
 }
 
-static diskptr_t
+static void
 objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 {
 	struct objsnap_wal_entry we;
@@ -284,10 +284,12 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 		case OBJTXN_PAGE:
 			we.we_ptrs[i].w_inode = txn->d_pg[i].inode;
 			we.we_ptrs[i].w_index = IDX_TO_OFF(txn->d_pg[i].offset);
+			we.we_ptrs[i].w_offset = txn->d_ptr.offset + i;
 			break;
 		case OBJTXN_BLOCK:
 			we.we_ptrs[i].w_inode = txn->d_blk[i].objino;
 			we.we_ptrs[i].w_index = IDX_TO_OFF(txn->d_blk[i].objoff);
+			we.we_ptrs[i].w_offset = txn->d_ptr.offset + i;
 			break;
 		default:
 			panic("invalid txn type %d\n", txn->d_type);
@@ -299,21 +301,21 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 
 	walblk = objsnap_blkalloc_wal();
 	OS_START(VNFAULTMOVE, &before);
-	BACKOFF();
 	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset), BLOCKSIZE, 0, 0, 0);
 	OS_STOP(VNFAULTMOVE, &before);
 
 	memcpy(bp->b_data, &we, sizeof(struct objsnap_wal_entry));
-	bawrite(bp);
+	atomic_store_64(&alloc.alloc_walptr_head, (alloc.alloc_walptr_head + 1) % MAX_WAL_ENTRIES);
+    	lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
 
-	return (walblk);
+	bwrite(bp);
+
+	return;
 }
 
 void
 objsnap_txn_commit(struct objsnap_txn *txn)
 {
-	diskptr_t walblk;
-	struct buf *bp;
 	uint64_t before;
 
 	atomic_fetchadd_64(&transaction_size, txn->d_cnt * BLOCKSIZE);
@@ -324,7 +326,7 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 	OS_STOP(ALLOCATE, &before);
 
 	/* Construct the transaction entry on the WAL and flush it. */
-	walblk = objsnap_wal_log(txn, txn->d_cnt);
+	objsnap_wal_log(txn, txn->d_cnt);
 
 	/* Write out out the transaction. */
 	/* XXXETSAL: Is this correct? We are flushing the WAL entry before even filling in the buffer. */
@@ -341,19 +343,6 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 		panic("invalid transaction data type %d\n", txn->d_type);
 	}
 
-	/*
-	 * XXXETSAL: Is this a kind of barrier? It doesn't seem to do anything apart from attempting
-	 * to page in the WAL header.
-	 */
-	OS_START(VNFAULTMOVE, &before);
-	BACKOFF();
-	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset),
-		BLOCKSIZE, 0, 0, 0);
-	OS_STOP(VNFAULTMOVE, &before);
-
-    	lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
-
-	brelse(bp);
 }
 
 static void
