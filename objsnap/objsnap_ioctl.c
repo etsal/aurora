@@ -50,6 +50,12 @@
 #define MSG_CHECKPOINTING (0x2UL)
 #define MSG_FORCED (0xFUL)
 #define MSG_MASK (0x3UL)
+#define BACKOFF() \
+       do { \
+               for (int i = 0; i < 10; i++) \
+                       __asm__ volatile ("pause" ::: ); \
+       } while(0)
+
 
 static int objsnap_osdata_init_syncer(void);
 
@@ -638,12 +644,11 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 
 	case OBJSNAP_INIT:
 		objsnap_init((struct objsnap_init_args *)data);
-		sema_init(&wr, MAX_WRITERS, "writers_sema");
-		// We did not create the FS!
 
 		/* XXXETSAL Handle errors during syncer initialization. */
 		objsnap_osdata_init_syncer();
 
+		// We did not create the FS!
 		if (superblock.super_bsize == 0) {
 			error = -1;
 		}
