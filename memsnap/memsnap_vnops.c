@@ -34,10 +34,14 @@
 #include <machine/vmparam.h>
 
 #include <geom/geom_vfs.h>
-#include <slos.h>
-#include <slos_inode.h>
-#include <slos_io.h>
-#include <slsfs.h>
+
+#include "memsnap.h"
+
+SDT_PROVIDER_DEFINE(sas);
+SDT_PROBE_DEFINE4(sas, , , start, "long", "long", "long", "long");
+SDT_PROBE_DEFINE0(sas, , , protect);
+SDT_PROBE_DEFINE1(sas, , , write, "long");
+SDT_PROBE_DEFINE0(sas, , , block);
 
 uint64_t slsfs_sas_tracks;
 uint64_t slsfs_sas_aborts;
@@ -52,19 +56,24 @@ long slsfs_sas_inserts, slsfs_sas_removes;
 static int
 slsfs_sas_init(struct vnode *vp, size_t size)
 {
-	uint64_t *sas_new_addr = &slos.slos_sb->sb_sas_addr;
+	struct mount *mp = vp->v_mount;
 	struct slos_node *svp = SLSVP(vp);
-	struct thread *td = curthread;
+	uint64_t *sas_addr_allocator;
+	struct slos_meta *sb;
+
+	/* Get the address of the global allocator. */
+	sb = (struct slos_meta *)mp->mnt_data;
+	sas_addr_allocator = &sb->sb_sas_addr;
 
 	if (svp->sn_obj != NULL)
 		panic("double init for SAS object");
 
-	svp->sn_addr = atomic_fetchadd_64(sas_new_addr, size + PAGE_SIZE);
+	svp->sn_addr = atomic_fetchadd_64(sas_addr_allocator, size + PAGE_SIZE);
 	if (svp->sn_addr + size >= SLS_SAS_MAXADDR)
 		panic("Reached the end of the SAS");
 
 	svp->sn_obj = vm_object_allocate(OBJT_DEFAULT, atop(size));
-	if (svp->sn_obj == NULL) {
+	if (svp->sn_obj == NULL)
 		panic("could not init SAS node");
 
 	svp->sn_obj->flags |= OBJ_NOSPLIT;
@@ -140,27 +149,7 @@ struct slsfs_sas_commit_args {
 	struct pglist pglist;
 };
 
-static __attribute__((noinline)) struct vnode *
-slsfs_sas_getvp(uint64_t oid)
-{
-	struct vnode *vp;
-	int error;
-
-	error = slos_svpalloc(&slos, MAKEIMODE(VREG, S_IRWXU), &oid);
-	if (error != 0) {
-		printf("%s:%d error %d\n", __func__, __LINE__, error);
-		return (NULL);
-	}
-
-	error = VFS_VGET(slos.slsfs_mount, oid, LK_EXCLUSIVE, &vp);
-	if (error != 0) {
-		printf("%s:%d error %d\n", __func__, __LINE__, error);
-		return (NULL);
-	}
-
-	return (vp);
-}
-
+/* XXX Mark all pages we send out as done. */
 static void
 sas_pager_done(struct buf *bp)
 {
@@ -177,77 +166,6 @@ sas_pager_done(struct buf *bp)
 	bp->b_bufsize = bp->b_bcount = 0;
 	bp->b_npages = 0;
 	bdone(bp);
-}
-
-static int
-sas_bawrite(struct vnode *vp, vm_page_t *ma, size_t mlen)
-{
-	size_t off, size;
-	struct buf *bp;
-	int i;
-
-	off = PAGE_SIZE * (ma[0]->pindex + SLOS_OBJOFF);
-	size = PAGE_SIZE * mlen;
-
-	bp = trypbuf(&slos_pbufcnt);
-	KASSERT(bp != NULL, ("failed to grab buffer"));
-	while (bp == NULL) {
-		pause_sbt("saspbf", 30 * SBT_1US, 0, 0);
-		bp = trypbuf(&slos_pbufcnt);
-	}
-
-	bp->b_data = unmapped_buf;
-	bp->b_lblkno = ma[0]->pindex + SLOS_OBJOFF;
-	bp->b_iocmd = BIO_WRITE;
-
-	bp->b_resid = bp->b_bufsize = bp->b_bcount = mlen * PAGE_SIZE;
-	bp->b_iocmd = BIO_WRITE;
-	bp->b_iodone = sas_pager_done;
-
-	bp->b_npages = mlen;
-	for (i = 0; i < mlen; i++)
-		bp->b_pages[i] = ma[i];
-
-	slos_iotask_create(vp, bp, true);
-
-	return (0);
-}
-
-#define MAX_PAGES (16)
-
-static int __attribute__((noinline))
-sas_genio(struct vnode *vp, struct pglist *snaplist, uint64_t oid)
-{
-	vm_page_t ma[MAX_PAGES];
-	vm_pindex_t pindex;
-	vm_page_t m, mtmp;
-	size_t mlen;
-
-	pindex = 0;
-	mlen = 0;
-	TAILQ_FOREACH_SAFE (m, snaplist, snapq, mtmp) {
-		vm_page_lock(m);
-		if (m->object == NULL) {
-			vm_page_unlock(m);
-			continue;
-		}
-		if (m->object->objid == oid) {
-			ma[mlen++] = m;
-			slsfs_sas_page_untrack_unlocked(snaplist, m);
-		}
-
-		vm_page_unlock(m);
-
-		if (mlen == MAX_PAGES) {
-			sas_bawrite(vp, ma, mlen);
-			mlen = 0;
-		}
-	}
-
-	if (mlen > 0)
-		sas_bawrite(vp, ma, mlen);
-
-	return (0);
 }
 
 void
@@ -306,8 +224,6 @@ slsfs_sas_trace_commit(void)
 	struct pmap *pmap = &curproc->p_vmspace->vm_pmap;
 	size_t written = 0;
 	vm_page_t m, mtmp;
-	struct vnode *vp;
-	uint64_t oid;
 
 	SDT_PROBE4(sas, , , start, slsfs_sas_tracks, slsfs_sas_removes,
 	    slsfs_sas_attempts, slsfs_sas_copies);
@@ -333,15 +249,11 @@ slsfs_sas_trace_commit(void)
 	SDT_PROBE0(sas, , , protect);
 
 	while (!TAILQ_EMPTY(snaplist)) {
-		oid = TAILQ_FIRST(snaplist)->object->objid;
-		vp = slsfs_sas_getvp(oid);
-		sas_genio(vp, snaplist, oid);
-		vput(vp);
+		printf("Here we'll be committing to ObjSnap.\n");
 	}
 
+	/* XXX These are now extraneous, we write and commit in one go. */
 	SDT_PROBE1(sas, , , write, written);
-
-	taskqueue_drain_all(slos.slos_tq);
 	SDT_PROBE0(sas, , , block);
 
 	atomic_add_64(&slsfs_sas_commits, 1);
@@ -484,7 +396,6 @@ slsfs_sas_ioctl(struct vop_ioctl_args *ap)
 	switch (com) {
 	case SLSFS_SAS_MAP:
 		addr = *(vm_offset_t *)ap->a_data;
-		KASSERT(SLS_ISSAS(vp), ("mapping non-SAS node"));
 		error = slsfs_sas_mmap(td, vp, &addr);
 		if (error != 0)
 			return (error);
@@ -530,10 +441,7 @@ slsfs_create(struct vop_create_args *args)
 	struct vnode *dvp = args->a_dvp;
 	struct vnode **vpp = args->a_vpp;
 	struct componentname *name = args->a_cnp;
-	struct vattr *vap = args->a_vap;
-
 	struct vnode *vp;
-	int error;
 
 	if (name->cn_namelen > SLSFS_NAME_LEN)
 		return (ENAMETOOLONG);
@@ -586,6 +494,8 @@ slsfs_lookup(struct vop_cachedlookup_args *args)
 	if (nameiop != CREATE && nameiop != LOOKUP)
 		return (EINVAL);
 
+	/* XXX Look up into our indexing structure. */
+
 	/* XXX Then do a vget on the vnode. */
 	panic("lookup: must look the name up in the main indexing structure");
 
@@ -610,7 +520,8 @@ struct vop_vector slsfs_sas_vnodeops = {
 	.vop_rmdir = VOP_PANIC,
 	.vop_open = VOP_NULL,
 	.vop_close = VOP_NULL,
+	.vop_lookup = vfs_cache_lookup,
+	.vop_cachedlookup = slsfs_lookup,
 	.vop_ioctl = slsfs_sas_ioctl,
 	.vop_reclaim = slsfs_reclaim,
-	.vop_lookup = slsfs_lookup,
 };
