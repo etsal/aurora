@@ -131,3 +131,6 @@ objsnap/opt_global.h
 out
 objsnap/i386
 backingfile
+
+memsnap/opt_global.h
+memsnap/i386

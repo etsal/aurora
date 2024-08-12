@@ -8,6 +8,7 @@
 #include <sys/fcntl.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
+#include <sys/limits.h>
 #include <sys/lockf.h>
 #include <sys/module.h>
 #include <sys/mount.h>
@@ -32,58 +33,38 @@
 #include <machine/param.h>
 #include <machine/vmparam.h>
 
-static MALLOC_DEFINE(M_SLSFS, "slsfs_mount", "SLSFS mount structures");
+#include "memsnap.h"
 
-static vfs_root_t slsfs_root;
-static vfs_statfs_t slsfs_statfs;
-static vfs_vget_t slsfs_vget;
-static vfs_sync_t slsfs_sync;
-
-struct slos_meta {
-	struct mtx sb_mtx;
-	uint64_t sb_sas_addr;
-	/* 
-	 * XXX Do we need a state variable? We never have dirty data
-	 * because we just provide the MemSnap interface to ObjSnap.
-	 */
-	/*
-	 * XXX We need some indexing structure for the SAS
-	 * objects, since we are addressing them by name.
-	 */
-};
-
-struct slos_node {
-	vm_object_t sn_obj;
-	vaddr_t sn_addr;
-	size_t sn_size;
-};
+MALLOC_DEFINE(M_SLSFS, "slsfs_mount", "SLSFS mount structures");
 
 /*
  * Register the Aurora filesystem type with the kernel.
  */
-static void
+static int
 slsfs_cb_register(struct vfsconf *vfsp)
 {
 	sls_writefault_hook = slsfs_sas_trace_update;
 	sas_cow_hook = sas_test_cow;
 
+	return (0);
 }
 
 /*
  * Unregister the Aurora filesystem type from the kernel.
  */
-static void
+static int
 slsfs_cb_unregister(struct vfsconf *vfsp)
 {
 	sls_writefault_hook = NULL;
 	sas_cow_hook = NULL;
+
+	return (0);
 }
 
 static int
 slsfs_mount(struct mount *mp)
 {
 	struct slos_meta *sb;
-	int error;
 
 	/* We do nothing on updates. */
 	if (mp->mnt_flag & MNT_UPDATE)
@@ -112,26 +93,24 @@ slsfs_mount(struct mount *mp)
 }
 
 static int
-slsfs_statfs(struct mount *mp, struct statfs *sbp)
-{
-	return (EOPNOTSUPP);
-}
-
-static int
 slsfs_unmount(struct mount *mp, int mntflags)
 {
+	struct thread *td = curthread;
 	struct slos_meta *sb;
+	int flags = 0;
+	int error;
 
-	if (mntflags & MNT_FORCE) {
+	if (mntflags & MNT_FORCE)
 		flags |= FORCECLOSE;
-	}
 
+	/* Flush and destroy all mount vnodes. */
+	error = vflush(mp, 0, flags, td);
+	if (error != 0)
+		return (error);
 
 	/* 
-	 * XXX Can there be in-progress operations 
-	 * while we are unmounting? The vnodes are
-	 * stateless so as long as we can tear them
-	 * out from any in-progress users we're good.
+	 * XXX Free the root vnode. We will use the 
+	 * root vnode for lookups.
 	 */
 
 	MNT_ILOCK(mp);
@@ -142,8 +121,23 @@ slsfs_unmount(struct mount *mp, int mntflags)
 
 	free(sb, M_SLSFS);
 
-
 	return (0);
+}
+
+/*
+ *  Return the vnode for the root of the filesystem.
+ */
+static int
+slsfs_root(struct mount *mp, int flags, struct vnode **vpp)
+{
+	panic("unmodified");
+}
+
+
+static int
+slsfs_statfs(struct mount *mp, struct statfs *sbp)
+{
+	return (EOPNOTSUPP);
 }
 
 /*
@@ -153,12 +147,11 @@ static int
 slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 {
 	struct thread *td = curthread;
-	struct vnode **vpp = NULL;
 	struct vnode *vp = NULL;
 	int error;
 
 	/* Truncate the inode number to 32 bits. */
-	ino = ino & (INT_MAX - 1);
+	ino = OIDTOSLSID(ino);
 
 	/* Make sure the inode does not already have a vnode. */
 	error = vfs_hash_get(mp, ino, LK_EXCLUSIVE, td, &vp, NULL, NULL);
@@ -188,6 +181,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	if (error)
 		goto free;
 
+	/* XXX If this is the root, then treat it as a directory. */
 	vp->v_type = VREG;
 	vp->v_data = malloc(sizeof(struct slos_node), M_SLSFS, M_WAITOK | M_ZERO);
 
@@ -238,38 +232,6 @@ static struct vfsops slsfs_vfsops = {
 	.vfs_sync = slsfs_sync,
 };
 
-int
-slsfs_loader(struct module *m, int what, void *arg)
-{
-	int error = 0;
-
-	switch (what) {
-	case MOD_LOAD:
-		error = vfs_modevent(NULL, what, &virtiofs_vfsconf);
-		if (error != 0)
-			break;
-
-		slsfs_cb_register();
-
-	case MOD_UNLOAD:
-		error = vfs_modevent(NULL, what, &virtiofs_vfsconf);
-		if (error != 0)
-			break;
-
-		slsfs_cb_unregister();
-
-	default:
-		return (EINVAL);
-	}
-
-	return (error);
-}
-
-static moduledata_t slsfs_moddata {
-	"slsfs",
-	&slsfs_loader,
-	&slsfs_vfsconf,
-};
-
+VFS_SET(slsfs_vfsops, slsfs, 0);
 MODULE_DEPEND(slsfs, objsnap, 0, 0, 0);
 MODULE_VERSION(slsfs, 0);
