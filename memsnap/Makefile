@@ -1,7 +1,7 @@
 KMOD	= memsnap
 DPSRCS = offset.inc
 
-SRCS	= memsnap_vfsops.c memsnap_vnops.c vnode_if.h
+SRCS	= memsnap.c
 
 CFLAGS	+= -DKDTRACE_HOOKS -DKLD_TIED -DSMP -I../include 
 CLEANFILES = .depend*
