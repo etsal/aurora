@@ -434,23 +434,52 @@ slsfs_sas_ioctl(struct vop_ioctl_args *ap)
 	return (0);
 }
 
-#define SLSFS_NAME_LEN (255)
 static int
 slsfs_create(struct vop_create_args *args)
 {
-	struct vnode *dvp = args->a_dvp;
+	struct componentname *cnp = args->a_cnp;
 	struct vnode **vpp = args->a_vpp;
-	struct componentname *name = args->a_cnp;
+	struct vnode *dvp = args->a_dvp;
+	struct slos_directory *sd;
+	struct slos_meta *sb;
 	struct vnode *vp;
+	uint64_t ino;
+	int error;
 
-	if (name->cn_namelen > SLSFS_NAME_LEN)
+	sb = (struct slos_meta *)dvp->v_mount->mnt_data;
+	sd = &sb->sb_sd;
+
+	if (cnp->cn_namelen > PATH_MAX)
 		return (ENAMETOOLONG);
 
-	panic("Get a new VP for MemSnap, store all the VPs. Need to implement vget() for it");
+	mtx_lock(&sb->sb_mtx);
+
+	/* Ensure no duplicates. */
+	error = VOP_LOOKUP(dvp, &vp, cnp);
+	if (error == 0) {
+		mtx_unlock(&sb->sb_mtx);
+		vput(vp);
+		return (EADDRINUSE);
+	}
+
+	if (error != ENOENT) {
+		mtx_unlock(&sb->sb_mtx);
+		return (error);
+	}
+
+	/* Allocate a new entry in the indexing structure. */
+	if (sd->sd_nextfree >= SDI_MAXENTRIES)
+		panic("memsnap directory overflowed");
+
+	ino = sd->sd_nextfree++;
+	bcopy(cnp->cn_nameptr, sd->sd_entries[ino].sdi_name, cnp->cn_namelen);
+
+	mtx_unlock(&sb->sb_mtx);
+
+	if ((cnp->cn_flags & MAKEENTRY) != 0)
+		cache_enter(dvp, vp, cnp);
 
 	*vpp = vp;
-	if ((name->cn_flags & MAKEENTRY) != 0)
-		cache_enter(dvp, *vpp, name);
 
 	return (0);
 }
@@ -478,29 +507,49 @@ slsfs_reclaim(struct vop_reclaim_args *args)
 static int
 slsfs_lookup(struct vop_cachedlookup_args *args)
 {
-	struct vnode *dvp = args->a_dvp;
-	struct vnode **vpp = args->a_vpp;
 	struct componentname *cnp = args->a_cnp;
+	struct vnode **vpp = args->a_vpp;
+	struct vnode *dvp = args->a_dvp;
+	struct mount *mp = dvp->v_mount;
+	struct slos_directory *sd;
+	struct slos_meta *sb;
 	int namelen, nameiop;
+	uint64_t ino;
 	char *name;
 
 	name = cnp->cn_nameptr;
 	namelen = cnp->cn_namelen;
 	nameiop = cnp->cn_nameiop;
 
+	/* There are no directories, much less parent directories. */
 	if (cnp->cn_flags & ISDOTDOT)
 		return (EINVAL);
 
+	/* No REMOVE, RENAME operations, objects are immutable. */
 	if (nameiop != CREATE && nameiop != LOOKUP)
-		return (EINVAL);
+		return (EOPNOTSUPP);
 
-	/* XXX Look up into our indexing structure. */
+	sb = (struct slos_meta *)mp->mnt_data;
+	sd = &sb->sb_sd;
 
-	/* XXX Then do a vget on the vnode. */
-	panic("lookup: must look the name up in the main indexing structure");
+	/* 
+	 * Start from the end because we assume we 
+	 * are looking for a newly created node.
+	 */
+	for (ino = sd->sd_nextfree - 1; ino >= 0; ino--) {
+		if (strncmp(sd->sd_entries[ino].sdi_name, name, namelen) == 0)
+			break;
+	}
+
+	if (ino < 0)
+		return (ENOENT);
+
+	VFS_VGET(mp, ino, 0, vpp);
 
 	if ((cnp->cn_flags & MAKEENTRY) != 0)
 		cache_enter(dvp, *vpp, cnp);
+
+	return (0);
 }
 
 struct vop_vector slsfs_sas_vnodeops = {
@@ -523,5 +572,6 @@ struct vop_vector slsfs_sas_vnodeops = {
 	.vop_lookup = vfs_cache_lookup,
 	.vop_cachedlookup = slsfs_lookup,
 	.vop_ioctl = slsfs_sas_ioctl,
+	.vop_create = slsfs_create,
 	.vop_reclaim = slsfs_reclaim,
 };

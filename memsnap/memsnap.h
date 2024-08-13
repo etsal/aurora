@@ -1,9 +1,22 @@
 #ifndef _MEMSNAP_H_
 #define _MEMSNAP_H_
 
+#define SDI_MAXENTRIES (32 * 1024)
+
+struct slos_direntry {
+	char sdi_name[PATH_MAX];
+};
+
+struct slos_directory {
+	size_t sd_cnt;
+	size_t sd_nextfree;
+	struct slos_direntry *sd_entries;
+};
+
 struct slos_meta {
 	struct mtx sb_mtx;
 	uint64_t sb_sas_addr;
+	struct slos_directory sb_sd;
 	/*
 	 * XXX We need some indexing structure for the SAS
 	 * objects, since we are addressing them by name.

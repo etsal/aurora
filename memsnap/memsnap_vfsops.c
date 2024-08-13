@@ -37,9 +37,8 @@
 
 MALLOC_DEFINE(M_SLSFS, "slsfs_mount", "SLSFS mount structures");
 
-/*
- * Register the Aurora filesystem type with the kernel.
- */
+/* Setup/Teardown for the VM subsystem hooks. */
+
 static int
 slsfs_cb_register(struct vfsconf *vfsp)
 {
@@ -49,9 +48,6 @@ slsfs_cb_register(struct vfsconf *vfsp)
 	return (0);
 }
 
-/*
- * Unregister the Aurora filesystem type from the kernel.
- */
 static int
 slsfs_cb_unregister(struct vfsconf *vfsp)
 {
@@ -77,11 +73,10 @@ slsfs_mount(struct mount *mp)
 	mtx_init(&sb->sb_mtx, "sbmtx", NULL, MTX_DEF);
 	sb->sb_sas_addr = SLS_SAS_INITADDR;
 
-	/* 
-	 * XXX Create a root that acts as a directory. This node
-	 * is used just for lookups and is the only directory in
-	 * the file system.
-	 */
+	/* Initialize the directory structure for name-inode equivalence. */
+	sb->sb_sd.sd_cnt = SDI_MAXENTRIES;
+	sb->sb_sd.sd_nextfree = 0;
+	sb->sb_sd.sd_entries = malloc(sizeof(*sb->sb_sd.sd_entries) * SDI_MAXENTRIES, M_SLSFS, M_WAITOK);
 
 	MNT_ILOCK(mp);
 	mp->mnt_data = sb;
@@ -119,6 +114,7 @@ slsfs_unmount(struct mount *mp, int mntflags)
 	mp->mnt_flag &= ~MNT_LOCAL;
 	MNT_IUNLOCK(mp);
 
+	free(sb->sb_sd.sd_entries, M_SLSFS);
 	free(sb, M_SLSFS);
 
 	return (0);
@@ -130,7 +126,8 @@ slsfs_unmount(struct mount *mp, int mntflags)
 static int
 slsfs_root(struct mount *mp, int flags, struct vnode **vpp)
 {
-	panic("unmodified");
+	/* XXX Decide on the root mount operation. */
+	panic("unimplemented");
 }
 
 
@@ -181,7 +178,7 @@ slsfs_vget(struct mount *mp, uint64_t ino, int flags, struct vnode **vpp)
 	if (error)
 		goto free;
 
-	/* XXX If this is the root, then treat it as a directory. */
+	/* XXX This could potentially be the dummy root. */
 	vp->v_type = VREG;
 	vp->v_data = malloc(sizeof(struct slos_node), M_SLSFS, M_WAITOK | M_ZERO);
 
