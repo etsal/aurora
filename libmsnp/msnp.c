@@ -29,7 +29,7 @@ slsfs_sas_create(char *path, size_t size)
 	base = basename(basestr);
 
 	strncpy(args.path, base, strnlen(base, PATH_MAX));
-	args.size = strnlen(base, PATH_MAX);
+	args.size = size;
 
 	/* Open the memsnap root and create the object. */
 	memset(dirstr, '\0', PATH_MAX);
