@@ -23,11 +23,13 @@ slsfs_sas_create(char *path, size_t size)
 	int dirfd;
 	int error;
 
+
 	/* Set up the creation ioctl arguments. */
 	memset(basestr, '\0', PATH_MAX);
 	strncpy(basestr, path, strlen(path));
 	base = basename(basestr);
 
+	memset(args.path, 0, PATH_MAX);
 	strncpy(args.path, base, strnlen(base, PATH_MAX));
 	args.size = size;
 

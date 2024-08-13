@@ -3,10 +3,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <slos.h>
-#include <sls.h>
-#include <sls_wal.h>
-#include <slsfs.h>
+#include <memsnap.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
