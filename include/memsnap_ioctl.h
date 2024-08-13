@@ -14,4 +14,6 @@ struct slsfs_sas_create_args {
 #define SLSFS_SAS_TRACE_COMMIT _IO('N', 109)
 #define SLSFS_SAS_REFRESH_PROTECTION _IO('N', 110)
 
+#define MSNP_CTRLDEV ("msnpctrl")
+
 #endif /* _MEMSNAP_IOCTL_H_ */

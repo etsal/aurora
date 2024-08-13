@@ -115,88 +115,6 @@ msnp_mmap(struct pfs_node *pn, struct thread *td, vm_offset_t *addrp)
 	return (0);
 }
 
-static int
-msnp_node_ioctl(PFS_IOCTL_ARGS)
-{
-	vm_offset_t addr, *inaddrp;
-	int error;
-
-	switch (cmd) {
-	case SLSFS_SAS_MAP:
-		inaddrp = (vm_offset_t *)data;
-		addr = *inaddrp;
-		error = msnp_mmap(pn, td, &addr);
-		if (error != 0)
-			return (error);
-
-		*inaddrp= addr;
-		return (0);
-
-	default:
-		return (EINVAL);
-	}
-
-	return (0);
-}
-
-
-static int
-msnp_node_destroy(PFS_DESTROY_ARGS)
-{
-	struct slos_node *svp = (struct slos_node *)pn->pn_data;
-
-	vm_object_deallocate(svp->sn_obj);
-	svp->sn_obj = NULL;
-	svp->sn_addr = (vm_offset_t)0;
-
-	free(pn->pn_data, M_MSNP);
-	pn->pn_data = NULL;
-
-	return (0);
-}
-
-static int
-msnp_create_objinit(struct pfs_node *root, struct pfs_node *pn, size_t size)
-{
-	struct slos_meta *sb = (struct slos_meta *)root->pn_data;
-	struct slos_node *svp = (struct slos_node *)pn->pn_data;
-
-	if (svp->sn_obj != NULL)
-		panic("double init for SAS object");
-
-	svp->sn_addr = atomic_fetchadd_64(&sb->sb_sas_addr, size + PAGE_SIZE);
-	if (svp->sn_addr + size >= SLS_SAS_MAXADDR)
-		panic("Reached the end of the SAS");
-
-	svp->sn_obj = vm_object_allocate(OBJT_DEFAULT, atop(size));
-	if (svp->sn_obj == NULL)
-		panic("could not init SAS node");
-
-	svp->sn_obj->flags |= OBJ_NOSPLIT;
-
-	return 0;
-}
-
-
-static int
-msnp_create(struct pfs_node *root, char *path, size_t size) 
-{
-	struct pfs_node *pn;
-
-	pn = pfs_create_file(root, path, 
-			/* pn_fill */ NULL,
-			/* pn_attr */ NULL,
-			/* pn_vis */ NULL,
-			/* pn_destroy */ msnp_node_destroy,
-			PFS_WR | PFS_RAW);
-
-	pn->pn_ioctl = msnp_node_ioctl;
-	pn->pn_data = malloc(sizeof(struct slos_node), M_MSNP, M_WAITOK | M_ZERO);
-
-	return (msnp_create_objinit(root, pn, size));
-}
-
-
 static void
 msnp_page_track(vm_offset_t vaddr, struct pglist *pglist, vm_page_t m)
 {
@@ -418,15 +336,28 @@ msnp_trace_end(void)
 }
 
 static int
-msnp_root_ioctl(PFS_IOCTL_ARGS)
+msnp_node_ioctl(PFS_IOCTL_ARGS)
 {
-	struct slsfs_sas_create_args *sas_create_args;
+	vm_offset_t addr, *inaddrp;
+	int error;
 
 	switch (cmd) {
-	case SLSFS_SAS_CREATE:
-		sas_create_args = (struct slsfs_sas_create_args *)data;
-		return (msnp_create(pn, (char *)&sas_create_args->path, sas_create_args->size));
+	case SLSFS_SAS_MAP:
+		inaddrp = (vm_offset_t *)data;
+		addr = *inaddrp;
 
+		error = msnp_mmap(pn, td, &addr);
+		if (error != 0)
+			return (error);
+
+		*inaddrp= addr;
+		return (0);
+
+	/* 
+	 * NOTE: These calls being accessible from the object nodes are an
+	 * implementation artifact. It would have been nicer to have a 
+	 * control device for exposing these operations.
+	 */
 	case SLSFS_SAS_TRACE_START:
 		msnp_trace_start();
 		return (0);
@@ -454,22 +385,115 @@ msnp_root_ioctl(PFS_IOCTL_ARGS)
 	return (0);
 }
 
+
+static int
+msnp_node_destroy(PFS_DESTROY_ARGS)
+{
+	struct slos_node *svp = (struct slos_node *)pn->pn_data;
+
+	vm_object_deallocate(svp->sn_obj);
+	svp->sn_obj = NULL;
+	svp->sn_addr = (vm_offset_t)0;
+
+	free(pn->pn_data, M_MSNP);
+	pn->pn_data = NULL;
+
+	return (0);
+}
+
+static int
+msnp_create_objinit(struct pfs_node *ctrl, struct pfs_node *pn, size_t size)
+{
+	struct slos_meta *sb = (struct slos_meta *)ctrl->pn_data;
+	struct slos_node *svp = (struct slos_node *)pn->pn_data;
+
+	if (svp->sn_obj != NULL)
+		panic("double init for SAS object");
+
+	svp->sn_addr = atomic_fetchadd_64(&sb->sb_sas_addr, size + PAGE_SIZE);
+	if (svp->sn_addr + size >= SLS_SAS_MAXADDR)
+		panic("Reached the end of the SAS");
+
+	svp->sn_obj = vm_object_allocate(OBJT_DEFAULT, atop(size));
+	if (svp->sn_obj == NULL)
+		panic("could not init SAS node");
+
+	svp->sn_obj->flags |= OBJ_NOSPLIT;
+
+	return 0;
+}
+
+
+static int
+msnp_create(struct pfs_node *ctrl, char *path, size_t size) 
+{
+	struct pfs_node *root = ctrl->pn_parent;
+	struct pfs_node *pn;
+
+	pn = pfs_create_file(root, path, 
+			/* pn_fill */ NULL,
+			/* pn_attr */ NULL,
+			/* pn_vis */ NULL,
+			/* pn_destroy */ msnp_node_destroy,
+			PFS_RDWR | PFS_RAW);
+
+	pn->pn_ioctl = msnp_node_ioctl;
+	pn->pn_data = malloc(sizeof(struct slos_node), M_MSNP, M_WAITOK | M_ZERO);
+
+	return (msnp_create_objinit(ctrl, pn, size));
+}
+
+
+static int
+msnp_ctrl_ioctl(PFS_IOCTL_ARGS)
+{
+	struct slsfs_sas_create_args *sas_create_args;
+
+	switch (cmd) {
+	case SLSFS_SAS_CREATE:
+		sas_create_args = (struct slsfs_sas_create_args *)data;
+		return (msnp_create(pn, (char *)&sas_create_args->path, sas_create_args->size));
+
+	default:
+		return (EINVAL);
+	}
+
+	return (0);
+}
+
+static int
+msnp_ctrl_destroy(PFS_DESTROY_ARGS)
+{
+	struct slos_meta *sb = (struct slos_meta *)pn->pn_data;
+
+	mtx_destroy(&sb->sb_mtx);
+	free(sb, M_MSNP);
+
+	return (0);
+}
+
 static int
 msnp_init(PFS_INIT_ARGS)
 {
 	struct pfs_node *root = pi->pi_root;
-	struct slos_meta *sb = (struct slos_meta *)root->pn_data;
+	struct pfs_node *ctrl;
+	struct slos_meta *sb;
 	
 	sb = malloc(sizeof(*sb), M_MSNP, M_WAITOK | M_ZERO);
 	mtx_init(&sb->sb_mtx, "sbmtx", NULL, MTX_DEF);
 	sb->sb_sas_addr = SLS_SAS_INITADDR;
 
-	root->pn_data = sb;
-	root->pn_ioctl = msnp_root_ioctl;
+	ctrl = pfs_create_file(root, MSNP_CTRLDEV, 
+			/* pn_fill */ NULL,
+			/* pn_attr */ NULL,
+			/* pn_vis */ NULL,
+			/* pn_destroy */ msnp_ctrl_destroy,
+			PFS_RDWR | PFS_RAW);
+	ctrl->pn_ioctl = msnp_ctrl_ioctl;
+	ctrl->pn_data = sb;
 
 	sls_writefault_hook = msnp_trace_update;
 	sas_cow_hook = sas_test_cow;
-
 
 	return (0);
 }
@@ -477,12 +501,6 @@ msnp_init(PFS_INIT_ARGS)
 static int
 msnp_uninit(struct pfs_info *pi, struct vfsconf *vfc)
 {
-	struct pfs_node *root = pi->pi_root;
-	struct slos_meta *sb = (struct slos_meta *)root->pn_data;
-
-	mtx_destroy(&sb->sb_mtx);
-	free(sb, M_MSNP);
-
 	sls_writefault_hook = NULL;
 	sas_cow_hook = NULL;
 
@@ -490,4 +508,4 @@ msnp_uninit(struct pfs_info *pi, struct vfsconf *vfc)
 }
 
 PSEUDOFS(msnp, 1, VFCF_JAIL);
-MODULE_DEPEND(msnp, objsnap, 0, 0, 0);
+//MODULE_DEPEND(msnp, objsnap, 0, 0, 0);

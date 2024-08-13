@@ -33,19 +33,14 @@ slsunmount()
 
 aursetup()
 {
-    kldload slos
-    slsnewfs
-    slsmount
-    kldload sls
-    kldload metropolis
+	kldload memsnap
+	mount -t msnp msnp $MNT
 }
 
 aurteardown()
 {
-    kldunload metropolis
-    kldunload sls
-    slsunmount
-    kldunload slos
+	umount -t msnp msnp $MNT
+	kldunload memsnap
 }
 
 slscheckpoint()
