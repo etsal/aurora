@@ -3,20 +3,9 @@
 
 #define SDI_MAXENTRIES (32 * 1024)
 
-struct slos_direntry {
-	char sdi_name[PATH_MAX];
-};
-
-struct slos_directory {
-	size_t sd_cnt;
-	size_t sd_nextfree;
-	struct slos_direntry *sd_entries;
-};
-
 struct slos_meta {
 	struct mtx sb_mtx;
 	uint64_t sb_sas_addr;
-	struct slos_directory sb_sd;
 	/*
 	 * XXX We need some indexing structure for the SAS
 	 * objects, since we are addressing them by name.
@@ -32,8 +21,7 @@ struct slos_node {
 extern void (*sls_writefault_hook)(vm_offset_t vaddr, vm_map_t map, vm_page_t m,
     int fault_type);
 extern void (*sas_cow_hook)(vm_offset_t vaddr, vm_page_t *m);
-void slsfs_sas_trace_update(vm_offset_t vaddr, vm_map_t map, vm_page_t m,
-    int fault_type);
+void msnp_trace_update(vm_offset_t vaddr, vm_map_t map, vm_page_t m, int fault_type);
 void sas_test_cow(vm_offset_t vaddr, vm_page_t *m);
 
 /* Turns an SLS ID to an identifier suitable for the SLOS. */
@@ -43,8 +31,6 @@ void sas_test_cow(vm_offset_t vaddr, vm_page_t *m);
 #define SLS_SAS_MAXADDR (0x700000000000ULL)
 #define MAX_SAS_SIZE (5UL * 1024 * 1024 * 1024)
 
-extern struct vop_vector slsfs_vnodeops;
-
 #define SLSFS_SAS_INIT _IOWR('N', 104, size_t)
 #define SLSFS_SAS_MAP _IOWR('N', 105, void *)
 #define SLSFS_SAS_TRACE_START _IO('N', 106)
@@ -52,7 +38,5 @@ extern struct vop_vector slsfs_vnodeops;
 #define SLSFS_SAS_TRACE_ABORT _IO('N', 108)
 #define SLSFS_SAS_TRACE_COMMIT _IO('N', 109)
 #define SLSFS_SAS_REFRESH_PROTECTION _IO('N', 110)
-
-MALLOC_DECLARE(M_SLSFS);
 
 #endif /* _MEMSNAP_H_ */
