@@ -17,28 +17,27 @@ int
 slsfs_sas_create(char *path, size_t size)
 {
 	struct slsfs_sas_create_args args;
-	char dupstr[PATH_MAX];
+	char basestr[PATH_MAX];
 	char dirstr[PATH_MAX];
-	int dirfd, fd;
+	char *dir, *base;
+	int dirfd;
 	int error;
-	char *dir;
 
 	/* Set up the creation ioctl arguments. */
-	memset(args.path, '\0', PATH_MAX);
-	strncpy(args.path, path, strlen(path));
-	args.size = size;
+	memset(basestr, '\0', PATH_MAX);
+	strncpy(basestr, path, strlen(path));
+	base = basename(basestr);
 
-	printf("2\n");
+	strncpy(args.path, base, strnlen(base, PATH_MAX));
+	args.size = strnlen(base, PATH_MAX);
+
 	/* Open the memsnap root and create the object. */
 	memset(dirstr, '\0', PATH_MAX);
 	strncpy(dirstr, path, strlen(path));
-	printf("3 %s\n", dirstr);
 	dir = dirname(dirstr);
-	printf("3.5 %s %s\n", dir, dirstr);
 	strncat(dir, "/", PATH_MAX - strnlen(dir, PATH_MAX));
 	strncat(dir, MSNP_CTRLDEV, PATH_MAX - strnlen(dir, PATH_MAX));
 
-	printf("4 %s\n", dir);
 	dirfd = open(dir, O_RDWR);
 	if (dirfd < 0) {
 		perror("open");
@@ -47,20 +46,12 @@ slsfs_sas_create(char *path, size_t size)
 
 	error = ioctl(dirfd, SLSFS_SAS_CREATE, &args);
 	close(dirfd);
-
-	printf("5\n");
 	if (error != 0) {
 		perror("ioctl");
 		return (error);
 	}
 
-	fd = open(path, O_RDWR);
-	if (fd < 0) {
-		perror("open");
-		return -1;
-	}
-
-	return (fd);
+	return (0);
 }
 
 int
