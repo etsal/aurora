@@ -24,8 +24,8 @@
 
 #include <fs/pseudofs/pseudofs.h>
 
+#include <memsnap_ioctl.h>
 #include "memsnap.h"
-#include "memsnap_ioctl.h"
 
 SDT_PROVIDER_DEFINE(sas);
 SDT_PROBE_DEFINE4(sas, , , start, "long", "long", "long", "long");
