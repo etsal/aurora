@@ -8,8 +8,6 @@ TESTDIR=$PWD
 cd $MNT
 
 "$TESTDIR/sas/sas" "$MNT" 1
-#"$TESTDIR/sas/sas" "$MNT" 1
-#"$TESTDIR/sas/sas" "$MNT" 1
 CODE=$?
 
 cd $TESTDIR

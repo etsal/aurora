@@ -2,8 +2,8 @@ NAME = sas
 
 PROG = $(NAME)
 SRC = $(NAME).c
-LDADD = -lsls
-LDFLAGS = -L../../libsls
+LDADD = -lmsnp
+LDFLAGS = -L../../libmsnp
 CFLAGS += -I../../include -g
 MAN =
 

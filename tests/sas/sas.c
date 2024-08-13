@@ -2,9 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <slos.h>
-#include <sls.h>
-#include <slsfs.h>
+#include <memsnap.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
