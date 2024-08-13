@@ -1,4 +1,4 @@
-SUBDIR=include libosnap objsnap tools/new_objsnap memsnap tests
+SUBDIR=include libosnap objsnap tools/new_objsnap memsnap libmsnp tests
 
 IDENT=${:!sysctl -n kern.ident!}
 .if (${IDENT} == "FASTDBG")
