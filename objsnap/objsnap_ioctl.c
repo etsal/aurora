@@ -136,8 +136,51 @@ objsnap_io_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
 static void
 objsnap_io_msnp(struct objsnap_txn *set)
 {
-	panic("implement");
-	/* XXX Manually do the job of sas_pager_done. */
+	diskptr_t ptr = set->d_ptr;
+	uint64_t before;
+	struct buf *bp;
+	uint64_t ind;
+	uint64_t off;
+	vm_page_t m;
+	int cnt, i;
+	int error;
+
+	for (ind = 0, cnt = 0; ind < set->d_cnt; ind += cnt) {
+		off = DEVICE_BLOCK_NUM(ptr.offset + ind);
+		cnt = min(MAXBCACHEBUF / BLOCKSIZE, set->d_cnt - ind);
+
+		bp = getblk(osdata.os_vp, off, cnt * BLOCKSIZE, 
+			0, 0, GB_UNMAPPED);
+		bp->b_data = unmapped_buf;
+		bp->b_iocmd = BIO_WRITE;
+		bp->b_npages = 0;
+
+		for (i = 0; i < cnt; i++) {
+			bp->b_pages[i] = set->d_msnp[ind + i];
+			bp->b_npages += 1;
+		}
+
+		_Static_assert(BLOCKSIZE == PAGE_SIZE, "ObjSnap block size");
+		bp->b_resid = bp->b_bufsize = bp->b_bcount = bp->b_npages * PAGE_SIZE;
+		bp->b_iodone = bdone;
+
+		OS_START(DATAWRITE, &before);
+		bufobj_wref(&osdata.os_vp->v_bufobj);
+		g_vfs_strategy(&osdata.os_vp->v_bufobj, bp);
+		error = bufwait(bp);
+			KASSERT(error == 0, ("bufwait returned %d", error));
+		OS_STOP(DATAWRITE, &before);
+
+		for (i = 0; i < cnt; i++) {
+			m = bp->b_pages[i];
+			bp->b_pages[i] = NULL;
+			m->flags &= ~VPO_SASCOW;
+		}
+
+		bp->b_bufsize = bp->b_bcount = 0;
+		bp->b_npages = 0;
+		brelse(bp);
+	}
 }
 
 static void
