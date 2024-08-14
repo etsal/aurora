@@ -69,6 +69,7 @@ tools/server/server
 tools/slsctl/slsctl
 tools/slsdb/slsdb
 tools/new_objsnap/new_objsnap
+tools/objinit/objinit
 
 test.sh
 load.sh

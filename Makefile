@@ -1,4 +1,4 @@
-SUBDIR=include memsnap libmsnp tests/sas tests/sasipc tests/sasfork
+SUBDIR=include memsnap objsnap libmsnp tests tools
 
 IDENT=${:!sysctl -n kern.ident!}
 .if (${IDENT} == "FASTDBG")

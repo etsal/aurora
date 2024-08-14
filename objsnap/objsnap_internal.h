@@ -19,12 +19,12 @@
 #include <vm/uma.h>
 #include <vm/vm_object.h>
 
+#include "objsnap_common.h"
 #include "objsnap_ioctl.h"
 #include "arraylist.h"
 #include "vtree.h"
 
 #define OBJMAGIC (0xdeadbeef)
-#define MAXTHREADS (64)
 
 #define LOCK(lock, type) (lockmgr(lock, type, NULL))
 #define UNLOCK(lock) (lockmgr(lock, LK_RELEASE, NULL))
@@ -68,40 +68,6 @@ struct objsnap_metadata {
 	int os_syncer_wakeup;
 	volatile enum objsync_state os_syncer_exit;
 };
-
-struct pageset {
-	vm_object_t obj;
-	vm_pindex_t pindex;
-	vm_offset_t offset;
-	index_t inode;
-};
-
-struct blockset {
-	uint64_t blkoff; 
-	uint64_t objoff;
-	index_t objino;
-};
-
-enum objsnap_txn_type {
-	OBJTXN_PAGE,
-	OBJTXN_BLOCK,
-	OBJTXN_MSNP,
-};
-
-#define MAXDRTYCNT (64)
-
-struct objsnap_txn {
-	int d_cnt;	/* Size of the working set in disk blocks. */
-	union {
-		struct pageset d_pg[MAXDRTYCNT];
-		struct blockset d_blk[MAXDRTYCNT];
-		vm_page_t d_msnp[MAXDRTYCNT];
-	};
-	obj_diskptr_t d_ptr; /* Backing disk pointer. */
-	enum objsnap_txn_type d_type; /* Transaction data format. */
-};
-
-void objsnap_txn_commit(struct objsnap_txn *txn);
 
 struct __attribute__((packed)) walptr {
 	index_t w_inode; // Object being modified
@@ -158,8 +124,5 @@ OS_STAT_DEFINE(GETBLK, 10);
 #define OS_STAT_LAST (11)
 
 #define STAT_TO_ARGS(args, name) ((args)->os_stats[OS_STAT_##name]) = OS_TOSTAT_##name()
-
-struct objsnap_txn tpgs[MAXTHREADS];
-void objsnap_checkpoint_txn(int);
 
 #endif
