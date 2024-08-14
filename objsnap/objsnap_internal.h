@@ -156,4 +156,6 @@ OS_STAT_DEFINE(ALLOCATE, 9);
 
 #define STAT_TO_ARGS(args, name) ((args)->os_stats[OS_STAT_##name]) = OS_TOSTAT_##name()
 
+struct objsnap_txn tpgs[MAXTHREADS];
+
 #endif

@@ -74,8 +74,7 @@ struct sema wr;
 uint64_t transaction_size = 0;
 uint64_t transaction_size_cnt = 0;
 
-
-static struct objsnap_txn tpgs[MAXTHREADS];
+struct objsnap_txn tpgs[MAXTHREADS];
 
 struct __attribute__((packed)) objsnap_wal_entry {
 	int we_cnt;	
