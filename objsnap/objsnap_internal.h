@@ -85,6 +85,7 @@ struct blockset {
 enum objsnap_txn_type {
 	OBJTXN_PAGE,
 	OBJTXN_BLOCK,
+	OBJTXN_MSNP,
 };
 
 #define MAXDRTYCNT (64)
@@ -94,6 +95,7 @@ struct objsnap_txn {
 	union {
 		struct pageset d_pg[MAXDRTYCNT];
 		struct blockset d_blk[MAXDRTYCNT];
+		vm_page_t d_msnp[MAXDRTYCNT];
 	};
 	obj_diskptr_t d_ptr; /* Backing disk pointer. */
 	enum objsnap_txn_type d_type; /* Transaction data format. */
@@ -158,5 +160,6 @@ OS_STAT_DEFINE(GETBLK, 10);
 #define STAT_TO_ARGS(args, name) ((args)->os_stats[OS_STAT_##name]) = OS_TOSTAT_##name()
 
 struct objsnap_txn tpgs[MAXTHREADS];
+void objsnap_checkpoint_txn(int);
 
 #endif

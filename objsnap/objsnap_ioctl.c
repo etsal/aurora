@@ -133,6 +133,15 @@ objsnap_io_uio(void *data, struct pageset *pgset, size_t pgcnt)
 	}
 }
 
+/* 
+ * MemSnap transactions take physical pages directly and are zero-copy.
+ */
+static void
+objsnap_io_msnp(struct objsnap_txn *set)
+{
+	panic("implement");
+}
+
 static void
 objsnap_io_block(struct objsnap_txn *set)
 {
@@ -347,6 +356,10 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 		objsnap_io_block(txn);
 		break;
 
+	case OBJTXN_MSNP:
+		objsnap_io_block(txn);
+		break;
+
 	default:
 		panic("invalid transaction data type %d\n", txn->d_type);
 	}
@@ -380,12 +393,11 @@ objsnap_printstats(void)
 	print_stat(OS_TOSTAT_ALLOCATE(), per_us);
 }
 
-static void
-objsnap_checkpoint(struct objsnap_checkpoint_args *args)
+void
+objsnap_checkpoint_txn(int tid)
 {
 	struct objsnap_txn txn_pg;
 	uint64_t checkpoint;
-	int tid = args->tid;
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
 	int total_size = 0;
@@ -447,6 +459,11 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	return;
 }
 
+static void
+objsnap_checkpoint(struct objsnap_checkpoint_args *args)
+{
+	return (objsnap_checkpoint_txn(args->tid):
+}
 
 static void
 objsnap_create(struct objsnap_create_args *args)
