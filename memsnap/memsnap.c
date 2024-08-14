@@ -25,6 +25,10 @@
 #include <fs/pseudofs/pseudofs.h>
 
 #include <memsnap_ioctl.h>
+#include <objsnap_ioctl.h>
+
+#include "../objsnap/objsnap_common.h"
+
 #include "memsnap.h"
 
 SDT_PROVIDER_DEFINE(sas);
@@ -40,6 +44,8 @@ uint64_t msnp_copies;
 
 uint64_t msnp_commits;
 long msnp_inserts, msnp_removes;
+
+static int msnp_objsnap_tid = 0;
 
 MALLOC_DEFINE(M_MSNP, "msnp_mount", "msnp mount structures");
 
@@ -184,7 +190,7 @@ struct msnp_commit_args {
 };
 
 void
-sas_test_cow(vm_offset_t vaddr, vm_page_t *m)
+msnp_test_cow(vm_offset_t vaddr, vm_page_t *m)
 {
 	vm_page_t oldm, newm;
 	vm_object_t obj;
@@ -230,13 +236,42 @@ sas_test_cow(vm_offset_t vaddr, vm_page_t *m)
 	atomic_add_64(&msnp_copies, 1);
 }
 
-#define MAX_SAS (256)
+static void
+msnp_genio(struct pglist *snaplist, int tid)
+{
+	struct objsnap_txn *txn = &tpgs[tid];
+	vm_page_t m, mtmp;
+
+	KASSERT(0 <= tid && tid < MAXTHREADS, ("invalid tid %d", tid));
+	/* 
+	 * Up to the maximum transaction size,
+	 * fill in the transaction and commit.
+	 */
+	TAILQ_FOREACH_SAFE(m, snaplist, snapq, mtmp) {
+		if (txn->d_cnt == MAXDRTYCNT)
+			break;
+
+		vm_page_lock(m);
+		KASSERT(m->object != NULL, ("stray page found"));
+
+		txn->d_msnp[txn->d_cnt++] = m;
+
+		msnp_page_untrack_unlocked(snaplist, m);
+
+		vm_page_unlock(m);
+	}
+
+	KASSERT(txn->d_cnt > 0, ("empty commit"));
+
+	objsnap_checkpoint_txn(tid, OBJTXN_MSNP);
+}
 
 static __attribute__((noinline)) void
 msnp_trace_commit(void)
 {
-	struct pglist *snaplist = &curthread->td_snaplist;
-	struct pmap *pmap = &curproc->p_vmspace->vm_pmap;
+	struct thread *td = curthread;
+	struct pglist *snaplist = &td->td_snaplist;
+	struct pmap *pmap = &td->td_proc->p_vmspace->vm_pmap;
 	size_t written = 0;
 	vm_page_t m, mtmp;
 
@@ -245,6 +280,9 @@ msnp_trace_commit(void)
 	msnp_tracks = 0;
 	msnp_removes = 0;
 	msnp_attempts = 0;
+
+	if (td->td_objtid < 0)
+		td->td_objtid = atomic_fetchadd_int(&msnp_objsnap_tid, 1);
 
 	PMAP_LOCK(pmap);
 	TAILQ_FOREACH_SAFE(m, snaplist, snapq, mtmp) {
@@ -262,23 +300,11 @@ msnp_trace_commit(void)
 	PMAP_UNLOCK(pmap);
 
 	SDT_PROBE0(sas, , , protect);
-
 	while (!TAILQ_EMPTY(snaplist)) {
-		panic("unimplemented commit operation");
+		msnp_genio(snaplist, td->td_objtid);
 	}
 
-	/* 
-	 * NOTE: The names of these probes are now inaccurate,
-	 * but we keep them like that to be compatible with the
-	 * original MemSnap scripts. It used to be that writing and
-	 * waiting for the write was two steps, but ObjSnap transactions
-	 * always block.
-	 */
 	SDT_PROBE1(sas, , , write, written);
-	TAILQ_FOREACH_SAFE(m, snaplist, snapq, mtmp) {
-		m->flags &= ~VPO_SASCOW;
-	}
-	SDT_PROBE0(sas, , , block);
 
 	atomic_add_64(&msnp_commits, 1);
 }
@@ -493,7 +519,7 @@ msnp_init(PFS_INIT_ARGS)
 	ctrl->pn_data = sb;
 
 	sls_writefault_hook = msnp_trace_update;
-	sas_cow_hook = sas_test_cow;
+	sas_cow_hook = msnp_test_cow;
 
 	return (0);
 }
@@ -508,4 +534,4 @@ msnp_uninit(struct pfs_info *pi, struct vfsconf *vfc)
 }
 
 PSEUDOFS(msnp, 1, VFCF_JAIL);
-//MODULE_DEPEND(msnp, objsnap, 0, 0, 0);
+MODULE_DEPEND(msnp, objsnap, 0, 0, 0);

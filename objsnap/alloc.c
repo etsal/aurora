@@ -18,6 +18,8 @@
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
 
+#include <objsnap_ioctl.h>
+
 #include "objsnap_internal.h"
 #include "arraylist.h"
 #include "alloc.h"

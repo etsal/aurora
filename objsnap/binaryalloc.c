@@ -15,6 +15,8 @@
 #include <sys/taskqueue.h>
 #include <sys/errno.h>
 
+#include <objsnap_ioctl.h>
+
 #include "objsnap_internal.h"
 
 #include "arraylist.h"

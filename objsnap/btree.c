@@ -11,6 +11,8 @@
 #include <sys/rwlock.h>
 #include <sys/bufobj.h>
 
+#include <objsnap_ioctl.h>
+
 #include "objsnap_internal.h"
 #include "arraylist.h"
 #include "binaryalloc.h"

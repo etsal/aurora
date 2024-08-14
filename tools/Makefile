@@ -1,4 +1,4 @@
-SUBDIR = slsctl newfs_sls radixdbg slsdb server 
+SUBDIR = slsctl newfs_sls new_objsnap objinit radixdbg slsdb server 
 
 BINDIR=/sbin
 .MAKE.EXPORTED=BINDIR

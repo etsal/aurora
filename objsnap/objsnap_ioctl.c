@@ -40,8 +40,9 @@
 #include <geom/geom.h>
 #include <geom/geom_vfs.h>
 
+#include <objsnap_ioctl.h>
+
 #include "objsnap_internal.h"
-#include "objsnap_ioctl.h"
 #include "alloc.h"
 #include "btree.h"
 
@@ -60,6 +61,8 @@
 static int objsnap_osdata_init_syncer(void);
 
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
+
+struct objsnap_txn tpgs[MAXTHREADS];
 
 struct objsnap_metadata osdata;
 static uint64_t global_txnid;
@@ -134,6 +137,7 @@ static void
 objsnap_io_msnp(struct objsnap_txn *set)
 {
 	panic("implement");
+	/* XXX Manually do the job of sas_pager_done. */
 }
 
 static void
@@ -260,22 +264,33 @@ objsnap_wait_entry(int tid)
 }
 
 static void
-objsnap_checkpoint_mktxn(int *mytids, size_t size_tids, struct objsnap_txn *txn_pg)
+objsnap_mktxn(int *mytids, size_t size_tids, enum objsnap_txn_type type, struct objsnap_txn *txn)
 {
 	int i, j, ind;
 	int tmptid;
 
-	txn_pg->d_type = OBJTXN_PAGE;
+	txn->d_type = type;
 
 	for (i = 0, ind = 0; i < size_tids; i++) {
 		tmptid = mytids[i];
 
-		for (j = 0; j < tpgs[tmptid].d_cnt; j++)
-			txn_pg->d_pg[ind++] = tpgs[tmptid].d_pg[j];
+		for (j = 0; j < tpgs[tmptid].d_cnt; j++) { 
+			switch (type) {
+			case OBJTXN_PAGE:
+				txn->d_pg[ind++] = tpgs[tmptid].d_pg[j];
+				break;
+			case OBJTXN_BLOCK:
+				txn->d_blk[ind++] = tpgs[tmptid].d_blk[j];
+				break;
+			case OBJTXN_MSNP:
+				txn->d_msnp[ind++] = tpgs[tmptid].d_msnp[j];
+				break;
+			}
+		}
 		tpgs[tmptid].d_cnt = 0;
 	}
 
-	txn_pg->d_cnt = ind;
+	txn->d_cnt = ind;
 }
 
 static void
@@ -285,6 +300,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 	struct buf *bp;
 	uint64_t before;
 	diskptr_t walblk;
+	vm_page_t m;
 	int i;
 
 	for (i = 0; i < npages; i++) {
@@ -297,6 +313,12 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 		case OBJTXN_BLOCK:
 			we.we_ptrs[i].w_inode = txn->d_blk[i].objino;
 			we.we_ptrs[i].w_index = IDX_TO_OFF(txn->d_blk[i].objoff);
+			we.we_ptrs[i].w_offset = txn->d_ptr.offset + i;
+			break;
+		case OBJTXN_MSNP:
+			m = txn->d_msnp[i];
+			we.we_ptrs[i].w_inode = m->object->objid;
+			we.we_ptrs[i].w_index = IDX_TO_OFF(m->pindex);
 			we.we_ptrs[i].w_offset = txn->d_ptr.offset + i;
 			break;
 		default:
@@ -321,7 +343,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 	return;
 }
 
-void
+static void
 objsnap_txn_commit(struct objsnap_txn *txn)
 {
 	uint64_t before;
@@ -337,7 +359,6 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 	objsnap_wal_log(txn, txn->d_cnt);
 
 	/* Write out out the transaction. */
-	/* XXXETSAL: Is this correct? We are flushing the WAL entry before even filling in the buffer. */
 	switch (txn->d_type) {
 	case OBJTXN_PAGE:
 		objsnap_io_page(txn);
@@ -348,7 +369,7 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 		break;
 
 	case OBJTXN_MSNP:
-		objsnap_io_block(txn);
+		objsnap_io_msnp(txn);
 		break;
 
 	default:
@@ -383,9 +404,9 @@ objsnap_printstats(void)
 }
 
 void
-objsnap_checkpoint_txn(int tid)
+objsnap_checkpoint_txn(int tid, enum objsnap_txn_type type)
 {
-	struct objsnap_txn txn_pg;
+	struct objsnap_txn txn;
 	uint64_t checkpoint;
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
@@ -416,6 +437,10 @@ objsnap_checkpoint_txn(int tid)
 	}
 
 	for (i = 0; i < MAXTHREADS && total_size < MAXDRTYCNT; i++) {
+		/* 
+		 * XXX There's a TOCTTOU race for d_cnt in this loop. 
+		 */
+
 		/* We can't have more the a 64KiB write combined chunk */
 		if ((total_size + tpgs[i].d_cnt) > MAXDRTYCNT)
 			continue;
@@ -424,10 +449,14 @@ objsnap_checkpoint_txn(int tid)
 			mytids[size_tids++] = i;
 			total_size += tpgs[i].d_cnt;
 		}
+
 	}
 
-	objsnap_checkpoint_mktxn((int *)mytids, size_tids, &txn_pg);
-	objsnap_txn_commit(&txn_pg);
+	if (total_size > MAXDRTYCNT)
+		panic("transaction size too large");
+
+	objsnap_mktxn((int *)mytids, size_tids, type, &txn);
+	objsnap_txn_commit(&txn);
 
 	for (i = 0; i < size_tids; i++) {
 		int local_tid = mytids[i];
@@ -451,7 +480,7 @@ objsnap_checkpoint_txn(int tid)
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
-	return (objsnap_checkpoint_txn(args->tid):
+	return (objsnap_checkpoint_txn(args->tid, OBJTXN_PAGE));
 }
 
 static void

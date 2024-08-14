@@ -22,7 +22,7 @@ extern void (*sls_writefault_hook)(vm_offset_t vaddr, vm_map_t map, vm_page_t m,
     int fault_type);
 extern void (*sas_cow_hook)(vm_offset_t vaddr, vm_page_t *m);
 void msnp_trace_update(vm_offset_t vaddr, vm_map_t map, vm_page_t m, int fault_type);
-void sas_test_cow(vm_offset_t vaddr, vm_page_t *m);
+void msnp_test_cow(vm_offset_t vaddr, vm_page_t *m);
 
 /* Turns an SLS ID to an identifier suitable for the SLOS. */
 #define OIDTOSLSID(OID) ((int)(OID & INT_MAX))
