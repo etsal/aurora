@@ -267,7 +267,7 @@ msnp_genio(struct pglist *snaplist, int tid)
 }
 
 static __attribute__((noinline)) void
-msnp_trace_commit(void)
+slsfs_sas_trace_commit(void)
 {
 	struct thread *td = curthread;
 	struct pglist *snaplist = &td->td_snaplist;
@@ -397,7 +397,7 @@ msnp_node_ioctl(PFS_IOCTL_ARGS)
 		return (0);
 
 	case SLSFS_SAS_TRACE_COMMIT:
-		msnp_trace_commit();
+		slsfs_sas_trace_commit();
 		return (0);
 
 	case SLSFS_SAS_REFRESH_PROTECTION:
