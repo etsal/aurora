@@ -4,7 +4,7 @@
 #include <sys/ioccom.h>
 #include <sys/sbuf.h>
 
-#include "rdtsc.h"
+#include "objsnap_rdtsc.h"
 
 #ifdef __cplusplus
 extern "C" {
