@@ -136,6 +136,25 @@ objsnap_io_uio(void *data, struct pageset *pgset, size_t pgcnt)
 	}
 }
 
+static void
+objsnap_msnp_done(struct buf *bp)
+{
+	vm_page_t m;
+	int i;
+
+	for (i = 0; i < bp->b_npages; i++) {
+		m = bp->b_pages[i];
+		bp->b_pages[i] = NULL;
+
+		m->flags &= ~VPO_SASCOW;
+	}
+
+	bp->b_bufsize = bp->b_bcount = 0;
+	bp->b_npages = 0;
+
+	bdone(bp);
+}
+
 /* 
  * MemSnap transactions take physical pages directly and are zero-copy.
  */
@@ -147,45 +166,44 @@ objsnap_io_msnp(struct objsnap_txn *set)
 	struct buf *bp;
 	uint64_t ind;
 	uint64_t off;
-	vm_page_t m;
 	int cnt, i;
 	int error;
 
 	for (ind = 0, cnt = 0; ind < set->d_cnt; ind += cnt) {
+		_Static_assert(BLOCKSIZE == PAGE_SIZE, "ObjSnap block size");
+
 		off = DEVICE_BLOCK_NUM(ptr.offset + ind);
 		cnt = min(MAXBCACHEBUF / BLOCKSIZE, set->d_cnt - ind);
 
-		bp = getblk(osdata.os_vp, off, cnt * BLOCKSIZE, 
-			0, 0, GB_UNMAPPED);
+		bp = getpbuf(NULL);
+		KASSERT(bp != NULL, ("could not get pbuf"));
+
 		bp->b_data = unmapped_buf;
+
+		bp->b_lblkno = off;
+		bp->b_blkno = DEVICE_BLOCK_NUM(bp->b_lblkno);
+		bp->b_iooffset = dbtob(bp->b_lblkno);
 		bp->b_iocmd = BIO_WRITE;
-		bp->b_npages = 0;
 
-		for (i = 0; i < cnt; i++) {
-			bp->b_pages[i] = set->d_msnp[ind + i];
-			bp->b_npages += 1;
-		}
-
-		_Static_assert(BLOCKSIZE == PAGE_SIZE, "ObjSnap block size");
+		bp->b_npages = cnt;
 		bp->b_resid = bp->b_bufsize = bp->b_bcount = bp->b_npages * PAGE_SIZE;
-		bp->b_iodone = bdone;
+		bp->b_iodone = objsnap_msnp_done;
+
+		for (i = 0; i < cnt; i++)
+			bp->b_pages[i] = set->d_msnp[ind + i];
+
+		bp->b_flags &= ~B_INVAL;
+		bp->b_rcred = crhold(curthread->td_ucred);
+		bp->b_wcred = crhold(curthread->td_ucred);
 
 		OS_START(DATAWRITE, &before);
-		bufobj_wref(&osdata.os_vp->v_bufobj);
+		BUF_ASSERT_LOCKED(bp);
 		g_vfs_strategy(&osdata.os_vp->v_bufobj, bp);
 		error = bufwait(bp);
-			KASSERT(error == 0, ("bufwait returned %d", error));
+		KASSERT(error == 0, ("bufwait %p returned %d (offset read %ld) (iooffset %ld)", bp, error, bp->b_lblkno, bp->b_iooffset));
+		relpbuf(bp, NULL);
 		OS_STOP(DATAWRITE, &before);
 
-		for (i = 0; i < cnt; i++) {
-			m = bp->b_pages[i];
-			bp->b_pages[i] = NULL;
-			m->flags &= ~VPO_SASCOW;
-		}
-
-		bp->b_bufsize = bp->b_bcount = 0;
-		bp->b_npages = 0;
-		brelse(bp);
 	}
 }
 
