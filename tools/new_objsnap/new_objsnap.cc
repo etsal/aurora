@@ -28,7 +28,7 @@
 #include <assert.h>
 #include <objsnap.h>
 #include <objsnap_ioctl.h>
-#include <rdtsc.h>
+#include <objsnap_rdtsc.h>
 
 const char *disk;
 uint64_t clock_cycles;
