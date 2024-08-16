@@ -37,12 +37,13 @@ aursetup()
 	objinit /dev/$DISK
 
 	kldload memsnap
-	mount -t msnp msnp $MNT
+	mkdir -p /memsnap
+	mount -t msnp msnp $MNT/memsnap
 }
 
 aurteardown()
 {
-	umount -t msnp msnp $MNT
+	umount -t msnp msnp $MNT/memsnap
 	kldunload memsnap
 	kldunload objsnap
 }
