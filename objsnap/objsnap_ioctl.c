@@ -57,6 +57,7 @@
                        __asm__ volatile ("pause" ::: ); \
        } while(0)
 
+#define TXN_MAXBP (4)
 
 static int objsnap_osdata_init_syncer(void);
 
@@ -162,14 +163,19 @@ static void
 objsnap_io_msnp(struct objsnap_txn *set)
 {
 	obj_diskptr_t ptr = set->d_ptr;
+	struct buf *bp_inflight[TXN_MAXBP];
+	struct buf *bp, **bpp;
 	uint64_t before;
-	struct buf *bp;
 	uint64_t ind;
 	uint64_t off;
+	int inflight;
 	int cnt, i;
 	int error;
 
-	for (ind = 0, cnt = 0; ind < set->d_cnt; ind += cnt) {
+	for (inflight = 0; inflight < TXN_MAXBP; inflight++)
+		bp_inflight[inflight] = NULL;
+
+	for (ind = 0, cnt = 0, inflight = 0; ind < set->d_cnt; ind += cnt) {
 		_Static_assert(BLOCKSIZE == PAGE_SIZE, "ObjSnap block size");
 
 		off = DEVICE_BLOCK_NUM(ptr.offset + ind);
@@ -199,12 +205,34 @@ objsnap_io_msnp(struct objsnap_txn *set)
 		OS_START(DATAWRITE, &before);
 		BUF_ASSERT_LOCKED(bp);
 		g_vfs_strategy(&osdata.os_vp->v_bufobj, bp);
-		error = bufwait(bp);
-		KASSERT(error == 0, ("bufwait %p returned %d (offset read %ld) (iooffset %ld)", bp, error, bp->b_lblkno, bp->b_iooffset));
-		relpbuf(bp, NULL);
-		OS_STOP(DATAWRITE, &before);
 
+		/*
+		 * Stow away the buffer for later waiting, unless we're out of space.
+		 * In that case, wait for a previous buffer to finish and release it.
+		 */
+		bpp = &bp_inflight[inflight];
+		if (*bpp != NULL) {
+			error = bufwait(*bpp);
+			KASSERT(error == 0, ("bufwait %p returned %d", *bpp, error));
+			relpbuf(*bpp, NULL);
+		}
+		*bpp = bp;
+		inflight = (inflight + 1) % TXN_MAXBP;
+
+		OS_STOP(DATAWRITE, &before);
 	}
+
+	/* Wait for all buffers in the transaction. */
+	for (inflight = 0; inflight < TXN_MAXBP; inflight++) {
+		bp = bp_inflight[inflight];
+		if (bp == NULL)
+			continue;
+
+		error = bufwait(bp);
+		KASSERT(error == 0, ("bufwait %p returned %d", bp, error));
+		relpbuf(bp, NULL);
+	}
+
 }
 
 static void
