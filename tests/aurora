@@ -33,19 +33,19 @@ slsunmount()
 
 aursetup()
 {
-	kldload objsnap
-	objinit /dev/$DISK
-
-	kldload memsnap
-	mkdir -p /memsnap
-	mount -t msnp msnp $MNT/memsnap
+    kldload slos
+    slsnewfs
+    slsmount
+    kldload sls
+    kldload metropolis
 }
 
 aurteardown()
 {
-	umount -t msnp msnp $MNT/memsnap
-	kldunload memsnap
-	kldunload objsnap
+    kldunload metropolis
+    kldunload sls
+    slsunmount
+    kldunload slos
 }
 
 slscheckpoint()
