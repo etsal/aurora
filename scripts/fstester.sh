@@ -7,7 +7,7 @@ run() {
 	iostat -d nvd0 1 > /tmp/gstat.out &
 	sleep 2
 	IOSTAT_PID=$!
-	fio $ARGS --direct=1 --iodepth=1 --fsync=1 --numjobs=$1 --size=10G --output=/tmp/run.out --output-format=json &
+	fio $ARGS --iodepth=1 --fsync=1 --numjobs=$1 --size=10G --output=/tmp/run.out --output-format=json &
 	PID=$!
 	wait $PID
 	sleep 5
@@ -59,7 +59,7 @@ test_ffs() {
 }
 
 test_objsnap() {
-	for i in $(seq 1 $1) 
+	for i in $(seq 1 4 $1) 
 	do
 		iostat -hd nvd0 1 > /tmp/gstat.out &
 		IOSTAT_PID=$!
@@ -84,8 +84,9 @@ test_objsnap() {
 
 
 OUT="out"
+THREADS=24
 truncate -s 0 "$OUT"
-echo "fs,num_threads,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib," >> "$OUT"
-test_objsnap 24 "$OUT"
-test_zfs 24 "$OUT"
-test_ffs 24 "$OUT"
+echo "fs,num_threads,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops" >> "$OUT"
+#test_objsnap $THREADS "$OUT"
+test_zfs $THREADS "$OUT"
+test_ffs $THREADS "$OUT"
