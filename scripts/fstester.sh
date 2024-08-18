@@ -44,15 +44,52 @@ test_zfs() {
 	done
 }
 
-test_ffs() {
+test_ffs_journal() {
 	for i in $(seq 1 $1) 
 	do
 		newfs -b 4096 "$DISK"
+		tunefs -j enable "$DISK"
+		tunefs -n enable "$DISK"
+		tunefs -p "$DISK"
 		mount "$DISK" /testmnt
 		touch "/testmnt/test"
 		truncate -s 0 "/testmnt/test"
 
-		run "$i" "$2" "ffs"
+		run "$i" "$2" "ffs+journal"
+
+		umount /testmnt
+	done
+}
+
+test_ffs() {
+	for i in $(seq 1 $1) 
+	do
+		newfs -b 4096 "$DISK"
+		tunefs -n enable "$DISK"
+		tunefs -j disable "$DISK"
+		tunefs -p "$DISK"
+		mount "$DISK" /testmnt
+		touch "/testmnt/test"
+		truncate -s 0 "/testmnt/test"
+
+		run "$i" "$2" "ffs+su"
+
+		umount /testmnt
+	done
+}
+
+test_ffs_bs() {
+	for i in $(seq 1 $1) 
+	do
+		newfs "$DISK"
+		tunefs -n enable "$DISK"
+		tunefs -j disable "$DISK"
+		tunefs -p "$DISK"
+		mount "$DISK" /testmnt
+		touch "/testmnt/test"
+		truncate -s 0 "/testmnt/test"
+
+		run "$i" "$2" "ffs+su+defaultbs"
 
 		umount /testmnt
 	done
@@ -88,5 +125,7 @@ THREADS=24
 truncate -s 0 "$OUT"
 echo "fs,num_threads,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops" >> "$OUT"
 #test_objsnap $THREADS "$OUT"
-test_zfs $THREADS "$OUT"
+test_ffs_journal $THREADS "$OUT"
+test_ffs_bs $THREADS "$OUT"
 test_ffs $THREADS "$OUT"
+test_zfs $THREADS "$OUT"
