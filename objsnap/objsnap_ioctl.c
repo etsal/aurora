@@ -186,7 +186,9 @@ objsnap_io_page(struct objsnap_txn *set)
 
 		objsnap_io_uio(bp, &set->d_pg[pgoff], pagecnt);
 
+		OS_START(DATAWRITE, &before);
 		bwrite(bp);
+		OS_STOP(DATAWRITE, &before);
 
 		pgoff += pagecnt;
 		left -= pagecnt;
@@ -229,7 +231,7 @@ objsnap_wait_completion(int tid)
 static bool
 objsnap_wait_entry(int tid)
 {
-	int wait = (MAX_WRITERS - sema_value(&wr));
+	int wait = (MAX_WRITERS - sema_value(&wr)) / 2;
 
 	if (wait > 0)
 		pause_sbt("combiner wait", wait * SBT_1US, 0 ,0);
@@ -294,7 +296,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 			break;
 		default:
 			panic("invalid txn type %d\n", txn->d_type);
-		}
+		}	
 	}
 
 	we.we_cnt = npages;
@@ -302,6 +304,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 
 	// This will acquire the wal lock
 	objsnap_blkalloc_wal(&walblk);
+
 	OS_START(GETBLK, &before);
 	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset), BLOCKSIZE, 0, 0, 0);
 	OS_STOP(GETBLK, &before);
@@ -312,11 +315,10 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 
 	memcpy(bp->b_data, &we, sizeof(struct objsnap_wal_entry));
 
-	alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAX_WAL_ENTRIES;
-	// Release it
-    	lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
-
+	
+	OS_START(DATAWRITE, &before);
 	bwrite(bp);
+	OS_STOP(DATAWRITE, &before);
 
 
 	return;
@@ -763,6 +765,7 @@ objsnap_wal_syncer(void *ctx)
 	mtx_lock(&osdata.os_syncer_lk);
 	osdata.os_syncer_exit = OBJSYNC_RUNNING;
 
+	printf("Starting checkpoint!\n");
 	while (osdata.os_syncer_exit == OBJSYNC_RUNNING) {
 		mtx_unlock(&osdata.os_syncer_lk);
 
@@ -831,13 +834,10 @@ objsnap_wal_syncer(void *ctx)
 
 		head = atomic_load_64(&alloc.alloc_walptr_head);
 		tail = atomic_load_64(&alloc.alloc_walptr_tail);
-		if (check_within(tail, head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
-			pause_sbt("Sync-wait", SBT_1US * 10, 0, C_HARDCLOCK);
-		}
-
 		mtx_lock(&osdata.os_syncer_lk);
 	}
 
+	printf("Ending checkpoint!\n");
 	osdata.os_syncer_exit = OBJSYNC_EXITED;
 	mtx_unlock(&osdata.os_syncer_lk);
 	kthread_exit();
@@ -897,16 +897,19 @@ objsnap_osdata_init_syncer(void)
 static void
 objsnap_osdata_fini_syncer(void)
 {
-	mtx_lock(&osdata.os_syncer_lk);
 	if (osdata.os_syncer_exit != OBJSYNC_UNINIT) {
+		printf("Trying to lock!\n");
 		osdata.os_syncer_exit = OBJSYNC_EXITING;
-		wakeup(&osdata);
+		printf("Waiting!\n");
 
 		while(osdata.os_syncer_exit != OBJSYNC_EXITED)
-			msleep_sbt(&osdata, &osdata.os_syncer_lk, PRIBIO, "Sync-exit-wait", SBT_1MS, 0, C_HARDCLOCK);
+			pause_sbt("waiting for checkpoint", 1 * SBT_1US, 0 ,0);
 	}
-
+	pause_sbt("waiting for checkpoint", 100 * SBT_1US, 0 ,0);
+	printf("Done!\n");
+	mtx_lock(&osdata.os_syncer_lk);
 	mtx_unlock(&osdata.os_syncer_lk);
+
 	mtx_destroy(&osdata.os_syncer_lk);
 	sema_destroy(&wr);
 	bzero(&osdata.os_syncer_lk, sizeof(osdata.os_syncer_lk));
@@ -939,6 +942,8 @@ objsnap_osdata_fini(void)
 {
 	struct objsnap_vnode *vnode;
 	int i;
+
+	objsnap_osdata_fini_syncer();
 
 	if (osdata.os_cdev != NULL) {
 		destroy_dev(osdata.os_cdev);
@@ -975,8 +980,6 @@ objsnap_osdata_fini(void)
 			free(vnode->v_inode, M_OBJSNAP);
 		}
 	}
-
-	objsnap_osdata_fini_syncer();
 
 	taskqueue_quiesce(osdata.os_tq);
 	taskqueue_free(osdata.os_tq);

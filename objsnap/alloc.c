@@ -84,6 +84,11 @@ objsnap_blkalloc_wal(obj_diskptr_t *ptr)
     ptr->offset = alloc.alloc_walptr_head + alloc.alloc_base;
     ptr->size = 1; 
 
+    alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAX_WAL_ENTRIES;
+    // Release it
+    lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
+
+
     return (0);
 }
 

@@ -67,7 +67,7 @@ struct objsnap_metadata {
 	struct mtx os_syncer_lk;
 	struct thread *os_syncertd;
 	int os_syncer_wakeup;
-	enum objsync_state os_syncer_exit;
+	volatile enum objsync_state os_syncer_exit;
 };
 
 struct pageset {
