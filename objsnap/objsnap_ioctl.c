@@ -305,7 +305,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 	OS_STOP(VNFAULTMOVE, &before);
 
 	memcpy(bp->b_data, &we, sizeof(struct objsnap_wal_entry));
-	atomic_store_64(&alloc.alloc_walptr_head, (alloc.alloc_walptr_head + 1) % MAX_WAL_ENTRIES);
+	alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAX_WAL_ENTRIES;
     	lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
 
 	bwrite(bp);
@@ -673,18 +673,18 @@ static struct cdevsw objsnap_cdevsw = {
 };
 
 static int
-objsnap_sync_dirtylist(int threadlist_at, index_t inode_i[], int *inode_cnt) 
+objsnap_sync_dirtylist(uint64_t threadlist_at, index_t inode_i[], int *inode_cnt) 
 {
 	struct buf *bp;
 	struct objsnap_wal_entry set;
 	int start = *inode_cnt;
 
 	int error;
-
 	// These won't be actual reads, if system is under load, these will
 	// almost always be in the cache.
+	printf("Getting From checkpointer %lu %lu\n", threadlist_at, DEVICE_BLOCK_NUM(threadlist_at + alloc.alloc_base));
 	if ((error = bread(osdata.os_vp, 
-			DEVICE_BLOCK_NUM(threadlist_at), 
+			DEVICE_BLOCK_NUM(threadlist_at + alloc.alloc_base), 
 			BLOCKSIZE, NOCRED, &bp)) != 0) {
 		return error;
 	}
@@ -737,11 +737,12 @@ check_within(uint64_t s, uint64_t e, int within, int mod) {
 	if (e > s) {
 		return (s + within) >= e;
 	}
+
 	return ((s + within) % mod) >= e;
 }
  
 
-#define WAL_SYNCER_SIZE (512)
+#define WAL_SYNCER_SIZE (1024)
 static void
 objsnap_wal_syncer(void *ctx)
 {
@@ -762,11 +763,13 @@ objsnap_wal_syncer(void *ctx)
 		// Clear out current tail to head of Wal entrys, no need for a lock
 		// If the head ptr outpaces us we just keep staying in the while look clearing
 		// stuff out
-		if (!check_within(head, tail, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+		if (!check_within(tail, head, 4 * WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
 			int inode_cnt = 0;
-			for (int i = head; i < (tail + WAL_SYNCER_SIZE); i++ ) {
-				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES) + alloc.alloc_base, inode_i, &inode_cnt);
+			printf("Checkpoint %lu %lu\n", tail, head);
+			for (uint64_t i = tail; i < (tail + WAL_SYNCER_SIZE); i++ ) {
+				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES), inode_i, &inode_cnt);
 			}
+			printf("Checkpoint 2 %lu %lu\n", tail, head);
 			for (int i = 0; i < inode_cnt; i++) {
 				struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
 				osinode_t *inode = vnode->v_inode;
@@ -815,7 +818,7 @@ objsnap_wal_syncer(void *ctx)
 
 		head = atomic_load_64(&alloc.alloc_walptr_head);
 		tail = atomic_load_64(&alloc.alloc_walptr_tail);
-		if (check_within(head, tail, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+		if (check_within(tail, head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
 			pause_sbt("Sync-wait", SBT_1US * 10, 0, C_HARDCLOCK);
 		}
 

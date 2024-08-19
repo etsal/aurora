@@ -331,9 +331,13 @@ threadedTest(int numthreads, int num_objs,
 int
 main(int argc, char *argv[])
 {
-	if (argc != 5) {
-		printf("Usage: new_objsnap <disk> <threads> <dirty_set_size> <runFor>");
+	if (argc < 5) {
+		printf("Usage: new_objsnap <disk> <threads> <dirty_set_size> <runFor> <optional>");
 		return (EX_USAGE);
+	}
+	int ps = 0;
+	if (argc == 6) {
+		ps = 1;
 	}
 
 	disk = argv[1];
@@ -386,8 +390,10 @@ main(int argc, char *argv[])
 
 	}
 
+	if (ps)
+		printstats(clock_cycles);
+
 	printf("objsnap, %d, %f, %f, %lu, %f", numthreads, iops, lat_ns, lat_99_ns, goodput);
-	//printstats(clock_cycles);
 
 	return (EX_OK);
 }

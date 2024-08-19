@@ -82,12 +82,6 @@ objsnap_blkalloc_wal()
     ptr.offset = alloc.alloc_walptr_head;
     ptr.size = 1; 
 
-    /*
-    alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAX_WAL_ENTRIES;
-
-    mtx_unlock(&alloc.alloc_lk);
-    */
-
     ptr.offset += alloc.alloc_base;
 
     return ptr;
