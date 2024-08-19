@@ -37,16 +37,19 @@ allocator_init()
 	alloc.alloc_bsize = BLOCKSIZE;
 
 	// Start the offset after inodes and wal thread list
-	uint32_t offset = superblock.super_max_inodes + MAX_WAL_ENTRIES + 2;
+	// Every inode points to two objects
+	uint32_t offset = (2 * superblock.super_max_inodes) + MAX_WAL_ENTRIES + 2;
 	uint32_t left = alloc.alloc_size_total_blocks - offset;
 
 	ba_init(&alloc.alloc_impl, offset, left);
 
-	printf("Initial allocator State:\n");
+	printf("Initial allocator State: %u %u\n", offset, left);
 	ba_print(&alloc.alloc_impl);
 
 
-	alloc.alloc_base = superblock.super_max_inodes + 2;
+	// Every inode points to two objects
+	alloc.alloc_base = (2 * superblock.super_max_inodes) + 1;
+	printf("Allocator base: %lu\n", alloc.alloc_base);
 	alloc.alloc_walptr_head = 0; 
 	alloc.alloc_walptr_tail = 0;
 };
@@ -57,12 +60,11 @@ allocator_destroy()
     ba_destroy(&alloc.alloc_impl);
 }
 
-diskptr_t
-objsnap_blkalloc_wal()
+int
+objsnap_blkalloc_wal(diskptr_t *ptr)
 {
     uint64_t before;
     int check_behind;
-    diskptr_t ptr;
 
     lockmgr(&alloc.alloc_lk, LK_EXCLUSIVE, 0);
     size_t curhead = alloc.alloc_walptr_head;
@@ -79,28 +81,28 @@ objsnap_blkalloc_wal()
     	OS_STOP(LOCKANDCOPY, &before);
     }
     
-    ptr.offset = alloc.alloc_walptr_head;
-    ptr.size = 1; 
+    ptr->offset = alloc.alloc_walptr_head + alloc.alloc_base;
+    ptr->size = 1; 
 
-    ptr.offset += alloc.alloc_base;
-
-    return ptr;
+    return (0);
 }
 
-diskptr_t 
-allocate_block(int i)
+int
+allocate_block(int i, diskptr_t *ptr)
 {
-    diskptr_t ptr;
     uint64_t before;
     int error;
     OS_START(ALLOCATE, &before);
-    error = ba_alloc(&alloc.alloc_impl, i, &ptr);
+    error = ba_alloc(&alloc.alloc_impl, i, ptr);
     if (error) {
         panic("Problem allocating!");
     }
+    if (ptr->offset <= (superblock.super_max_inodes + MAX_WAL_ENTRIES + 2)) {
+	    printf("ERROR: PTR TOO EARLY INCORRECT LOCATION\n");
+    }
     OS_STOP(ALLOCATE, &before);
 
-    return ptr;
+    return (0);
 }
 
 void 
@@ -152,7 +154,7 @@ osinode_t *allocate_inode()
 
     osinode_t *newinode = malloc(sizeof(osinode_t), M_OBJSNAP, M_WAITOK);
     newinode->i_index = atomic_fetchadd_int(&superblock.super_next, 2);
-    newinode->i_treeptr = allocate_block(1);
+    allocate_block(1, &newinode->i_treeptr);
     newinode->i_version = 0;
     newinode->i_cnt = 0;
 

@@ -178,11 +178,11 @@ objsnap_io_page(struct objsnap_txn *set)
 	while (left) {
 		pagecnt = min(OBJSNAP_MAXUIO, left);
 
-		OS_START(DATAWRITE, &before);
+		OS_START(GETBLK, &before);
 		struct buf *bp = getblk(osdata.os_vp, 
 			DEVICE_BLOCK_NUM(ptr.offset + set->d_cnt - left), BLOCKSIZE * pagecnt, 
 			0, 0, GB_UNMAPPED);
-		OS_STOP(DATAWRITE, &before);
+		OS_STOP(GETBLK, &before);
 
 		objsnap_io_uio(bp, &set->d_pg[pgoff], pagecnt);
 
@@ -205,6 +205,7 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	STAT_TO_ARGS(args, BTINSERT);
 	STAT_TO_ARGS(args, CHECKPOINT);
 	STAT_TO_ARGS(args, ALLOCATE);
+	STAT_TO_ARGS(args, GETBLK);
 	args->os_cnt = OS_STAT_LAST;
 	return (0);
 }
@@ -299,16 +300,24 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 	we.we_cnt = npages;
 	we.we_txnid = get_txn_id();
 
-	walblk = objsnap_blkalloc_wal();
-	OS_START(VNFAULTMOVE, &before);
+	// This will acquire the wal lock
+	objsnap_blkalloc_wal(&walblk);
+	OS_START(GETBLK, &before);
 	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset), BLOCKSIZE, 0, 0, 0);
-	OS_STOP(VNFAULTMOVE, &before);
+	OS_STOP(GETBLK, &before);
+
+	if (we.we_cnt >= MAXDRTYCNT) {
+		printf("CNT Too large! %d\n", we.we_cnt);
+	}
 
 	memcpy(bp->b_data, &we, sizeof(struct objsnap_wal_entry));
+
 	alloc.alloc_walptr_head = (alloc.alloc_walptr_head + 1) % MAX_WAL_ENTRIES;
+	// Release it
     	lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
 
 	bwrite(bp);
+
 
 	return;
 }
@@ -322,7 +331,8 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 	atomic_fetchadd_64(&transaction_size_cnt, 1);
 
 	OS_START(ALLOCATE, &before);
-	txn->d_ptr = allocate_block(txn->d_cnt);
+	// TODO:CHECK ERROR
+	allocate_block(txn->d_cnt, &txn->d_ptr);
 	OS_STOP(ALLOCATE, &before);
 
 	/* Construct the transaction entry on the WAL and flush it. */
@@ -682,7 +692,6 @@ objsnap_sync_dirtylist(uint64_t threadlist_at, index_t inode_i[], int *inode_cnt
 	int error;
 	// These won't be actual reads, if system is under load, these will
 	// almost always be in the cache.
-	printf("Getting From checkpointer %lu %lu\n", threadlist_at, DEVICE_BLOCK_NUM(threadlist_at + alloc.alloc_base));
 	if ((error = bread(osdata.os_vp, 
 			DEVICE_BLOCK_NUM(threadlist_at + alloc.alloc_base), 
 			BLOCKSIZE, NOCRED, &bp)) != 0) {
@@ -691,6 +700,11 @@ objsnap_sync_dirtylist(uint64_t threadlist_at, index_t inode_i[], int *inode_cnt
 
 	memcpy(&set, bp->b_data, sizeof(struct objsnap_wal_entry));
 	brelse(bp);
+	if (set.we_cnt > MAXDRTYCNT) {
+		printf("ERROR IN SET CNT - WAY TOO LARGE for entry %lu - %d, head is around %lu\n", 
+				threadlist_at, set.we_cnt, alloc.alloc_walptr_head);
+		return (0);
+	}
 
 	// Create out list of inode objects
 	for (int i = 0; i < set.we_cnt; i++) {
@@ -724,7 +738,6 @@ objsnap_sync_dirtylist(uint64_t threadlist_at, index_t inode_i[], int *inode_cnt
 		}
 
 	}
-
 	OS_STOP(INODE, &before);
 	return (0);
 }
@@ -753,7 +766,7 @@ objsnap_wal_syncer(void *ctx)
 	while (osdata.os_syncer_exit == OBJSYNC_RUNNING) {
 		mtx_unlock(&osdata.os_syncer_lk);
 
-		lockmgr(&alloc.alloc_lk, LK_SHARED, 0);
+		lockmgr(&alloc.alloc_lk, LK_EXCLUSIVE, 0);
 
 		uint64_t head = atomic_load_64(&alloc.alloc_walptr_head);
 		uint64_t tail = atomic_load_64(&alloc.alloc_walptr_tail);
@@ -765,11 +778,9 @@ objsnap_wal_syncer(void *ctx)
 		// stuff out
 		if (!check_within(tail, head, 4 * WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
 			int inode_cnt = 0;
-			printf("Checkpoint %lu %lu\n", tail, head);
 			for (uint64_t i = tail; i < (tail + WAL_SYNCER_SIZE); i++ ) {
 				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES), inode_i, &inode_cnt);
 			}
-			printf("Checkpoint 2 %lu %lu\n", tail, head);
 			for (int i = 0; i < inode_cnt; i++) {
 				struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
 				osinode_t *inode = vnode->v_inode;
@@ -785,6 +796,8 @@ objsnap_wal_syncer(void *ctx)
 
 				// Get the sibling inode and write to that instead.
 				inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
+
+				vtree_checkpoint(&vnode->v_tree);
 				
 				// During inserting we likely COW faulted which means we need to update our treeptr;
 				inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);

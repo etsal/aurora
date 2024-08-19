@@ -18,6 +18,12 @@
 #include "alloc.h"
 
 //#define DEBUG
+#define BACKOFF() \
+       do { \
+               for (int i = 0; i < 10; i++) \
+                       __asm__ volatile ("pause" ::: ); \
+       } while(0)
+
 
 MALLOC_DEFINE(M_BTREE, "Btree allocator", "btree allocator");
 
@@ -124,22 +130,27 @@ btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
 static void
 btnode_create(btnode_t node, btree_t tree, uint8_t type)
 {
-  diskptr_t ptr = allocate_block(1);
+	uint64_t before;
+  	diskptr_t ptr;
+	// TODO: CHECK ERROR
+	allocate_block(1, &ptr);
 
-  struct buf *bp = getblk(tree->tr_vp, DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE, 0, 0, 0);
-    bzero(bp->b_data, BLOCKSIZE);
-  node->n_bp = bp;
-  node->n_data = (btdata_t)bp->b_data;
-  node->n_tree = tree;
-  node->n_ptr = ptr;
-  node->n_type = type;
-  node->n_len = 0;
-  bp->b_blkno = DEVICE_BLOCK_NUM(ptr.offset);
-  bp->b_iooffset = dbtob(bp->b_blkno);
+	OS_START(GETBLK, &before);
+	struct buf *bp = getblk(tree->tr_vp, DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE, 0, 0, 0);
+	OS_STOP(GETBLK, &before);
+	bzero(bp->b_data, BLOCKSIZE);
+	node->n_bp = bp;
+	node->n_data = (btdata_t)bp->b_data;
+	node->n_tree = tree;
+	node->n_ptr = ptr;
+	node->n_type = type;
+	node->n_len = 0;
+	bp->b_blkno = DEVICE_BLOCK_NUM(ptr.offset);
+	bp->b_iooffset = dbtob(bp->b_blkno);
 
 #ifdef DEBUG
-  printf("[Btnode Create] %p PTR(%u) Size(%u) Datap(%p) MAX(%lu) Device(%lu)\n", 
-    bp, ptr.offset, node->n_len, bp->b_data, BT_MAX_KEYS, DEVICE_BLOCK_NUM(ptr.offset));
+	printf("[Btnode Create] %p PTR(%u) Size(%u) Datap(%p) MAX(%lu) Device(%lu)\n", 
+	bp, ptr.offset, node->n_len, bp->b_data, BT_MAX_KEYS, DEVICE_BLOCK_NUM(ptr.offset));
 #endif
 }
 
@@ -182,7 +193,9 @@ path_cow(bpath_t path)
       }
 
       bo = &tmp->n_tree->tr_vp->v_bufobj;
-      diskptr_t newptr = allocate_block(1);
+      diskptr_t newptr;
+      // TODO CHECK ERROR
+      allocate_block(1, &newptr);
 
       // Release the buffer from its mapping
       brelvp(tmp->n_bp);
@@ -393,9 +406,6 @@ btnode_split(bpath_t path)
 
   /* We are the root */
   if (pptr == NULL) {
-#ifdef DEBUG
-    printf("[Parent Split]\n");
-#endif
     btnode_create(&parent, node->n_tree, BT_INNER);
     /* Set our current node to the child of our new parent */
     parent.n_ch[0] = node->n_ptr;
@@ -404,14 +414,10 @@ btnode_split(bpath_t path)
     node->n_tree->tr_ptr = parent.n_ptr;
     idx = 0;
   } else {
-#ifdef DEBUG
     printf("[Split]\n");
-#endif
-
     parent = *pptr;
     idx = path_getindex(path);
   }
-
   btnode_create(&right_child, node->n_tree, node->n_type);
 
   right_child.n_len = SPLIT_KEYS;

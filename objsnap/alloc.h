@@ -33,9 +33,9 @@ void allocator_init(void);
 void allocator_destroy(void);
     
 int write_ondisk_inode(osinode_t *inode);
-diskptr_t allocate_block(int num);
+int allocate_block(int num, diskptr_t *ptr);
 void free_block(diskptr_t ptr);
-diskptr_t objsnap_blkalloc_wal(void);
+int objsnap_blkalloc_wal(diskptr_t *ptr);
 osinode_t *allocate_inode(void);
 
 #endif
