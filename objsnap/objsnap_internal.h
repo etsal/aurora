@@ -96,7 +96,7 @@ struct objsnap_txn {
 		struct pageset d_pg[MAXDRTYCNT];
 		struct blockset d_blk[MAXDRTYCNT];
 	};
-	diskptr_t d_ptr; /* Backing disk pointer. */
+	obj_diskptr_t d_ptr; /* Backing disk pointer. */
 	enum objsnap_txn_type d_type; /* Transaction data format. */
 };
 void objsnap_txn_commit(struct objsnap_txn *txn);

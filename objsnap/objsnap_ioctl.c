@@ -131,7 +131,7 @@ objsnap_io_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
 static void
 objsnap_io_block(struct objsnap_txn *set)
 {
-	diskptr_t ptr = set->d_ptr;
+	obj_diskptr_t ptr = set->d_ptr;
 	struct buf *src, *dst;
 	uint64_t before;
 	uint64_t off;
@@ -166,7 +166,7 @@ objsnap_io_block(struct objsnap_txn *set)
 static void
 objsnap_io_page(struct objsnap_txn *set)
 {
-	diskptr_t ptr = set->d_ptr;
+	obj_diskptr_t ptr = set->d_ptr;
 	uint64_t before;
 	int pagecnt;
 
@@ -229,7 +229,7 @@ objsnap_wait_completion(int tid)
 static bool
 objsnap_wait_entry(int tid)
 {
-	int wait = (MAX_WRITERS - sema_value(&wr)) / 2;
+	int wait = (MAX_WRITERS - sema_value(&wr));
 
 	if (wait > 0)
 		pause_sbt("combiner wait", wait * SBT_1US, 0 ,0);
@@ -277,7 +277,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 	struct objsnap_wal_entry we;
 	struct buf *bp;
 	uint64_t before;
-	diskptr_t walblk;
+	obj_diskptr_t walblk;
 	int i;
 
 	for (i = 0; i < npages; i++) {
@@ -755,7 +755,7 @@ check_within(uint64_t s, uint64_t e, int within, int mod) {
 }
  
 
-#define WAL_SYNCER_SIZE (1024)
+#define WAL_SYNCER_SIZE (1024 * 4)
 static void
 objsnap_wal_syncer(void *ctx)
 {

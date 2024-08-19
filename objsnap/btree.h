@@ -68,7 +68,7 @@ typedef struct btdata
   uint64_t bt_keys[BT_MAX_KEYS];
 
   /* Make sure to add one child for inner nodes */
-  diskptr_t bt_children[BT_MAX_KEYS + 1];
+  obj_diskptr_t bt_children[BT_MAX_KEYS + 1];
 } btdata;
 
 typedef btdata* btdata_t;
@@ -82,7 +82,7 @@ typedef struct btnode
   struct buf* n_bp;
   btdata_t n_data;
   btree_t n_tree;
-  diskptr_t n_ptr;
+  obj_diskptr_t n_ptr;
 #define n_id n_bp->bp_lblkno
 #define n_hdr n_data->bt_hdr
 #define n_keys n_data->bt_keys
@@ -97,7 +97,7 @@ typedef btnode* btnode_t;
 typedef struct btree
 {
   // tr_ptr must always be on top so the virtual tree can acquire it
-  diskptr_t tr_ptr;
+  obj_diskptr_t tr_ptr;
   size_t tr_vs;
   uint64_t tr_version;
   struct vnode *tr_vp;
@@ -109,7 +109,7 @@ btree_t btree_create(void);
 void btree_destroy(btree_t tree);
 
 int
-btree_init(void* tree, struct vnode *vp, diskptr_t ptr, size_t value_size);
+btree_init(void* tree, struct vnode *vp, obj_diskptr_t ptr, size_t value_size);
 int
 btree_insert(void* tree, uint64_t key, void* value);
 int
@@ -136,7 +136,7 @@ btree_rangequery(void* tree,
                  kvp* results,
                  size_t results_max);
 
-diskptr_t
+obj_diskptr_t
 btree_checkpoint(void* tree);
 
 extern struct vtreeops btreeops;

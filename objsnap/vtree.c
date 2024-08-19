@@ -161,7 +161,7 @@ vtree_rangequery(vtree* tree,
   return VTREE_RANGEQUERY(tree, key_low, key_max, results, results_max);
 }
 
-diskptr_t
+obj_diskptr_t
 vtree_checkpoint(vtree* tree)
 {
   vtree_empty_wal(tree);

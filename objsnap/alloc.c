@@ -61,7 +61,7 @@ allocator_destroy()
 }
 
 int
-objsnap_blkalloc_wal(diskptr_t *ptr)
+objsnap_blkalloc_wal(obj_diskptr_t *ptr)
 {
     uint64_t before;
     int check_behind;
@@ -88,7 +88,7 @@ objsnap_blkalloc_wal(diskptr_t *ptr)
 }
 
 int
-allocate_block(int i, diskptr_t *ptr)
+allocate_block(int i, obj_diskptr_t *ptr)
 {
     uint64_t before;
     int error;
@@ -106,7 +106,7 @@ allocate_block(int i, diskptr_t *ptr)
 }
 
 void 
-free_block(diskptr_t ptr)
+free_block(obj_diskptr_t ptr)
 {
     ba_free(&alloc.alloc_impl, ptr);
 }
@@ -165,7 +165,7 @@ osinode_t *allocate_inode()
     btree_t btree = btree_create();
     vnode->v_tree = vtree_create(btree, &btreeops, 0);
     VTREE_INIT(&vnode->v_tree, osdata.os_vp, 
-        newinode->i_treeptr, sizeof(diskptr_t));
+        newinode->i_treeptr, sizeof(obj_diskptr_t));
 
     // Initialize ondisk root block
     error = bread(osdata.os_vp, DEVICE_BLOCK_NUM(newinode->i_treeptr.offset), 

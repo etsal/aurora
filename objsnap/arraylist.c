@@ -13,7 +13,7 @@ initlist(struct arraylist *al, int max)
 {
     al->cnt = 0;
     al->max = max;
-    al->list = malloc(sizeof(diskptr_t) * max, M_ARRAY, M_WAITOK);
+    al->list = malloc(sizeof(obj_diskptr_t) * max, M_ARRAY, M_WAITOK);
 }
 
 void 
@@ -23,13 +23,13 @@ destroylist(struct arraylist *al)
 }
 
 void 
-addlist(struct arraylist *al, int at, diskptr_t value) 
+addlist(struct arraylist *al, int at, obj_diskptr_t value) 
 {
     if (al->cnt == al->max)
         reinitlist(al, al->max * 2);
 
     memmove(&al->list[at + 1], &al->list[at], 
-        sizeof(diskptr_t) * (al->cnt - at));
+        sizeof(obj_diskptr_t) * (al->cnt - at));
     al->list[at] = value;
     al->cnt += 1;
 }
@@ -38,12 +38,12 @@ void
 removelist(struct arraylist *al, int index) 
 {
     memmove(&al->list[index], &al->list[index + 1], 
-        sizeof(diskptr_t) * (al->cnt - index - 1));
+        sizeof(obj_diskptr_t) * (al->cnt - index - 1));
     al->cnt -= 1;
 }
 
 void
-appendlist(struct arraylist *al, diskptr_t ptr)
+appendlist(struct arraylist *al, obj_diskptr_t ptr)
 {
     if (al->cnt == al->max)
         reinitlist(al, al->max * 2);
@@ -56,10 +56,10 @@ appendlist(struct arraylist *al, diskptr_t ptr)
 void
 reinitlist(struct arraylist *f, int to)
 {
-    diskptr_t *newlist = malloc(sizeof(diskptr_t) * to, 
+    obj_diskptr_t *newlist = malloc(sizeof(obj_diskptr_t) * to, 
         M_ARRAY, M_WAITOK);
     int amount = to < f->cnt ? to : f->cnt;
-    memcpy(newlist, f->list, amount * sizeof(diskptr_t));
+    memcpy(newlist, f->list, amount * sizeof(obj_diskptr_t));
     f->max = to;
     free(f->list, M_ARRAY);
     f->list = newlist;
@@ -73,7 +73,7 @@ movelist(struct arraylist *dst, struct arraylist *src)
     dst->list = src->list;
     dst->max = src->max;
     dst->cnt = src->cnt;
-    src->list = malloc(sizeof(diskptr_t) * dst->max, 
+    src->list = malloc(sizeof(obj_diskptr_t) * dst->max, 
         M_ARRAY, M_WAITOK);
     src->cnt = 0;
 }

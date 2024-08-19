@@ -15,7 +15,7 @@ extern "C" {
 #define CKPT_MAXINODES (64)
 #define OS_STAT_MAX	(16)
 
-#define NULLDISKPTR ((diskptr_t) -1)
+#define NULLDISKPTR ((obj_diskptr_t) -1)
 #define BADINDEX ((index_t)(-1))
 #define MAXPOWEROFTWO (31)
 
@@ -23,10 +23,10 @@ extern "C" {
 typedef uint64_t epoch_t;
 typedef int index_t;
 
-typedef struct diskptr {
+typedef struct obj_diskptr {
   uint32_t offset;
   uint32_t size;
-} diskptr_t;
+} obj_diskptr_t;
 
 typedef struct timerstat statblock[OS_STAT_MAX];
 
@@ -47,7 +47,7 @@ typedef struct {
 
 typedef struct {
 	index_t i_index;
-  diskptr_t i_treeptr;
+  obj_diskptr_t i_treeptr;
 
   uint64_t i_version;
   

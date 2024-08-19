@@ -106,17 +106,20 @@ btnode_dirty(btnode_t node)
 }
 
 static void
-btnode_init(btnode_t node, btree_t tree, diskptr_t ptr, int lk_flags)
+btnode_init(btnode_t node, btree_t tree, obj_diskptr_t *ptr, int lk_flags)
 {
+  uint64_t before;
   struct buf *bp;
   int error = 0;
-  error = bread(tree->tr_vp, DEVICE_BLOCK_NUM(ptr.offset), 
+  OS_START(GETBLK, &before); 
+  error = bread(tree->tr_vp, DEVICE_BLOCK_NUM(ptr->offset), 
     BLOCKSIZE, NOCRED, &bp);
+  OS_STOP(GETBLK, &before); 
   node->n_bp = bp;
   node->n_data = (btdata_t)bp->b_data;
   node->n_tree = tree;
-  node->n_ptr = ptr;
-  bp->b_blkno = DEVICE_BLOCK_NUM(ptr.offset);
+  node->n_ptr = *ptr;
+  bp->b_blkno = DEVICE_BLOCK_NUM(ptr->offset);
   bp->b_iooffset = dbtob(bp->b_blkno);
 
 #ifdef DEBUG
@@ -131,7 +134,7 @@ static void
 btnode_create(btnode_t node, btree_t tree, uint8_t type)
 {
 	uint64_t before;
-  	diskptr_t ptr;
+  	obj_diskptr_t ptr;
 	// TODO: CHECK ERROR
 	allocate_block(1, &ptr);
 
@@ -172,14 +175,15 @@ path_cow(bpath_t path)
 #endif
   btnode_t tmp;
   btnode_t parent = NULL;
-  struct bufobj *bo;
   int idx;
   /* We hold all the locks of the path exclusively so we can change the parent
    */
   for (int i = 0; i < path->p_len; i++) {
     /* Check if node is not already COWed */
     tmp = &path->p_nodes[i];
-    if (!BT_COWCHECK(tmp)) {
+    if (BT_COWCHECK(tmp)) {
+      uint64_t before;
+      OS_START(BTCOW, &before);
 
       /* Grab our index in our parent */
       if (i > 0) {
@@ -192,55 +196,37 @@ path_cow(bpath_t path)
         /* TODO: Update any consumer that this root has changed */
       }
 
-      bo = &tmp->n_tree->tr_vp->v_bufobj;
-      diskptr_t newptr;
-      // TODO CHECK ERROR
-      allocate_block(1, &newptr);
+      btnode newnode;
+      btnode_create(&newnode, tmp->n_tree, tmp->n_type);
 
-      // Release the buffer from its mapping
-      brelvp(tmp->n_bp);
+      memcpy(newnode.n_bp->b_data, tmp->n_bp->b_data, BLOCKSIZE);
 
       // Append to the deadlist
       appendlist(&tmp->n_tree->tr_deadlist, tmp->n_ptr);
-
-      // Assign our new pointer
-      tmp->n_ptr = newptr;
-
-      BO_LOCK(bo);
-
-      tmp->n_bp->b_lblkno = DEVICE_BLOCK_NUM(tmp->n_ptr.offset);
-      tmp->n_bp->b_blkno = DEVICE_BLOCK_NUM(tmp->n_ptr.offset);
-
-      // Place buffer back onto parent
-      bgetvp(tmp->n_tree->tr_vp, tmp->n_bp);
-
-      BO_UNLOCK(bo);
-
-      /* Perform the copy of data or however we choose to transfer it over */
+      // Release the buffer from its mapping
+      brelvp(tmp->n_bp);
+      path->p_nodes[i] = newnode;
 
       /* Update our parent to know of the change */
       if (i > 0) {
-        memcpy(&parent->n_ch[idx], &tmp->n_ptr, sizeof(diskptr_t));
+        memcpy(&parent->n_ch[idx], &tmp->n_ptr, sizeof(obj_diskptr_t));
       } else {
         /* Make sure we update our root ptr in our main tree datastructure */
         tmp->n_tree->tr_ptr = tmp->n_ptr;
       }
 
-#ifdef DEBUG
-      printf("[Btnode COW] %p -> %p)\n", tmp->n_bp, path->p_nodes[i].n_bp);
-#endif
-
       /* Turn off cow on the node and dirty the node */
       BT_BUMPVERSION(tmp);
       btnode_dirty(tmp);
+      OS_STOP(BTCOW, &before);
     }
   }
 }
 
 static inline void
-path_add(bpath_t path, btree_t tree, diskptr_t ptr, uint16_t cidx, int lk_flags)
+path_add(bpath_t path, btree_t tree, obj_diskptr_t ptr, uint16_t cidx, int lk_flags)
 {
-  btnode_init(&path->p_nodes[path->p_len], tree, ptr, lk_flags);
+  btnode_init(&path->p_nodes[path->p_len], tree, &ptr, lk_flags);
   path->p_indexes[path->p_len] = cidx;
   path->p_cur = path->p_len;
   path->p_len += 1;
@@ -301,7 +287,7 @@ btnode_go_deeper(bpath_t path, uint64_t key, int acquire_as)
     }
   }
 
-  diskptr_t ptr = *(diskptr_t*)&cur->n_ch[cidx];
+  obj_diskptr_t ptr = *(obj_diskptr_t*)&cur->n_ch[cidx];
   path_add(path, cur->n_tree, ptr, cidx, acquire_as);
 
   return path_getcur(path);
@@ -370,7 +356,7 @@ path_parent(bpath_t path)
 }
 
 static void
-btnode_inner_insert(btnode_t node, int idx, uint64_t key, diskptr_t value)
+btnode_inner_insert(btnode_t node, int idx, uint64_t key, obj_diskptr_t value)
 {
   KASSERT(BT_ISINNER(node), ("BTNODE IS NOT INNER"));
   if (node->n_len) {
@@ -479,7 +465,7 @@ btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
 
 
   node->n_keys[idx] = key;
-  memcpy(&node->n_ch[idx + 1], value, sizeof(diskptr_t));
+  memcpy(&node->n_ch[idx + 1], value, sizeof(obj_diskptr_t));
   node->n_len += 1;
 
   btnode_dirty(node);
@@ -508,9 +494,7 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
    * to this node must be COW'd
    * */
   if (BT_COWCHECK(node)) {
-    OS_START(BTCOW, &before);
     path_cow(path);
-    OS_STOP(BTCOW, &before);
   }
 
   OS_START(BTINSERT, &before);
@@ -554,7 +538,7 @@ btnode_leaf_delete(btnode_t node, int idx, void* value)
 static void
 btnode_inner_collapse(bpath_t path)
 {
-  diskptr_t* ptr;
+  obj_diskptr_t* ptr;
 
   btnode_t node = path_getcur(path);
   btnode_t parent = path_parent(path);
@@ -575,12 +559,12 @@ btnode_inner_collapse(bpath_t path)
   /* Find our index */
   int idx;
   for (idx = 0; idx < parent->n_len + 1; idx++) {
-    ptr = (diskptr_t*)&parent->n_ch[idx];
-    if (memcmp(ptr, &node->n_ptr, sizeof(diskptr_t)) == 0)
+    ptr = (obj_diskptr_t*)&parent->n_ch[idx];
+    if (memcmp(ptr, &node->n_ptr, sizeof(obj_diskptr_t)) == 0)
       break;
   }
 
-  KASSERT(memcmp(ptr, &node->n_ptr, sizeof(diskptr_t)) == 0, ("DOES NOT EQUAL KEY"));
+  KASSERT(memcmp(ptr, &node->n_ptr, sizeof(obj_diskptr_t)) == 0, ("DOES NOT EQUAL KEY"));
   int num_to_move = parent->n_len - idx;
   memmove(&parent->n_keys[idx],
           &parent->n_keys[idx + 1],
@@ -772,7 +756,7 @@ btree_bulkinsert(void* treep, kvp* keyvalues, size_t len)
 }
 
 int
-btree_init(void* tree_ptr, struct vnode *vp, diskptr_t ptr, size_t value_size)
+btree_init(void* tree_ptr, struct vnode *vp, obj_diskptr_t ptr, size_t value_size)
 {
   btree_t tree = (btree_t)tree_ptr;
 
@@ -846,7 +830,7 @@ btree_find(void* treep, uint64_t key, void* value)
 
 // You still need to flush the buffers after this, this will only mark 
 // Btrees as COW.
-diskptr_t
+obj_diskptr_t
 btree_checkpoint(void* treep)
 {
   btree_t tree = (btree_t)treep;

@@ -28,7 +28,7 @@ MALLOC_DECLARE(M_OBJSNAP);
  */
 
 /* Max value size for tree in bytes */
-#define BT_MAX_VALUE_SIZE (sizeof(diskptr_t))
+#define BT_MAX_VALUE_SIZE (sizeof(obj_diskptr_t))
 
 typedef struct kvp
 {
@@ -37,7 +37,7 @@ typedef struct kvp
   unsigned char data[BT_MAX_VALUE_SIZE];
 } kvp;
 
-typedef int (*vtree_init_t)(void* tree, struct vnode *vp, diskptr_t key, size_t value_size);
+typedef int (*vtree_init_t)(void* tree, struct vnode *vp, obj_diskptr_t key, size_t value_size);
 
 /* Write ops */
 typedef int (*vtree_insert_t)(void* tree, uint64_t key, void* value);
@@ -53,7 +53,7 @@ typedef int (*vtree_rangequery_t)(void* tree,
                                   kvp* results,
                                   size_t results_max);
 
-typedef diskptr_t (*vtree_checkpoint_t)(void* tree);
+typedef obj_diskptr_t (*vtree_checkpoint_t)(void* tree);
 typedef size_t (*vtree_getkeysize_t)(void* tree);
 
 typedef void (*vtree_bumpversion_t)(void* tree);
@@ -76,7 +76,7 @@ struct vtreeops
   vtree_getkeysize_t vtree_getkeysize;
 };
 
-#define VTREE_GETROOT(v) (*(diskptr_t *)((v)->v_tree))
+#define VTREE_GETROOT(v) (*(obj_diskptr_t *)((v)->v_tree))
 
 #define VTREE_WALSIZE (64UL * 1024)
 #define VTREE_MAXWAL (VTREE_WALSIZE / sizeof(kvp))
@@ -139,7 +139,7 @@ vtree_rangequery(vtree* tree,
                  kvp* results,
                  size_t results_max);
 
-diskptr_t
+obj_diskptr_t
 vtree_checkpoint(vtree* tree);
 
 void

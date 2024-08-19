@@ -56,7 +56,7 @@ determine_bucket_max(int numblocks)
 void 
 ba_init(struct binaryallocator *ba, uint32_t offset, uint32_t left)
 {
-	diskptr_t ptr;
+	obj_diskptr_t ptr;
 	size_t internalsize;
 	int bucket;
 
@@ -93,7 +93,7 @@ ba_destroy(struct binaryallocator *ba)
 }
 
 static int 
-allocate_from_bucket(struct arraylist *f, diskptr_t *ptr)
+allocate_from_bucket(struct arraylist *f, obj_diskptr_t *ptr)
 {
     if (f->cnt) {
         *ptr = f->list[f->cnt - 1];
@@ -110,7 +110,7 @@ static int
 split_above(struct binaryallocator *ba, int bucket) 
 {
     struct arraylist *from, *into;
-    diskptr_t ptr;
+    obj_diskptr_t ptr;
     int error;
     int splitbucket = bucket + 1;
 
@@ -136,7 +136,7 @@ split_above(struct binaryallocator *ba, int bucket)
     // Only ever going up 1 power of two so split it into two
     if (!allocate_from_bucket(from, &ptr)) {
         uint32_t splitinto = ptr.size / 2; 
-        diskptr_t tmpptr;
+        obj_diskptr_t tmpptr;
         KASSERT(splitinto == (1 << bucket), ("Incorrect splitting\n"));
         for (int i = 0; i < 2; i++) {
             tmpptr.offset = ptr.offset + (splitinto * i);
@@ -151,7 +151,7 @@ split_above(struct binaryallocator *ba, int bucket)
 }
 
 int
-ba_alloc(struct binaryallocator *ba, int numblocks, diskptr_t *ptr)
+ba_alloc(struct binaryallocator *ba, int numblocks, obj_diskptr_t *ptr)
 {
     struct arraylist *f;
 
@@ -188,7 +188,7 @@ ba_alloc(struct binaryallocator *ba, int numblocks, diskptr_t *ptr)
 }
 
 static void 
-ba_free_unlocked(struct binaryallocator *ba, diskptr_t tofree)
+ba_free_unlocked(struct binaryallocator *ba, obj_diskptr_t tofree)
 {
     struct arraylist *f;
     int bucket = determine_bucket(tofree.size);
@@ -236,7 +236,7 @@ ba_free_unlocked(struct binaryallocator *ba, diskptr_t tofree)
 }
 
 void
-ba_free(struct binaryallocator *ba, diskptr_t tofree)
+ba_free(struct binaryallocator *ba, obj_diskptr_t tofree)
 {
     mtx_lock(&ba->ba_lock);
     ba_free_unlocked(ba, tofree);

@@ -27,8 +27,8 @@ struct binaryallocator {
 };
 
 void ba_init(struct binaryallocator *ba, uint32_t offset, uint32_t left);
-int ba_alloc(struct binaryallocator *ba, int numblocks, diskptr_t *ptr);
-void ba_free(struct binaryallocator *ba, diskptr_t tofree);
+int ba_alloc(struct binaryallocator *ba, int numblocks, obj_diskptr_t *ptr);
+void ba_free(struct binaryallocator *ba, obj_diskptr_t tofree);
 void ba_destroy(struct binaryallocator *ba);
 void ba_print(struct binaryallocator *ba);
 #endif
