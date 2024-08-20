@@ -779,7 +779,7 @@ objsnap_wal_syncer(void *ctx)
 				// Get the sibling inode and write to that instead.
 				inode->i_index = (inode->i_index % 2) == 1 ? inode->i_index + 1 : inode->i_index - 1;
 
-				vtree_checkpoint(&vnode->v_tree);
+				//vtree_checkpoint(&vnode->v_tree);
 				
 				// During inserting we likely COW faulted which means we need to update our treeptr;
 				inode->i_treeptr = VTREE_GETROOT(&vnode->v_tree);

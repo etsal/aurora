@@ -199,24 +199,30 @@ path_cow(bpath_t path)
         /* TODO: Update any consumer that this root has changed */
       }
 
-      btnode newnode;
-      printf("1\n");
-      btnode_create(&newnode, tmp->n_tree, tmp->n_type);
+       struct bufobj *bo;
+	bo = &tmp->n_tree->tr_vp->v_bufobj;
+	obj_diskptr_t newptr;
+	allocate_block(1, &newptr);
 
-      printf("2\n");
-      memcpy(newnode.n_bp->b_data, tmp->n_bp->b_data, BLOCKSIZE);
+	brelvp(tmp->n_bp);
 
-      printf("3\n");
-      // Append to the deadlist
-      appendlist(&tmp->n_tree->tr_deadlist, tmp->n_ptr);
-      // Release the buffer from its mapping
-      brelvp(tmp->n_bp);
-      *tmp = newnode;
-      printf("4\n");
+	// Append to the deadlist
+	appendlist(&tmp->n_tree->tr_deadlist, tmp->n_ptr);
 
+	// Assign our new pointer
+	tmp->n_ptr = newptr;
+
+	BO_LOCK(bo);
+
+	tmp->n_bp->b_lblkno = DEVICE_BLOCK_NUM(tmp->n_ptr.offset);
+	tmp->n_bp->b_blkno = DEVICE_BLOCK_NUM(tmp->n_ptr.offset);
+
+	// Place buffer back onto parent
+	bgetvp(tmp->n_tree->tr_vp, tmp->n_bp);
+
+	BO_UNLOCK(bo);
       /* Update our parent to know of the change */
       if (i > 0) {
-      	printf("4.5 %p %d %p %u\n", parent->n_ch, idx, &parent->n_ch[idx], tmp->n_ptr.offset);
         memcpy(&parent->n_ch[idx], &tmp->n_ptr, sizeof(obj_diskptr_t));
       } else {
         /* Make sure we update our root ptr in our main tree datastructure */
@@ -495,8 +501,11 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
   uint64_t before;
   OS_START(BTFIND, &before);
   int idx;
+  printf("insert 1\n");
   btnode_find_child(path, key, LK_EXCLUSIVE);
+  printf("insert 2\n");
   btnode_t node = path_getcur(path);
+  printf("insert 3\n");
   idx = binary_search(node->n_keys, node->n_len, key);
   OS_STOP(BTFIND, &before);
   /*
@@ -504,8 +513,10 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
    * to this node must be COW'd
    * */
   if (BT_COWCHECK(node)) {
+    printf("insert 3.25\n");
     path_cow(path);
   }
+  printf("insert 3.5\n");
 
   OS_START(BTINSERT, &before);
   /* Update over insert */
@@ -517,6 +528,8 @@ btnode_insert(bpath_t path, uint64_t key, void* value)
       btnode_split(path);
     }
   }
+
+  printf("insert 4\n");
   OS_STOP(BTINSERT, &before);
 
   return 0;
@@ -786,9 +799,9 @@ btree_insert(void* treep, uint64_t key, void* value)
   int ret;
   bpath path;
   path.p_len = 0;
-#ifdef DEBUG
+ #ifdef DEBUG
   printf("[Insert] %lu\n", key);
-#endif
+ #endif
 
   path_add(&path, tree, tree->tr_ptr, INDEX_NULL, LK_EXCLUSIVE);
 
