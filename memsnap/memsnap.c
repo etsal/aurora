@@ -4,6 +4,7 @@
 #include <sys/queue.h>
 #include <sys/caprights.h>
 #include <sys/capsicum.h>
+#include <sys/conf.h>
 #include <sys/ioccom.h>
 #include <sys/kernel.h>
 #include <sys/ktr.h>
@@ -379,31 +380,6 @@ msnp_node_ioctl(PFS_IOCTL_ARGS)
 		*inaddrp= addr;
 		return (0);
 
-	/* 
-	 * NOTE: These calls being accessible from the object nodes are an
-	 * implementation artifact. It would have been nicer to have a 
-	 * control device for exposing these operations.
-	 */
-	case SLSFS_SAS_TRACE_START:
-		msnp_trace_start();
-		return (0);
-
-	case SLSFS_SAS_TRACE_END:
-		msnp_trace_end();
-		return (0);
-
-	case SLSFS_SAS_TRACE_ABORT:
-		msnp_trace_abort();
-		return (0);
-
-	case SLSFS_SAS_TRACE_COMMIT:
-		slsfs_sas_trace_commit();
-		return (0);
-
-	case SLSFS_SAS_REFRESH_PROTECTION:
-		msnp_refresh_protection();
-		return (0);
-
 	default:
 		return (EINVAL);
 	}
@@ -499,6 +475,51 @@ msnp_ctrl_destroy(PFS_DESTROY_ARGS)
 }
 
 static int
+msnp_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
+    struct thread *td)
+{
+
+	switch (cmd) {
+	case SLSFS_SAS_TRACE_START:
+		msnp_trace_start();
+		return (0);
+
+	case SLSFS_SAS_TRACE_END:
+		msnp_trace_end();
+		return (0);
+
+	case SLSFS_SAS_TRACE_ABORT:
+		msnp_trace_abort();
+		return (0);
+
+	case SLSFS_SAS_TRACE_COMMIT:
+		slsfs_sas_trace_commit();
+		return (0);
+
+	case SLSFS_SAS_REFRESH_PROTECTION:
+		msnp_refresh_protection();
+		return (0);
+	default:
+		return (EINVAL);
+	}
+
+}
+
+static struct cdevsw msnp_cdevsw = {
+	.d_version = D_VERSION,
+	.d_ioctl = msnp_ioctl,
+};
+
+static int
+msnp_root_destroy(PFS_DESTROY_ARGS)
+{
+	struct cdev *dev = (struct cdev *)pn->pn_data;
+	destroy_dev(dev);
+
+	return (0);
+}
+
+static int
 msnp_init(PFS_INIT_ARGS)
 {
 	struct pfs_node *root = pi->pi_root;
@@ -521,12 +542,18 @@ msnp_init(PFS_INIT_ARGS)
 	sls_writefault_hook = msnp_trace_update;
 	sas_cow_hook = msnp_test_cow;
 
+	root->pn_destroy = msnp_root_destroy;
+	root->pn_data = (void *)make_dev(&msnp_cdevsw, 0, UID_ROOT, GID_WHEEL, 0666, "msnp");
+	if (root->pn_data == NULL)
+		return (EINVAL);
+
 	return (0);
 }
 
 static int
 msnp_uninit(struct pfs_info *pi, struct vfsconf *vfc)
 {
+
 	sls_writefault_hook = NULL;
 	sas_cow_hook = NULL;
 

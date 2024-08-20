@@ -6,10 +6,6 @@
 struct slos_meta {
 	struct mtx sb_mtx;
 	uint64_t sb_sas_addr;
-	/*
-	 * XXX We need some indexing structure for the SAS
-	 * objects, since we are addressing them by name.
-	 */
 };
 
 struct slos_node {

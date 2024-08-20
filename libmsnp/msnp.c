@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -13,6 +14,30 @@
 
 #include <memsnap_ioctl.h>
 
+static char *_msnp_dev = "/dev/msnp";
+static int _msnp_fd = -1;
+static pthread_mutex_t _msnp_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static void
+slsfs_init_devfd(void)
+{
+	if (_msnp_fd >= 0)
+		return;
+
+	pthread_mutex_lock(&_msnp_mtx);
+	if (_msnp_fd >= 0) {
+		pthread_mutex_unlock(&_msnp_mtx);
+		return;
+	}
+
+	_msnp_fd = open(_msnp_dev, O_RDWR);
+	assert(_msnp_fd >= 0);
+
+	pthread_mutex_unlock(&_msnp_mtx);
+	return;
+
+}
+
 int
 slsfs_sas_create(char *path, size_t size)
 {
@@ -22,7 +47,6 @@ slsfs_sas_create(char *path, size_t size)
 	char *dir, *base;
 	int dirfd;
 	int error;
-
 
 	/* Set up the creation ioctl arguments. */
 	memset(basestr, '\0', PATH_MAX);
@@ -74,12 +98,22 @@ slsfs_sas_map(int fd, void **addrp)
 	return (0);
 }
 
+/*
+ * NOTE: The file descriptors in the signatures below are not actually used,
+ * because the underlying pseudofs ioctl() does not scale for multithreaded
+ * systems. We keep the signatures as below with compatibility with the 
+ * original slsfs-backed MemSnap interface (same reason we use a seemingly
+ * inconsistent naming scheme).
+ */
+
 int
-sas_trace_start(int fd)
+sas_trace_start(int __unused fd)
 {
 	int error;
 
-	error = ioctl(fd, SLSFS_SAS_TRACE_START);
+	slsfs_init_devfd();
+
+	error = ioctl(_msnp_fd, SLSFS_SAS_TRACE_START);
 	if (error != 0) {
 		perror("sas_trace_start");
 		return (1);
@@ -89,11 +123,13 @@ sas_trace_start(int fd)
 }
 
 int
-sas_trace_end(int fd)
+sas_trace_end(int __unused fd)
 {
 	int error;
 
-	error = ioctl(fd, SLSFS_SAS_TRACE_END);
+	slsfs_init_devfd();
+
+	error = ioctl(_msnp_fd, SLSFS_SAS_TRACE_END);
 	if (error != 0) {
 		perror("sas_trace_end");
 		return (1);
@@ -103,11 +139,13 @@ sas_trace_end(int fd)
 }
 
 int
-sas_trace_commit(int fd)
+sas_trace_commit(int __unused fd)
 {
 	int error;
 
-	error = ioctl(fd, SLSFS_SAS_TRACE_COMMIT);
+	slsfs_init_devfd();
+
+	error = ioctl(_msnp_fd, SLSFS_SAS_TRACE_COMMIT);
 	if (error != 0) {
 		perror("sas_trace_commit");
 		return (1);
@@ -117,11 +155,13 @@ sas_trace_commit(int fd)
 }
 
 int
-sas_trace_abort(int fd)
+sas_trace_abort(int __unused fd)
 {
 	int error;
 
-	error = ioctl(fd, SLSFS_SAS_TRACE_ABORT);
+	slsfs_init_devfd();
+
+	error = ioctl(_msnp_fd, SLSFS_SAS_TRACE_ABORT);
 	if (error != 0) {
 		perror("sas_trace_abort");
 		return (1);
@@ -131,11 +171,13 @@ sas_trace_abort(int fd)
 }
 
 int
-sas_refresh_protection(int fd)
+sas_refresh_protection(int __unused fd)
 {
 	int error;
 
-	error = ioctl(fd, SLSFS_SAS_REFRESH_PROTECTION);
+	slsfs_init_devfd();
+
+	error = ioctl(_msnp_fd, SLSFS_SAS_REFRESH_PROTECTION);
 	if (error != 0) {
 		perror("sas_trace_abort");
 		return (1);
