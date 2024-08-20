@@ -159,7 +159,7 @@ objsnap_msnp_done(struct buf *bp)
 /* 
  * MemSnap transactions take physical pages directly and are zero-copy.
  */
-static void
+static void __attribute__((noinline))
 objsnap_io_msnp(struct objsnap_txn *set)
 {
 	obj_diskptr_t ptr = set->d_ptr;
@@ -235,7 +235,7 @@ objsnap_io_msnp(struct objsnap_txn *set)
 
 }
 
-static void
+static void __attribute__((noinline))
 objsnap_io_block(struct objsnap_txn *set)
 {
 	obj_diskptr_t ptr = set->d_ptr;
@@ -268,7 +268,7 @@ objsnap_io_block(struct objsnap_txn *set)
 	}
 }
 
-static void
+static void __attribute__((noinline))
 objsnap_io_page(struct objsnap_txn *set)
 {
 	obj_diskptr_t ptr = set->d_ptr;
@@ -356,7 +356,7 @@ objsnap_wait_entry(int tid)
 	}
 }
 
-static void
+static void __attribute__((noinline))
 objsnap_mktxn(int *mytids, size_t size_tids, enum objsnap_txn_type type, struct objsnap_txn *txn)
 {
 	int i, j, ind;
@@ -386,7 +386,7 @@ objsnap_mktxn(int *mytids, size_t size_tids, enum objsnap_txn_type type, struct 
 	txn->d_cnt = ind;
 }
 
-static void
+static void __attribute__((noinline))
 objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 {
 	struct objsnap_wal_entry we;
@@ -442,7 +442,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 	return;
 }
 
-static void
+static void __attribute__((noinline))
 objsnap_txn_commit(struct objsnap_txn *txn)
 {
 	uint64_t before;
