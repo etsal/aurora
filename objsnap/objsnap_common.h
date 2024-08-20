@@ -32,7 +32,7 @@ struct objsnap_txn {
 	};
 	diskptr_t d_ptr; /* Backing disk pointer. */
 	enum objsnap_txn_type d_type; /* Transaction data format. */
-};
+} __attribute__((aligned(64))) ;
 
 extern struct objsnap_txn tpgs[MAXTHREADS];
 
