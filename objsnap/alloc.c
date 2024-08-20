@@ -103,7 +103,7 @@ allocate_block(int i, obj_diskptr_t *ptr)
         panic("Problem allocating!");
     }
     if (ptr->offset <= (superblock.super_max_inodes + MAX_WAL_ENTRIES + 2)) {
-	    printf("ERROR: PTR TOO EARLY INCORRECT LOCATION\n");
+	    printf("ERROR: PTR TOO EARLY INCORRECT LOCATION OVERWRITE FOR NOW %u\n", ptr->offset);
     }
     OS_STOP(ALLOCATE, &before);
 

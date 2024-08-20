@@ -83,6 +83,8 @@ struct __attribute__((packed)) objsnap_wal_entry {
 	struct walptr we_ptrs[MAXDRTYCNT];
 };
 
+struct objsnap_wal_entry *wal_entries;
+
 static uint64_t global_msgs[MAXTHREADS];
 
 static uint64_t get_txn_id() {
@@ -102,13 +104,14 @@ set_msg(int tid, uint64_t msg, uint64_t expected)
 }
 
 static void
-objsnap_io_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
+objsnap_io_uio(void *data, struct pageset *pgset, size_t pgcnt)
 {
 	size_t resid = BLOCKSIZE * pgcnt;
 	struct iovec aiov[16];
 	uint64_t before;
 	struct uio uio;
 	int i;
+	int error;
 
 	for (i = 0; i < pgcnt; i++) {
 		aiov[i].iov_base = (void *)(uintptr_t)(pgset[i].offset);
@@ -124,8 +127,11 @@ objsnap_io_uio(struct buf *bp, struct pageset *pgset, size_t pgcnt)
 	uio.uio_offset = 0;
 
 	OS_START(VNFAULTMOVE, &before);
-	vn_io_fault_pgmove(bp->b_pages, 0, resid, &uio);
+	error = vn_io_fault_uiomove(data, resid, &uio);
 	OS_STOP(VNFAULTMOVE, &before);
+	if (error) {
+		printf("ERROR %d\n", error);
+	}
 }
 
 static void
@@ -133,7 +139,6 @@ objsnap_io_block(struct objsnap_txn *set)
 {
 	obj_diskptr_t ptr = set->d_ptr;
 	struct buf *src, *dst;
-	uint64_t before;
 	uint64_t off;
 	uint64_t ind;
 	int cnt;
@@ -145,6 +150,7 @@ objsnap_io_block(struct objsnap_txn *set)
 		off = DEVICE_BLOCK_NUM(ptr.offset + ind);
 		cnt = min(MAXDRTYCNT, set->d_cnt - ind);
 
+		
 		dst = getblk(osdata.os_vp, off, cnt * BLOCKSIZE, 
 			0, 0, GB_UNMAPPED);
 
@@ -157,9 +163,7 @@ objsnap_io_block(struct objsnap_txn *set)
 			brelse(src);
 		}
 
-		OS_START(DATAWRITE, &before);
 		bwrite(dst);
-		OS_STOP(DATAWRITE, &before);
 	}
 }
 
@@ -167,31 +171,28 @@ static void
 objsnap_io_page(struct objsnap_txn *set)
 {
 	obj_diskptr_t ptr = set->d_ptr;
-	uint64_t before;
 	int pagecnt;
-
+	int error;
 	int left = set->d_cnt;	
 	int pgoff = 0;
+	struct g_consumer *cp = osdata.os_consumer;
 
 	KASSERT(set->d_type == OBJTXN_PAGE, ("not a page transaction"));
 
 	while (left) {
 		pagecnt = min(OBJSNAP_MAXUIO, left);
+		void * data = malloc(BLOCKSIZE * pagecnt, M_OBJSNAP, M_WAITOK | M_ZERO);
 
-		OS_START(GETBLK, &before);
-		struct buf *bp = getblk(osdata.os_vp, 
-			DEVICE_BLOCK_NUM(ptr.offset + set->d_cnt - left), BLOCKSIZE * pagecnt, 
-			0, 0, GB_UNMAPPED);
-		OS_STOP(GETBLK, &before);
+		objsnap_io_uio(data, &set->d_pg[pgoff], pagecnt);
 
-		objsnap_io_uio(bp, &set->d_pg[pgoff], pagecnt);
-
-		OS_START(DATAWRITE, &before);
-		bwrite(bp);
-		OS_STOP(DATAWRITE, &before);
+		error = g_write_data(cp, DEVICE_BLOCK_NUM(ptr.offset + set->d_cnt - left) * 512, data, BLOCKSIZE * pagecnt);
+		if (error) {
+			printf("1: Gwrite error %d\n", error);
+		}
 
 		pgoff += pagecnt;
 		left -= pagecnt;
+		free(data, M_OBJSNAP);
 	}
 }
 
@@ -277,10 +278,13 @@ static void
 objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 {
 	struct objsnap_wal_entry we;
-	struct buf *bp;
+	struct objsnap_wal_entry *other;
 	uint64_t before;
 	obj_diskptr_t walblk;
+	int error;
 	int i;
+
+	OS_START(DATAWRITE, &before);
 
 	for (i = 0; i < npages; i++) {
 		switch (txn->d_type) {
@@ -301,25 +305,20 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 
 	we.we_cnt = npages;
 	we.we_txnid = get_txn_id();
+	struct g_consumer *cp = osdata.os_consumer;
 
 	// This will acquire the wal lock
 	objsnap_blkalloc_wal(&walblk);
+	other = &wal_entries[walblk.offset - alloc.alloc_base];
 
-	OS_START(GETBLK, &before);
-	bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(walblk.offset), BLOCKSIZE, 0, 0, 0);
-	OS_STOP(GETBLK, &before);
-
-	if (we.we_cnt >= MAXDRTYCNT) {
-		printf("CNT Too large! %d\n", we.we_cnt);
+	memcpy(other, &we, sizeof(struct objsnap_wal_entry));
+	
+	error = g_write_data(cp, DEVICE_BLOCK_NUM(walblk.offset) * 512, other, BLOCKSIZE);
+	if (error) {
+		printf("wal: Gwrite error %d\n", error);
 	}
 
-	memcpy(bp->b_data, &we, sizeof(struct objsnap_wal_entry));
-
-	
-	OS_START(DATAWRITE, &before);
-	bwrite(bp);
 	OS_STOP(DATAWRITE, &before);
-
 
 	return;
 }
@@ -337,8 +336,6 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 	allocate_block(txn->d_cnt, &txn->d_ptr);
 	OS_STOP(ALLOCATE, &before);
 
-	/* Construct the transaction entry on the WAL and flush it. */
-	objsnap_wal_log(txn, txn->d_cnt);
 
 	/* Write out out the transaction. */
 	/* XXXETSAL: Is this correct? We are flushing the WAL entry before even filling in the buffer. */
@@ -355,6 +352,8 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 		panic("invalid transaction data type %d\n", txn->d_type);
 	}
 
+	/* Construct the transaction entry on the WAL and flush it. */
+	objsnap_wal_log(txn, txn->d_cnt);
 }
 
 static void
@@ -606,16 +605,6 @@ objsnap_init(struct objsnap_init_args *args)
 
 	allocator_init();
 
-	// Init per thread dirty lists
-	for (int x = alloc.alloc_walptr_head;
-			x < alloc.alloc_walptr_head + MAXTHREADS;
-			x++) {
-    	struct buf *bp = getblk(osdata.os_vp, DEVICE_BLOCK_NUM(x), 
-        	BLOCKSIZE, 0, 0, 0);
-		bzero(bp->b_data, BLOCKSIZE);
-		bwrite(bp);
-	}
-
 	vput(vp);
 
 	return;
@@ -687,21 +676,11 @@ static struct cdevsw objsnap_cdevsw = {
 static int
 objsnap_sync_dirtylist(uint64_t threadlist_at, index_t inode_i[], int *inode_cnt) 
 {
-	struct buf *bp;
-	struct objsnap_wal_entry set;
 	int start = *inode_cnt;
-
-	int error;
+	struct objsnap_wal_entry set = wal_entries[threadlist_at];
 	// These won't be actual reads, if system is under load, these will
 	// almost always be in the cache.
-	if ((error = bread(osdata.os_vp, 
-			DEVICE_BLOCK_NUM(threadlist_at + alloc.alloc_base), 
-			BLOCKSIZE, NOCRED, &bp)) != 0) {
-		return error;
-	}
 
-	memcpy(&set, bp->b_data, sizeof(struct objsnap_wal_entry));
-	brelse(bp);
 	if (set.we_cnt > MAXDRTYCNT) {
 		printf("ERROR IN SET CNT - WAY TOO LARGE for entry %lu - %d, head is around %lu\n", 
 				threadlist_at, set.we_cnt, alloc.alloc_walptr_head);
@@ -851,7 +830,8 @@ objsnap_vncache_init(void)
 
 	vnode_cache = malloc(sizeof(*vnode_cache) * MAXINODES, M_OBJSNAP,
 		M_WAITOK | M_ZERO);
-
+	wal_entries = malloc(sizeof(struct objsnap_wal_entry) * MAX_WAL_ENTRIES, M_OBJSNAP, M_WAITOK | M_ZERO);
+	
 	for (i = 0; i < MAXINODES; i++) {
 		vn = &vnode_cache[i];
 
@@ -878,6 +858,7 @@ objsnap_vncache_fini(void)
 	}
 
 	free(vnode_cache, M_OBJSNAP);
+	free(wal_entries, M_OBJSNAP);
 }
 
 static int

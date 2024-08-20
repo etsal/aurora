@@ -189,6 +189,9 @@ path_cow(bpath_t path)
       if (i > 0) {
         parent = &path->p_nodes[i - 1];
         idx = path->p_indexes[i];
+	for (int t = 0; t < path->p_len; t++) {
+		printf("pathindexes: %d -> %d\n", t, idx);
+	}
         /* We are not the root so lets update our own parent ptr as well as save the
          * old tree */
       } else {
@@ -197,24 +200,31 @@ path_cow(bpath_t path)
       }
 
       btnode newnode;
+      printf("1\n");
       btnode_create(&newnode, tmp->n_tree, tmp->n_type);
 
+      printf("2\n");
       memcpy(newnode.n_bp->b_data, tmp->n_bp->b_data, BLOCKSIZE);
 
+      printf("3\n");
       // Append to the deadlist
       appendlist(&tmp->n_tree->tr_deadlist, tmp->n_ptr);
       // Release the buffer from its mapping
       brelvp(tmp->n_bp);
-      path->p_nodes[i] = newnode;
+      *tmp = newnode;
+      printf("4\n");
 
       /* Update our parent to know of the change */
       if (i > 0) {
+      	printf("4.5 %p %d %p %u\n", parent->n_ch, idx, &parent->n_ch[idx], tmp->n_ptr.offset);
         memcpy(&parent->n_ch[idx], &tmp->n_ptr, sizeof(obj_diskptr_t));
       } else {
         /* Make sure we update our root ptr in our main tree datastructure */
+      	printf("4.6\n");
         tmp->n_tree->tr_ptr = tmp->n_ptr;
       }
 
+      printf("5\n");
       /* Turn off cow on the node and dirty the node */
       BT_BUMPVERSION(tmp);
       btnode_dirty(tmp);
