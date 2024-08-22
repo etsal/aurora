@@ -46,7 +46,7 @@ uint64_t msnp_copies;
 uint64_t msnp_commits;
 long msnp_inserts, msnp_removes;
 
-static int msnp_objsnap_tid = 0;
+static uint64_t msnp_objsnap_tid = 0;
 
 MALLOC_DEFINE(M_MSNP, "msnp_mount", "msnp mount structures");
 
@@ -283,7 +283,7 @@ slsfs_sas_trace_commit(void)
 	msnp_attempts = 0;
 
 	if (td->td_objtid < 0)
-		td->td_objtid = atomic_fetchadd_int(&msnp_objsnap_tid, 1);
+		td->td_objtid = atomic_fetchadd_64(&msnp_objsnap_tid, 1);
 
 	PMAP_LOCK(pmap);
 	TAILQ_FOREACH_SAFE(m, snaplist, snapq, mtmp) {
