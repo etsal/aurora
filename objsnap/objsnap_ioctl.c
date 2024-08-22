@@ -98,10 +98,10 @@ get_msg(int tid) {
 }
 
 static int
-set_msg(int tid, uint64_t msg, uint64_t expected)
+set_msg(int tid, uint64_t msg, uint64_t *expected)
 {
 	uint64_t *dst = &global_msgs[tid];
-	return atomic_fcmpset_64(dst, &expected, msg);
+	return atomic_fcmpset_64(dst, expected, msg);
 }
 
 static void
@@ -156,20 +156,15 @@ objsnap_msnp_done(struct buf *bp)
 static void __attribute__((noinline))
 objsnap_io_msnp(struct objsnap_txn *set)
 {
-	struct buf *bp_inflight[TXN_MAXBP];
 	diskptr_t ptr = set->d_ptr;
-	struct buf *bp, **bpp;
 	uint64_t before;
+	struct buf *bp;
 	uint64_t ind;
 	uint64_t off;
-	int inflight;
 	int cnt, i;
 	int error;
 
-	for (inflight = 0; inflight < TXN_MAXBP; inflight++)
-		bp_inflight[inflight] = NULL;
-
-	for (ind = 0, cnt = 0, inflight = 0; ind < set->d_cnt; ind += cnt) {
+	for (ind = 0, cnt = 0; ind < set->d_cnt; ind += cnt) {
 		_Static_assert(BLOCKSIZE == PAGE_SIZE, "ObjSnap block size");
 
 		off = DEVICE_BLOCK_NUM(ptr.offset + ind);
@@ -200,33 +195,13 @@ objsnap_io_msnp(struct objsnap_txn *set)
 		BUF_ASSERT_LOCKED(bp);
 		g_vfs_strategy(&osdata.os_vp->v_bufobj, bp);
 
-		/*
-		 * Stow away the buffer for later waiting, unless we're out of space.
-		 * In that case, wait for a previous buffer to finish and release it.
-		 */
-		bpp = &bp_inflight[inflight];
-		if (*bpp != NULL) {
-			error = bufwait(*bpp);
-			KASSERT(error == 0, ("bufwait %p returned %d", *bpp, error));
-			relpbuf(*bpp, NULL);
-		}
-		*bpp = bp;
-		inflight = (inflight + 1) % TXN_MAXBP;
+		error = bufwait(bp);
+		if (error != 0)
+			panic("error %d\n", error);
+		relpbuf(bp, NULL);
 
 		OS_STOP(DATAWRITE, &before);
 	}
-
-	/* Wait for all buffers in the transaction. */
-	for (inflight = 0; inflight < TXN_MAXBP; inflight++) {
-		bp = bp_inflight[inflight];
-		if (bp == NULL)
-			continue;
-
-		error = bufwait(bp);
-		KASSERT(error == 0, ("bufwait %p returned %d", bp, error));
-		relpbuf(bp, NULL);
-	}
-
 }
 
 static void __attribute__((noinline))
@@ -500,12 +475,16 @@ objsnap_checkpoint_txn(int tid, enum objsnap_txn_type type)
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
 	int total_size = 0;
+	uint64_t expected;
 	int i;
 
-	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
+	expected = MSG_NONE;
+	int success = set_msg(tid, MSG_CHECKPOINT, &expected);
 	if (!success) {
-		printf("Checkpoint state for tid %d should be zero, but isnt %lu\n", tid, get_msg(tid));
-		set_msg(tid, MSG_CHECKPOINT, MSG_FORCED);
+		printf("Checkpoint state for tid %d should be %ld, but isnt %lu\n", tid, MSG_NONE, expected);
+		expected = MSG_FORCED;
+		if (set_msg(tid, MSG_CHECKPOINT, &expected))
+			panic("Succeeded on state transition from MSG_FORCED?\n");
 	}
 
 	OS_START(CHECKPOINT, &checkpoint);
@@ -520,7 +499,8 @@ objsnap_checkpoint_txn(int tid, enum objsnap_txn_type type)
 	OS_START(UNLOCK, &unlock);
 
 	/* Try to checkpoint ourselves, even if we fail we're still a writer. */
-	if (set_msg(tid, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
+	expected = MSG_CHECKPOINT;
+	if (set_msg(tid, MSG_CHECKPOINTING, &expected)) {
 		mytids[size_tids++] = tid;
 		total_size = tpgs[tid].d_cnt;
 	}
@@ -534,7 +514,8 @@ objsnap_checkpoint_txn(int tid, enum objsnap_txn_type type)
 		if ((total_size + tpgs[i].d_cnt) > MAXDRTYCNT)
 			continue;
 
-		if (set_msg(i, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
+		expected = MSG_CHECKPOINT;
+		if (set_msg(i, MSG_CHECKPOINTING, &expected)) {
 			mytids[size_tids++] = i;
 			total_size += tpgs[i].d_cnt;
 		}
@@ -549,7 +530,8 @@ objsnap_checkpoint_txn(int tid, enum objsnap_txn_type type)
 
 	for (i = 0; i < size_tids; i++) {
 		int local_tid = mytids[i];
-		success = set_msg(local_tid, MSG_NONE, MSG_CHECKPOINTING);
+		expected = MSG_CHECKPOINTING;
+		success = set_msg(local_tid, MSG_NONE, &expected);
 		if (!success) {
 			printf("Msg should be checkpointing for %u (%lu), i am %d, but isnt\n", 
 					local_tid, get_msg(local_tid), tid);
@@ -559,6 +541,8 @@ objsnap_checkpoint_txn(int tid, enum objsnap_txn_type type)
 	sema_post(&wr);
 
 	objsnap_wait_completion(tid);
+	if (get_msg(tid) != MSG_NONE)
+		panic("Did not actually get checkpointed\n");
 	OS_STOP(CHECKPOINT, &checkpoint);
 
 	OS_STOP(UNLOCK, &unlock);
