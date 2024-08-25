@@ -171,6 +171,7 @@ osinode_t *allocate_inode()
     vnode->v_tree = vtree_create(btree, &btreeops, 0);
     VTREE_INIT(&vnode->v_tree, osdata.os_vp, 
         newinode->i_treeptr, sizeof(obj_diskptr_t));
+    printf("Root Inode at %u\n", newinode->i_treeptr.offset);
 
     // Initialize ondisk root block
     error = bread(osdata.os_vp, DEVICE_BLOCK_NUM(newinode->i_treeptr.offset), 

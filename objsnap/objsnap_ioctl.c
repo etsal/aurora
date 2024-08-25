@@ -67,7 +67,7 @@ static uint64_t global_txnid;
 super_t superblock;
 struct objsnap_vnode *vnode_cache = NULL;
 
-#define MAX_WRITERS (24)
+#define MAX_WRITERS (48)
 #define OBJSNAP_MAXUIO (16)
 
 struct sema wr;
@@ -290,7 +290,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 		switch (txn->d_type) {
 		case OBJTXN_PAGE:
 			we.we_ptrs[i].w_inode = txn->d_pg[i].inode;
-			we.we_ptrs[i].w_index = IDX_TO_OFF(txn->d_pg[i].offset);
+			we.we_ptrs[i].w_index = txn->d_pg[i].pindex;
 			we.we_ptrs[i].w_offset = txn->d_ptr.offset + i;
 			break;
 		case OBJTXN_BLOCK:
@@ -328,7 +328,7 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 {
 	uint64_t before;
 
-	atomic_fetchadd_64(&transaction_size, txn->d_cnt * BLOCKSIZE);
+	atomic_fetchadd_64(&transaction_size, txn->d_cnt);
 	atomic_fetchadd_64(&transaction_size_cnt, 1);
 
 	OS_START(ALLOCATE, &before);
@@ -487,7 +487,8 @@ usrptr_to_page(vm_offset_t ptr, struct pageset *pinfo) {
 		return (-1);
 	}	
 
-	vm_map_unlock_read(map);
+	vm_map_lookup_done(map, entry);
+
 	pinfo->obj = obj;
 	pinfo->pindex = pindex;
 	pinfo->offset = ptr;
@@ -509,6 +510,7 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 	
 	error = usrptr_to_page(addr, &pageinfo);
 	if (error) {
+		printf("Error: Bad dirty page\n");
 		return EINVAL;
 	}
 
@@ -676,7 +678,6 @@ static struct cdevsw objsnap_cdevsw = {
 static int
 objsnap_sync_dirtylist(uint64_t threadlist_at, index_t inode_i[], int *inode_cnt) 
 {
-	int start = *inode_cnt;
 	struct objsnap_wal_entry set = wal_entries[threadlist_at];
 	// These won't be actual reads, if system is under load, these will
 	// almost always be in the cache.
@@ -704,22 +705,18 @@ objsnap_sync_dirtylist(uint64_t threadlist_at, index_t inode_i[], int *inode_cnt
 	}
 
 	// We now go through every write it owns and update the tree
-	uint64_t before;
-	OS_START(INODE, &before);
-	for (int i = start; i < *inode_cnt; i++) {
+	for (int i = 0; i < *inode_cnt; i++) {
 		// Grab our vnode
 		struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
-
 		for (int t = 0; t < set.we_cnt; t++) {
 			struct walptr *ptr = &set.we_ptrs[t];
 			if (ptr->w_inode == inode_i[i]) {
 				VTREE_INSERT(&vnode->v_tree, 
-					IDX_TO_OFF(ptr->w_index) / BLOCKSIZE, &ptr->w_offset);
+					ptr->w_index , &ptr->w_offset);
 			}
 		}
 
 	}
-	OS_STOP(INODE, &before);
 	return (0);
 }
 
@@ -736,11 +733,12 @@ check_within(uint64_t s, uint64_t e, int within, int mod) {
 }
  
 
-#define WAL_SYNCER_SIZE (1024 * 4)
+#define WAL_SYNCER_SIZE (512)
 static void
 objsnap_wal_syncer(void *ctx)
 {
 	index_t inode_i[32];
+	memset(inode_i, 0, sizeof(index_t) * 32);
 	mtx_lock(&osdata.os_syncer_lk);
 	osdata.os_syncer_exit = OBJSYNC_RUNNING;
 
@@ -758,7 +756,7 @@ objsnap_wal_syncer(void *ctx)
 		// Clear out current tail to head of Wal entrys, no need for a lock
 		// If the head ptr outpaces us we just keep staying in the while look clearing
 		// stuff out
-		if (!check_within(tail, head, 4 * WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+		if (!check_within(tail, head, 2 * WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
 			int inode_cnt = 0;
 			for (uint64_t i = tail; i < (tail + WAL_SYNCER_SIZE); i++ ) {
 				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES), inode_i, &inode_cnt);
@@ -811,8 +809,7 @@ objsnap_wal_syncer(void *ctx)
 			atomic_store_64(&alloc.alloc_walptr_tail, (alloc.alloc_walptr_tail + WAL_SYNCER_SIZE) % MAX_WAL_ENTRIES);
 		}
 
-		head = atomic_load_64(&alloc.alloc_walptr_head);
-		tail = atomic_load_64(&alloc.alloc_walptr_tail);
+		pause_sbt("waiting to checkpoint", 200 * SBT_1US, 0 ,0);
 		mtx_lock(&osdata.os_syncer_lk);
 	}
 

@@ -124,7 +124,7 @@ OUT="out"
 THREADS=24
 truncate -s 0 "$OUT"
 echo "fs,num_threads,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops" >> "$OUT"
-#test_objsnap $THREADS "$OUT"
+test_objsnap $THREADS "$OUT"
 test_ffs_journal $THREADS "$OUT"
 test_ffs_bs $THREADS "$OUT"
 test_ffs $THREADS "$OUT"

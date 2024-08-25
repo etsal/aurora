@@ -113,17 +113,6 @@ wal_insert(vtree* tree, size_t keysize, uint64_t key, void* data)
 int
 vtree_insert(vtree* tree, uint64_t key, void* value)
 {
-  size_t ks = VTREE_GETKEYSIZE(tree);
-  if (tree->v_flags & VTREE_WITHWAL) {
-    /* Checkpoint should also clear out the wal hopefully before this point */
-    if (tree->v_cur_wal_idx == VTREE_MAXWAL) {
-      vtree_empty_wal(tree);
-    }
-
-    wal_insert(tree, ks, key, value);
-    return 0;
-  }
-
   return VTREE_INSERT(tree, key, value);
 }
 

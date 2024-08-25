@@ -31,8 +31,7 @@
 #define LOCK_SUPER() (LOCK(&osdata.os_lock, LK_EXCLUSIVE))
 #define UNLOCK_SUPER() (UNLOCK(&osdata.os_lock))
 #define INDEX_TO_VNODE(i) (&vnode_cache[(i) / 2])
-#define DEVICE_BLOCK_NUM(blki) ((blki) * ((uint64_t)BLOCKSIZE >> DEV_BSHIFT))
-#define DEVICE_BLOCK_WAL(blki) ((blki) * ((uint64_t)WALSIZE >> DEV_BSHIFT))
+#define DEVICE_BLOCK_NUM(blki) ((uint64_t)(((uint64_t)blki) * 8UL))
 
 #define OS_STAT_DEFINE(name, num) \
 	static int OS_STAT_##name = num; \
