@@ -96,7 +96,7 @@ test_ffs_bs() {
 }
 
 test_objsnap() {
-	for i in $(seq 1 4 $1) 
+	for i in $(seq 1 $1) 
 	do
 		iostat -hd nvd0 1 > /tmp/gstat.out &
 		IOSTAT_PID=$!
