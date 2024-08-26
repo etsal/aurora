@@ -104,7 +104,6 @@ determine_bucket(int numblocks)
     panic("Bucket could not be determined %d", numblocks);
 }
 
-
 extern struct objsnap_metadata osdata;
 extern struct allocator alloc;
 extern super_t superblock;

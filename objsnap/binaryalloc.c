@@ -79,7 +79,7 @@ ba_init(struct binaryallocator *ba, uint32_t offset, uint32_t left)
 
 		left -= ptr.size;
 		offset += ptr.size;
-		ba_free(&alloc.alloc_impl, ptr);
+		ba_free(ba, ptr);
 	}
 }
 

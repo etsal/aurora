@@ -26,6 +26,8 @@
 #include "vtree.h"
 #include "btree.h"
 
+const enum obj_alloctype obj_alloctype = OBJALLOC_CHUNK;
+
 struct allocator alloc;
 
 // We need to allocate inodes and jazz in a SSD block size (256 MB), or rather 
@@ -43,11 +45,10 @@ allocator_init()
 	uint32_t offset = (2 * superblock.super_max_inodes) + MAX_WAL_ENTRIES + 2;
 	uint32_t left = alloc.alloc_size_total_blocks - offset;
 
-	ba_init(&alloc.alloc_impl, offset, left);
+	oa_init(&alloc.alloc_impl, offset, left);
 
-	printf("Initial allocator State: %u %u\n", offset, left);
-	ba_print(&alloc.alloc_impl);
-
+	printf("Initial allocator State:\n");
+	oa_print(&alloc.alloc_impl);
 
 	// Every inode points to two objects
 	alloc.alloc_base = (2 * superblock.super_max_inodes) + 1;
@@ -59,7 +60,7 @@ allocator_init()
 void 
 allocator_destroy()
 {
-    ba_destroy(&alloc.alloc_impl);
+    oa_destroy(&alloc.alloc_impl);
 }
 
 int
@@ -100,7 +101,7 @@ allocate_block(int i, obj_diskptr_t *ptr)
     uint64_t before;
     int error;
     OS_START(ALLOCATE, &before);
-    error = ba_alloc(&alloc.alloc_impl, i, ptr);
+    error = oa_alloc(&alloc.alloc_impl, i, ptr);
     if (error) {
         panic("Problem allocating!");
     }
@@ -115,7 +116,7 @@ allocate_block(int i, obj_diskptr_t *ptr)
 void 
 free_block(obj_diskptr_t ptr)
 {
-    ba_free(&alloc.alloc_impl, ptr);
+    oa_free(&alloc.alloc_impl, ptr);
 }
 
 int 

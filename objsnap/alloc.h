@@ -12,22 +12,108 @@
 
 
 #include "binaryalloc.h"
+#include "chunkalloc.h"
 #include "objsnap_internal.h"
 #include "objsnap_ioctl.h"
 
 #define ENTRIES_PER_GIB ((1024UL * 1024UL * 1024UL) / 4096UL)
 #define MAX_WAL_ENTRIES (10UL * ENTRIES_PER_GIB)
 
+enum obj_alloctype {
+	OBJALLOC_BINARY,
+	OBJALLOC_CHUNK,
+};
+extern const enum obj_alloctype obj_alloctype;
+
+union objallocator {
+	struct binaryallocator ba;
+	struct chunkallocator ca;
+};
+
 struct allocator {
   size_t alloc_size_total_blocks;
   size_t alloc_bsize;
   struct lock alloc_lk;
-  struct binaryallocator alloc_impl;
+  union objallocator alloc_impl;
 
   volatile size_t alloc_walptr_head;
   volatile size_t alloc_walptr_tail;
   volatile size_t alloc_base;
 };
+
+static inline void
+oa_init(union objallocator *oa, uint32_t startoff, size_t numblocks)
+{
+	switch (obj_alloctype) {
+	case OBJALLOC_BINARY:
+		ba_init(&oa->ba, startoff, numblocks);
+		return;
+	case OBJALLOC_CHUNK:
+		ca_init(&oa->ca, startoff, numblocks);
+		return;
+	default:
+		panic("invalid allocator type %d\n", obj_alloctype);
+	}
+}
+
+static inline void
+oa_destroy(union objallocator *oa)
+{
+	switch (obj_alloctype) {
+	case OBJALLOC_BINARY:
+		ba_destroy(&oa->ba);
+		return;
+	case OBJALLOC_CHUNK:
+		ca_destroy(&oa->ca);
+		return;
+	default:
+		panic("invalid allocator type %d\n", obj_alloctype);
+	}
+}
+
+static inline int
+oa_alloc(union objallocator *oa, int numblocks, obj_diskptr_t *ptrp)
+{
+	switch (obj_alloctype) {
+	case OBJALLOC_BINARY:
+		return (ba_alloc(&oa->ba, numblocks, ptrp));
+	case OBJALLOC_CHUNK:
+		return (ca_alloc(&oa->ca, numblocks, ptrp));
+	default:
+		panic("invalid allocator type %d\n", obj_alloctype);
+	}
+}
+
+static inline void
+oa_free(union objallocator *oa, obj_diskptr_t ptr)
+{
+	switch (obj_alloctype) {
+	case OBJALLOC_BINARY:
+		ba_free(&oa->ba, ptr);
+		return;
+	case OBJALLOC_CHUNK:
+		ca_free(&oa->ca, ptr);
+		return;
+	default:
+		panic("invalid allocator type %d\n", obj_alloctype);
+	}
+}
+
+static inline void
+oa_print(union objallocator *oa)
+{
+	switch (obj_alloctype) {
+	case OBJALLOC_BINARY:
+		ba_print(&oa->ba);
+		return;
+	case OBJALLOC_CHUNK:
+		ca_print(&oa->ca);
+		return;
+	default:
+		panic("invalid allocator type %d\n", obj_alloctype);
+	}
+}
+
 
 void allocator_init(void);
 void allocator_destroy(void);
