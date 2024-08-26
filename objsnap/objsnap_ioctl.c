@@ -209,6 +209,8 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	STAT_TO_ARGS(args, CHECKPOINT);
 	STAT_TO_ARGS(args, ALLOCATE);
 	STAT_TO_ARGS(args, GETBLK);
+	STAT_TO_ARGS(args, WRITERS);
+	STAT_TO_ARGS(args, WAITERS);
 	args->os_cnt = OS_STAT_LAST;
 	return (0);
 }
@@ -386,6 +388,8 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
 	struct objsnap_txn txn_pg;
 	uint64_t checkpoint;
+	uint64_t waiters_time;
+	uint64_t writers_time;
 	int tid = args->tid;
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
@@ -399,15 +403,15 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	}
 
 	OS_START(CHECKPOINT, &checkpoint);
+	OS_START(WAITERS, &waiters_time);
+	OS_START(WRITERS, &writers_time);
 
 	if (objsnap_wait_entry(tid)) {
 		/* Our write is fully serviced, we're done. */
+		OS_STOP(WAITERS, &waiters_time);
 		OS_STOP(CHECKPOINT, &checkpoint);
 		return;
 	}
-
-	uint64_t unlock;	
-	OS_START(UNLOCK, &unlock);
 
 	/* Try to checkpoint ourselves, even if we fail we're still a writer. */
 	if (set_msg(tid, MSG_CHECKPOINTING, MSG_CHECKPOINT)) {
@@ -441,9 +445,9 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	sema_post(&wr);
 
 	objsnap_wait_completion(tid);
+	OS_STOP(WRITERS, &writers_time);
 	OS_STOP(CHECKPOINT, &checkpoint);
 
-	OS_STOP(UNLOCK, &unlock);
 
 	return;
 }
@@ -733,7 +737,7 @@ check_within(uint64_t s, uint64_t e, int within, int mod) {
 }
  
 
-#define WAL_SYNCER_SIZE (512)
+#define WAL_SYNCER_SIZE (1024)
 static void
 objsnap_wal_syncer(void *ctx)
 {
@@ -756,7 +760,9 @@ objsnap_wal_syncer(void *ctx)
 		// Clear out current tail to head of Wal entrys, no need for a lock
 		// If the head ptr outpaces us we just keep staying in the while look clearing
 		// stuff out
-		if (!check_within(tail, head, 2 * WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+		if (!check_within(tail, head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+			uint64_t inode_before;
+			OS_START(INODE,&inode_before);
 			int inode_cnt = 0;
 			for (uint64_t i = tail; i < (tail + WAL_SYNCER_SIZE); i++ ) {
 				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES), inode_i, &inode_cnt);
@@ -807,9 +813,10 @@ objsnap_wal_syncer(void *ctx)
 
   			VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
 			atomic_store_64(&alloc.alloc_walptr_tail, (alloc.alloc_walptr_tail + WAL_SYNCER_SIZE) % MAX_WAL_ENTRIES);
+			OS_STOP(INODE,&inode_before);
 		}
 
-		pause_sbt("waiting to checkpoint", 200 * SBT_1US, 0 ,0);
+		pause_sbt("waiting to checkpoint", 10 * SBT_1US, 0 ,0);
 		mtx_lock(&osdata.os_syncer_lk);
 	}
 

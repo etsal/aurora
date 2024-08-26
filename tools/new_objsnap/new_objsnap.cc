@@ -386,14 +386,14 @@ main(int argc, char *argv[])
 	double goodput = 0;
 	for (auto &s : total_txns) {
 		iops += s / runFor;
-		goodput += ((double)s * (double)4) / ((double)1024) ;
+		goodput += ((double)s * (double)(totaldirtyset * 4)) / ((double)1024) ;
 
 	}
 
 	if (ps)
 		printstats(clock_cycles);
 
-	printf("objsnap, %d, %f, %f, %lu, %f", numthreads, iops, lat_ns, lat_99_ns, goodput);
+	printf("objsnap, %d, %lu, %f, %f, %lu, %f", numthreads, totaldirtyset * BLOCKSIZE, iops, lat_ns, lat_99_ns, goodput);
 
 	return (EX_OK);
 }
