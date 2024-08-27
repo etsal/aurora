@@ -4,7 +4,6 @@
 #define CA_CHUNKSZ (1UL * 1024 * 1024)
 #define CA_SECOBJS (64)
 #define CA_MAXSEC (CA_CHUNKSZ / BLOCKSIZE)
-#define CA_MAXBUCKETS (6)
 
 enum ca_chunk_state {
 	CH_FREE,
@@ -48,19 +47,16 @@ struct chunkallocator {
 	struct ca_chunk		*ca_chunks;
 	uint64_t 		ca_chunk_cnt;
 
-	struct ca_chunk		**ca_old;
-	int			ca_old_cnt;
+	struct ca_chunk		**ca_free;
+	uint64_t		ca_free_cnt;
 
-	struct ca_chunk		**ca_next;
-	int			ca_next_cnt;
+	struct ca_chunk		**ca_hot;
+	uint64_t		ca_hot_cnt;
 
-	struct ca_chunk		**ca_cand;
-	struct ca_chunk		**ca_cand_old;
-	uint64_t 		ca_cand_cnt;
+	struct ca_chunk		**ca_cold;
+	uint64_t		ca_cold_cnt;
 
 	uint64_t 		ca_used_cnt;
-
-	struct ca_chunk		*ca_move[CA_MAXBUCKETS];
 
 	/*
 	 * XXX Add stats back.

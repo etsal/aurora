@@ -19,10 +19,9 @@
 MALLOC_DEFINE(M_CHUNKALLOC, "Chunk allocator", "chunkalloc");
 
 static void *
-ca_arrayalloc(size_t size)
+ca_arrayalloc(size_t numelems, size_t size)
 {
-	return (mallocarray(sizeof(struct ca_chunk), size,
-		M_CHUNKALLOC, M_WAITOK | M_ZERO));
+	return (mallocarray(size, numelems, M_CHUNKALLOC, M_WAITOK | M_ZERO));
 }
 
 static void
@@ -50,10 +49,11 @@ ca_populate_chunks(struct chunkallocator *ca, uint64_t offset)
 		chunk->cac_blocks_used = 0;
 		chunk->cac_state = CH_FREE;
 
-		ca->ca_next[i] = &ca->ca_chunks[i];
+		ca->ca_free[i] = &ca->ca_chunks[i];
 	}
 }
 
+#if 0
 static int
 ca_get_free_chunk(struct chunkallocator *ca, struct ca_chunk **chp, int bucket)
 {
@@ -92,23 +92,8 @@ ca_get_free_chunk(struct chunkallocator *ca, struct ca_chunk **chp, int bucket)
 
 	return (0);
 }
+#endif
 
-static void
-ca_populate_cands(struct chunkallocator *ca)
-{
-	int error;
-	int i;
-
-	for (i = 0; i < ca->ca_cand_cnt; i++) {
-		error = ca_get_free_chunk(ca, &ca->ca_cand[i], i);
-		if (error != 0)
-			panic("failed to populate candidate list");
-
-		error = ca_get_free_chunk(ca, &ca->ca_cand_old[i], i);
-		if (error != 0)
-			panic("failed to populate old candidate list");
-	}
-}
 
 void
 ca_init(struct chunkallocator *ca, uint64_t startoff, size_t numblocks)
@@ -123,24 +108,24 @@ ca_init(struct chunkallocator *ca, uint64_t startoff, size_t numblocks)
 	/* All chunks in the allocator. */
 	diskbytes = numblocks * superblock.super_bsize;
 	ca->ca_chunk_cnt = diskbytes / CA_CHUNKSZ;
-	ca->ca_chunks = ca_arrayalloc(ca->ca_chunk_cnt);
+	ca->ca_chunks = ca_arrayalloc(sizeof(*ca->ca_chunks), ca->ca_chunk_cnt);
 
-	ca->ca_next_cnt = ca->ca_chunk_cnt;
-	ca->ca_next = ca_arrayalloc(ca->ca_chunk_cnt);
+	ca->ca_free_cnt = ca->ca_chunk_cnt;
+	ca->ca_free = ca_arrayalloc(sizeof(*ca->ca_free), ca->ca_chunk_cnt);
 
-	/* Old (XXX already/partially used?) chunks. */
-	ca->ca_old_cnt = 0;
-	ca->ca_old = ca_arrayalloc(ca->ca_chunk_cnt);
+	ca->ca_hot_cnt = ca->ca_chunk_cnt;
+	ca->ca_hot = ca_arrayalloc(sizeof(*ca->ca_hot), ca->ca_chunk_cnt);
 
-	/* Candidate chunks. XXX What does "candidate" mean here? */
-	ca->ca_cand_cnt = determine_bucket(ca->ca_txnsz_blk) + 1;
-	ca->ca_cand = ca_arrayalloc(ca->ca_cand_cnt);
-	ca->ca_cand_old = ca_arrayalloc(ca->ca_cand_cnt);
+	ca->ca_cold_cnt = ca->ca_chunk_cnt;
+	ca->ca_cold = ca_arrayalloc(sizeof(*ca->ca_cold), ca->ca_chunk_cnt);
+
+	ca->ca_used_cnt = 0;
 
 	ca_populate_chunks(ca, startoff);
-	ca_populate_cands(ca);
+
 }
 
+#if 0
 static void
 ca_move_free_empty(struct chunkallocator *ca, struct ca_chunk *ch)
 {
@@ -247,6 +232,7 @@ ca_move_mktxn(struct ca_chunk *ch, size_t numblocks, struct objsnap_txn *txn)
 
 	return (0);
 }
+#endif
 
 static void
 ca_move(struct chunkallocator *ca, int numblocks)
@@ -295,6 +281,7 @@ ca_move(struct chunkallocator *ca, int numblocks)
 #endif
 }
 
+#if 0
 static int
 ca_blkalloc(struct ca_chunk *ch, int numblocks, obj_diskptr_t *ptrp)
 {
@@ -338,13 +325,11 @@ ca_tryalloc(struct chunkallocator *ca, int numblocks, int bucket, bool prio, obj
 	 * If low priority, move blocks to coalesce them. 
 	 * Keep doing so if we're critically low.
 	 */
-#if 0
 	if (prio == 0) {
 		do  {
 			ca_move(ca, 1ULL << bucket);
 		} while (ca->ca_next_cnt < CA_CRITICAL_WATERMARK);
 	}
-#endif
 
 	/* Grab the first chunk we find in the allocator. */
 	mtx_lock(&ca->ca_mtx);
@@ -383,10 +368,13 @@ ca_tryalloc(struct chunkallocator *ca, int numblocks, int bucket, bool prio, obj
 
 	return (ENOSPC);
 }
+#endif
 
 int
 ca_alloc(struct chunkallocator *ca, int numblocks, obj_diskptr_t *ptrp)
 {
+	panic("unimplemented");
+#if 0
 	const int bucket = determine_bucket(numblocks);
 	bool high_pressure = false;
 	int error;
@@ -401,11 +389,14 @@ ca_alloc(struct chunkallocator *ca, int numblocks, obj_diskptr_t *ptrp)
 	} while (true);
 
 	return (0);
+#endif
 }
 
 void
 ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 {
+	panic("unimplemented");
+#if 0
 	struct ca_chunk *ch;
 	int chind = (ptr.offset * superblock.super_bsize) / CA_CHUNKSZ;
 	int secind, bind, choff;
@@ -443,17 +434,21 @@ ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 		ch->cac_sec_free += 1;
 
 	mtx_unlock(&ca->ca_mtx);
+#endif
 }
 
 void
 ca_destroy(struct chunkallocator *ca)
 {
-	free(ca->ca_cand, M_CHUNKALLOC);
-	free(ca->ca_cand_old, M_CHUNKALLOC);
+	int i;
 
-	free(ca->ca_old, M_CHUNKALLOC);
-	free(ca->ca_next, M_CHUNKALLOC);
+	for (i = 0; i < ca->ca_chunk_cnt; i++) 
+		mtx_destroy(&ca->ca_chunks[i].cac_mtx);
+
 	free(ca->ca_chunks, M_CHUNKALLOC);
+	free(ca->ca_free, M_CHUNKALLOC);
+	free(ca->ca_hot, M_CHUNKALLOC);
+	free(ca->ca_cold, M_CHUNKALLOC);
 
 	mtx_destroy(&ca->ca_mtx);
 	bzero(ca, sizeof(*ca));
