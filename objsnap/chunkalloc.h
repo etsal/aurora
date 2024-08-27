@@ -2,7 +2,6 @@
 #define __CHUNKALLOC_H__
 
 #define CA_CHUNKSZ (1UL * 1024 * 1024)
-#define CA_SECOBJS (64)
 #define CA_BLOCKS (CA_CHUNKSZ / BLOCKSIZE)
 
 struct ca_objid {
@@ -13,7 +12,6 @@ struct ca_objid {
 struct ca_sector {
 };
 
-/* XXX Static assert that CA_MAXSEC < 256 */
 struct ca_chunk {
 	struct mtx 		cac_mtx;
 	int 			cac_index;
@@ -42,8 +40,6 @@ struct chunkallocator {
 
 	struct ca_chunk		**ca_cold;
 	uint64_t		ca_cold_cnt;
-
-	uint64_t 		ca_used_cnt;
 
 	/*
 	 * XXX Add stats back.

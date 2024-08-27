@@ -77,8 +77,6 @@ ca_init(struct chunkallocator *ca, uint64_t startoff, size_t numblocks)
 	ca->ca_cold_cnt = ca->ca_chunk_cnt;
 	ca->ca_cold = ca_arrayalloc(sizeof(*ca->ca_cold), ca->ca_chunk_cnt);
 
-	ca->ca_used_cnt = 0;
-
 	ca_populate_chunks(ca, startoff);
 
 }
@@ -362,53 +360,33 @@ ca_alloc(struct chunkallocator *ca, int numblocks, obj_diskptr_t *ptrp)
 void
 ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 {
-	panic("unimplemented");
-
-	/* 
-	 * XXX Go to the disk pointer's location and overwrite the objid/offset
-	 * pair in a row. Adjust the number of blocks in use (?).
-	 * XXX Add a running index
-	 */
-
-#if 0
 	struct ca_chunk *ch;
 	int chind = (ptr.offset * superblock.super_bsize) / CA_CHUNKSZ;
-	int secind, bind, choff;
+	int choff, ind, i;
 
 	KASSERT(ptr.size != UINT_MAX, ("freeing invalid disk pointer"));
 	KASSERT(chind < ca->ca_chunk_cnt, ("freeing out-of-bounds chunk %d %ld", chind, ca->ca_chunk_cnt));
 
-	mtx_lock(&ca->ca_mtx);
 	ch = &ca->ca_chunks[chind];
+	mtx_lock(&ch->ch_mtx);
 
+	KASSERT(ptr.offset >= ch->cac_ptr.offset, ("negative index into chunk"));
 	choff = ptr.offset - ch->cac_ptr.offset;
-	KASSERT(choff >= 0, ("negative offset in chunk"));
 
-	secind = choff / ch->cac_txn_size;
-	KASSERT(secind < CA_MAXSEC, ("chunk sector index out of bounds"));
+	for (i = 0; i < ptr.size; i++) {
+		ind = choff + i;
+		KASSERT(ind < ch->cac_ptr.size, ("freeing out of bounds for chunk"));
+		KASSERT(ind < CA_BLOCKS, ("index larger than maximum possible offset"));
 
-	bind = choff % ch->cac_txn_size;
-	KASSERT(bind + ptr.size <= ch->cac_txn_size, ("bitmap index %d-%d out of bounds %d", bind, ptr.size, ch->cac_txn_size));
-
-	KASSERT(ch->cac_map[secind].cas_bmap != 0, ("sector has no allocated blocks"));
-	KASSERT(ptr.size == 1, ("freeing more than one block"));
-
-	/* 
-	 * XXXETSAL Isn't this condition supposed to always be true,
-	 * otherwise this is a double free? Or is there some kind
-	 * of benign race?
-	 */
-	if (ch->cac_map[secind].cas_bmap & (1ULL << bind)) {
-		ch->cac_map[secind].cas_bmap &= ~(1ULL << bind);
-		ch->cac_blocks_used -= 1;
+		/* XXX Make sure that inode 0 can mean "free inode". */
+		KASSERT(ch->cac_backmap[ind] != 0, ("freeing already free block"));
+		ch->cac_backmap[ind].cao_ino = 0;
+		ch->cac_backmap[ind].cao_off = 0;
+		
 	}
 
-	/* Did we free up an entire sector? */
-	if (ch->cac_map[secind].cas_bmap == 0)
-		ch->cac_sec_free += 1;
-
-	mtx_unlock(&ca->ca_mtx);
-#endif
+	ch->cac_blocks_used -= ptr.size;
+	mtx_unlock(&ch->ch_mtx);
 }
 
 void
