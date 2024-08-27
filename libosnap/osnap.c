@@ -53,7 +53,7 @@ objsnap_create()
 
     error = ioctl(OS_FD, OBJSNAP_CREATEOBJ, &args);
     if (error) {
-        return BADINDEX;
+        return OBJINO_BADINDEX;
     }
 
     return (args.os_index);

@@ -527,6 +527,8 @@ objsnap_checkpoint_txn(int tid, enum objsnap_txn_type type)
 
 		expected = MSG_CHECKPOINT;
 		if (set_msg(i, MSG_CHECKPOINTING, &expected)) {
+			if ((total_size + tpgs[i].d_cnt) > MAXDRTYCNT)
+				panic("TOCTTOU, transaction will overflow");
 			mytids[size_tids++] = i;
 			total_size += tpgs[i].d_cnt;
 		}
@@ -567,18 +569,24 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	return (objsnap_checkpoint_txn(args->tid, OBJTXN_PAGE));
 }
 
-static void
-objsnap_create(struct objsnap_create_args *args)
+void
+objsnap_create_inode(index_t *indexp)
 {
 	osinode_t *inode;
+
 	if ((inode = allocate_inode()) == NULL) {
 		printf("Issue creating inode\n");
-		args->os_index = BADINDEX;
+		*indexp = OBJINO_BADINDEX;
 		return;
 	}
 
-	args->os_index = inode->i_index / 2;
+	*indexp = inode->i_index / 2;
+}
 
+static void
+objsnap_create(struct objsnap_create_args *args)
+{
+	objsnap_create_inode(&args->os_index);
 	return;
 }
 

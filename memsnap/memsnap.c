@@ -408,6 +408,11 @@ msnp_create_objinit(struct pfs_node *ctrl, struct pfs_node *pn, size_t size)
 {
 	struct slos_meta *sb = (struct slos_meta *)ctrl->pn_data;
 	struct slos_node *svp = (struct slos_node *)pn->pn_data;
+	int ino;
+
+	objsnap_create_inode(&ino);
+	if (ino == OBJINO_BADINDEX)
+		panic("objsnap inode allocation failed\n");
 
 	if (svp->sn_obj != NULL)
 		panic("double init for SAS object");
@@ -421,6 +426,7 @@ msnp_create_objinit(struct pfs_node *ctrl, struct pfs_node *pn, size_t size)
 		panic("could not init SAS node");
 
 	svp->sn_obj->flags |= OBJ_NOSPLIT;
+	svp->sn_obj->objid = ino;
 
 	return 0;
 }

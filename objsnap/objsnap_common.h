@@ -36,7 +36,8 @@ struct objsnap_txn {
 
 extern struct objsnap_txn tpgs[MAXTHREADS];
 
-void objsnap_checkpoint_txn(int, enum objsnap_txn_type type);
+void objsnap_checkpoint_txn(int, enum objsnap_txn_type);
+void objsnap_create_inode(int *);
 
 #endif /* _OBJSNAP_COMMON_H_ */ 
 

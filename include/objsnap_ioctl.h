@@ -16,7 +16,7 @@ extern "C" {
 #define OS_STAT_MAX	(16)
 
 #define NULLDISKPTR ((obj_diskptr_t) -1)
-#define BADINDEX ((index_t)(-1))
+#define OBJINO_BADINDEX ((index_t)(-1))
 #define MAXPOWEROFTWO (31)
 
 
