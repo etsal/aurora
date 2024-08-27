@@ -3,13 +3,24 @@
 
 #define CA_CHUNKSZ (1UL * 1024 * 1024)
 #define CA_BLOCKS (CA_CHUNKSZ / BLOCKSIZE)
+#define CA_COLD_BUCKETS (8)
 
+#define CA_SETALL(size) ((size) == 64 ? UINT64_MAX : ((1ULL << (size)) - 1))
+#define CA_TXNSIZE (64)
+#define CA_CRITICAL_WATERMARK (4)
+/* 
+ * This knob determines the size of the hot list. The larger the ratio, the more
+ * larger the hot list ends up becoming because we require more pages to be used
+ * before we start laundering hot pages into the cold list.
+ */
+#define CA_TOTAL_VS_FREE_RATIO (4)
+/*
+ * Maximum amount of pages we can launder during a single transaction.
+ */
+#define CA_MAXHOT_TO_COLD (8)
 struct ca_objid {
 	uint32_t cao_ino;
 	uint32_t cao_off;
-};
-
-struct ca_sector {
 };
 
 struct ca_chunk {
@@ -23,7 +34,6 @@ struct ca_chunk {
 	uint64_t 		cac_alloc_index;
 };
 
-/* XXX Implement high-pressure state. */
 struct chunkallocator {
 	struct mtx  		ca_mtx;
 
@@ -36,10 +46,11 @@ struct chunkallocator {
 	uint64_t		ca_free_cnt;
 
 	struct ca_chunk		**ca_hot;
-	uint64_t		ca_hot_cnt;
+	uint64_t		ca_hot_start;
+	uint64_t		ca_hot_end;
 
-	struct ca_chunk		**ca_cold;
-	uint64_t		ca_cold_cnt;
+	struct ca_chunk		**ca_cold[CA_COLD_BUCKETS];
+	uint64_t		ca_cold_cnt[CA_COLD_BUCKETS];
 
 	/*
 	 * XXX Add stats back.
