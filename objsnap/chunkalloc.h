@@ -3,14 +3,7 @@
 
 #define CA_CHUNKSZ (1UL * 1024 * 1024)
 #define CA_SECOBJS (64)
-#define CA_MAXSEC (CA_CHUNKSZ / BLOCKSIZE)
-
-enum ca_chunk_state {
-	CH_FREE,
-	CH_ACTIVE,
-	CH_EMPTYING,
-	CH_FULL,
-};
+#define CA_BLOCKS (CA_CHUNKSZ / BLOCKSIZE)
 
 struct ca_objid {
 	uint32_t cao_ino;
@@ -18,8 +11,6 @@ struct ca_objid {
 };
 
 struct ca_sector {
-	uint64_t 	cas_bmap;
-	struct ca_objid cas_objs[CA_SECOBJS];
 };
 
 /* XXX Static assert that CA_MAXSEC < 256 */
@@ -28,14 +19,10 @@ struct ca_chunk {
 	int 			cac_index;
 	obj_diskptr_t 		cac_ptr;
 
-	struct ca_sector 	cac_map[CA_MAXSEC];
-	enum ca_chunk_state 	cac_state;
+	struct ca_objid		cac_backmap[CA_BLOCKS];
 
-	/* Fields that are only valid when the chunk is not free. */
 	uint64_t 		cac_blocks_used;
-	uint32_t 		cac_sec_free;
-	uint32_t 		cac_sec_max;
-	uint32_t 		cac_txn_size;
+	uint64_t 		cac_alloc_index;
 };
 
 /* XXX Implement high-pressure state. */
