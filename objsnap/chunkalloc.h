@@ -27,8 +27,8 @@ enum ca_state {
 	CA_COLD,
 	CA_SYSTEM,
 	CA_SYSTEM_FULL,
+	CA_LAUNDER,
 };
-
 
 struct ca_objid {
 	uint32_t cao_ino;
@@ -47,7 +47,8 @@ struct ca_chunk {
 	uint64_t 		cac_blocks_used;
 	uint64_t 		cac_alloc_index;
 	enum ca_state		cac_state;
-	TAILQ_ENTRY(ca_chunk)	ca_next;
+	TAILQ_ENTRY(ca_chunk)	cac_next;
+	vm_page_t		cac_launder[CA_BLOCKS];
 };
 
 struct chunkallocator {
@@ -75,6 +76,9 @@ struct chunkallocator {
 	struct ca_system_list		ca_system_alloc;
 	struct ca_system_list		ca_system_full;
 
+	struct ca_system_list		ca_launder;
+	struct ca_chunk			*ca_launder_dst;
+
 	/*
 	 * XXX Add stats back.
 	 */
@@ -86,4 +90,5 @@ void ca_destroy(struct chunkallocator *ca);
 void ca_print(struct chunkallocator *ca);
 int ca_alloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn);
 int ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptr);
+void ca_gc(struct chunkallocator *ca, size_t numblocks);
 #endif /* __CHUNKALLOCATOR_H_ */

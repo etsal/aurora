@@ -258,3 +258,8 @@ allocate_inode_done:
     return newinode;
 }
 
+void
+garbage_collect(size_t numblocks)
+{
+	oa_gc(&alloc.alloc_impl, numblocks);
+}

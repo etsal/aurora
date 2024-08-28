@@ -2,11 +2,15 @@
 #include <sys/lock.h>
 #include <sys/queue.h>
 #include <sys/systm.h>
+#include <sys/bio.h>
 #include <sys/libkern.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
+#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/taskqueue.h>
+
+#include <geom/geom.h>
 
 #include "arraylist.h"
 #include "objsnap_common.h"
@@ -171,6 +175,8 @@ ca_init(struct chunkallocator *ca, uint64_t startoff, size_t numblocks)
 
 	TAILQ_INIT(&ca->ca_system_alloc);
 	TAILQ_INIT(&ca->ca_system_full);
+	TAILQ_INIT(&ca->ca_launder);
+	ca->ca_launder_dst = NULL;
 
 	mtx_lock(&ca->ca_mtx);
 	ca_init_chunks(ca, startoff);
@@ -185,96 +191,6 @@ ca_init(struct chunkallocator *ca, uint64_t startoff, size_t numblocks)
 	}
 
 }
-
-#if 0
-static void
-ca_move_free_empty(struct chunkallocator *ca, struct ca_chunk *ch)
-{
-	int i;
-	for (i = 0; i < ch->cac_sec_max; i++)
-		KASSERT(ch->cac_map[i].cas_bmap == 0, ("inconsistent block map"));
-	KASSERT(ch->cac_blocks_used == 0, ("used blocks in chunk"));
-	ch->cac_state = CH_FREE;
-	ca->ca_next[ca->ca_next_cnt++] = ch;
-}
-
-static struct ca_chunk *
-ca_move_pick_chunk(struct chunkallocator *ca)
-{
-	struct ca_chunk *minch = NULL;
-	int i, minind = -1;
-
-	/* If we don't have ready work, find an old chunk and return it. */
-	for (i = 0; i < ca->ca_old_cnt; i++) {
-		/* Any old chunks we find that are free, put them into the next queue. */
-		while (i < ca->ca_old_cnt && ca->ca_old[i]->cac_blocks_used == 0) {
-			ca_move_free_empty(ca, ca->ca_old[i]);
-
-			ca->ca_old[i] = ca->ca_old[ca->ca_old_cnt - 1];
-			ca->ca_old_cnt -= 1;
-		}
-
-		/* 
-		 * XXX Add high pressure flag to turn the cleanup policy from
-		 * best-fit to first-fit.
-		 */
-		if (minch == NULL || ca->ca_old[i]->cac_blocks_used < minch->cac_blocks_used) {
-			minch = ca->ca_old[i];
-			minind = i;
-		}
-	}
-
-	if (minind >= 0) {
-		ca->ca_old[minind] = ca->ca_old[ca->ca_old_cnt - 1];
-		ca->ca_old_cnt -= 1;
-	}
-
-	return (minch);
-}
-
-static int
-ca_move_mktxn(struct ca_chunk *ch, size_t numblocks, struct objsnap_txn *txn)
-{
-	struct ca_sector *sec;
-	uint64_t offset;
-	struct txn;
-	size_t ind;
-	int i, j;
-
-	bzero(txn, sizeof(*txn));
-	txn->d_type = OBJTXN_BLOCK;
-
-	/* Find enough blocks to move. */
-	ind = 0;
-	for (i = 0; i < ch->cac_sec_max; i++) {
-		if (ind == numblocks)
-			break;
-
-		sec = &ch->cac_map[i];
-		if (sec->cas_bmap == 0)
-			continue;
-
-		/* Scan the sector for blocks to write out. */
-		for (j = 0; j < ch->cac_txn_size; j++) {
-			if ((sec->cas_bmap & (1ULL << j)) == 0)
-				continue;
-
-			offset = ch->cac_ptr.offset + (ch->cac_txn_size * i) + j;
-			txn->d_blk[ind].blkoff = offset;
-			txn->d_blk[ind].objoff = sec->cas_objs[j].cao_ino;
-			txn->d_blk[ind].objino = sec->cas_objs[j].cao_off;
-			ind += 1;
-
-			KASSERT(ind < MAXDRTYCNT, ("transaction too large"));
-		}
-	}
-
-	KASSERT(ind < MAXDRTYCNT, ("transaction too large"));
-	txn->d_cnt = ind;
-
-	return (0);
-}
-#endif
 
 static void
 ca_age(struct chunkallocator *ca, int numblocks)
@@ -393,6 +309,7 @@ ca_tryalloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn)
 		panic("requested allocation too large (%ld, max %d)\n", numblocks, ca->ca_txnsz_blk);
 
 	/* Age as many hot blocks as we are allocating. */
+	/* XXX Actually make it so that we always have a good amount of blocks under laundry. */
 	ca_age(ca, numblocks);
 
 	/* XXX This should never happen after we implement moves. */
@@ -474,10 +391,10 @@ ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 
 	/* Special case for the system block allocator. */
 	if (ch->cac_state == CA_SYSTEM_FULL) {
-		TAILQ_REMOVE(&ca->ca_system_full, ch, ca_next);
+		TAILQ_REMOVE(&ca->ca_system_full, ch, cac_next);
 		KASSERT(ch->cac_state == CA_SYSTEM_FULL, ("invalid block state %d", ch->cac_state));
 		ch->cac_state = CA_SYSTEM;
-		TAILQ_INSERT_HEAD(&ca->ca_system_alloc, ch, ca_next);
+		TAILQ_INSERT_HEAD(&ca->ca_system_alloc, ch, cac_next);
 	}
 
 	mtx_unlock(&ch->cac_mtx);
@@ -551,7 +468,7 @@ ca_tryalloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 		KASSERT(ch->cac_state == CA_FREE, ("invalid block state %d", ch->cac_state));
 		ch->cac_state = CA_SYSTEM;
 
-		TAILQ_INSERT_HEAD(&ca->ca_system_alloc, ch, ca_next);
+		TAILQ_INSERT_HEAD(&ca->ca_system_alloc, ch, cac_next);
 
 		mtx_unlock(&ca->ca_mtx);
 
@@ -568,10 +485,10 @@ ca_tryalloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 	 * in the full system list.
 	 */
 	if (ch->cac_blocks_used == CA_BLOCKS) {
-		TAILQ_REMOVE(&ca->ca_system_alloc, ch, ca_next);
+		TAILQ_REMOVE(&ca->ca_system_alloc, ch, cac_next);
 		KASSERT(ch->cac_state == CA_SYSTEM, ("invalid block state %d", ch->cac_state));
 		ch->cac_state = CA_SYSTEM_FULL;
-		TAILQ_INSERT_HEAD(&ca->ca_system_full, ch, ca_next);
+		TAILQ_INSERT_HEAD(&ca->ca_system_full, ch, cac_next);
 	}
 
 	mtx_unlock(&ca->ca_mtx);
@@ -588,4 +505,111 @@ ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 	} while (error != 0);
 
 	return (0);
+}
+
+struct ca_getblk_args {
+	struct chunkallocator *ca;
+	struct ca_chunk *ch;
+};
+
+static void *
+ca_getblk(void *data)
+{
+	struct ca_getblk_args *args = (struct ca_getblk_args *)data;
+	struct chunkallocator *ca = args->ca;
+	struct ca_chunk *ch = args->ch;
+	struct bio *bp;
+	vm_page_t m;
+	int error;
+	int i;
+
+	for (i = 0; i < CA_BLOCKS; i++) {
+		if (ch->cac_backmap[i].cao_ino == 0) {
+			ch->cac_launder[i] = 0;
+			continue;
+		}
+		
+		m = vm_page_alloc_freelist(VM_FREELIST_DEFAULT, VM_ALLOC_NORMAL | VM_ALLOC_NOOBJ | VM_ALLOC_WIRED);
+
+		bp = g_alloc_bio();
+		bp->bio_cmd = BIO_READ;
+		bp->bio_done = NULL;
+		bp->bio_offset = (ch->cac_ptr.offset + i) * BLOCKSIZE;
+		bp->bio_data = (void *)PHYS_TO_DMAP(VM_PAGE_TO_PHYS(m));
+
+		g_io_request(bp, osdata.os_consumer);
+		error = biowait(bp, "cablk");
+		if (error != 0)
+			panic("error %d on chunk allocator geom read request", error);
+
+		g_destroy_bio(bp);
+
+		ch->cac_launder[i] = m;
+	}
+
+	ch->cac_state = CA_LAUNDER;
+	ch->cac_alloc_index = 0;
+
+
+	TAILQ_INSERT_TAIL(&ca->ca_launder, ch, cac_next);
+	return (NULL);
+}
+
+void
+ca_gc(struct chunkallocator *ca, size_t numblocks)
+{
+	struct objsnap_txn txn;
+	struct ca_chunk *ch;
+	obj_diskptr_t ptr;
+	size_t i;
+
+	/* XXX Fix locking (NOTE: We need a locking check throughout the system. */
+	ch = TAILQ_FIRST(&ca->ca_launder);
+	KASSERT(ch->cac_state == CA_LAUNDER, ("invalid chunk state %d", ch->cac_state));
+
+	/* 
+	 * Pop the required physical space from the cold chunk. If
+	 * full, move it to the cold list and allocate a new one. 
+	 */
+	if (ca->ca_launder_dst != NULL && ca->ca_launder_dst->cac_alloc_index + numblocks > CA_BLOCKS) {
+		cac_to_cold(ca, ca->ca_launder_dst);
+		ca->ca_launder_dst = NULL;
+	}
+
+	if (ca->ca_launder_dst == NULL)
+		cac_from_free(ca, ca->ca_free_cnt - 1, &ca->ca_launder_dst);
+
+
+	ptr.offset = ca->ca_launder_dst->cac_alloc_index;
+	ptr.size = numblocks;
+	ca->ca_launder_dst->cac_alloc_index += numblocks;
+
+	txn.d_ptr = ptr;
+	txn.d_cnt = 0;
+	
+	for (i = ch->cac_alloc_index; i < CA_BLOCKS; i++) {
+		if (ch->cac_launder[i] == NULL)
+			continue;
+
+		/* Populate the transaction with the page and remove it from the chunk. */
+		txn.d_page[txn.d_cnt] = ch->cac_launder[i];
+		txn.d_inode[txn.d_cnt] = ch->cac_backmap[i].cao_ino;
+		txn.d_index[txn.d_cnt] = ch->cac_backmap[i].cao_off;
+		txn.d_offset[txn.d_cnt] = ptr.offset + txn.d_cnt;
+
+		ch->cac_launder[i] = NULL;
+
+		txn.d_cnt += 1;
+		if (txn.d_cnt == numblocks)
+			break;
+	}
+
+	objsnap_txn_commit(&txn);
+
+	for (i = 0; i < txn.d_cnt; i++)
+		vm_page_free(txn.d_page[i]);
+
+	/* If the old chunk is completely free, move it to the free list. */
+	if (ch->cac_alloc_index == CA_BLOCKS)
+		cac_to_free(ca, ch);
 }

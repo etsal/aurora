@@ -133,6 +133,20 @@ oa_print(union objallocator *oa)
 	}
 }
 
+static inline void
+oa_gc(union objallocator *oa, size_t numblocks)
+{
+	switch (obj_alloctype) {
+	case OBJALLOC_BINARY:
+		return;
+	case OBJALLOC_CHUNK:
+		ca_gc(&oa->ca, numblocks);
+		return;
+	default:
+		panic("invalid allocator type %d\n", obj_alloctype);
+	}
+}
+
 
 void allocator_init(void);
 void allocator_destroy(void);
@@ -142,6 +156,7 @@ int allocate_txn_block(struct objsnap_txn *txn);
 int allocate_system_block(obj_diskptr_t *ptr);
 void free_block(obj_diskptr_t ptr);
 int objsnap_blkalloc_wal(obj_diskptr_t *ptr);
+void garbage_collect(size_t numblocks);
 osinode_t *allocate_inode(void);
 
 #endif

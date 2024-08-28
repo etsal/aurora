@@ -282,7 +282,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 	return;
 }
 
-static void __attribute__((noinline))
+void __attribute__((noinline))
 objsnap_txn_commit(struct objsnap_txn *txn)
 {
 	uint64_t before;
@@ -388,6 +388,9 @@ objsnap_checkpoint_txn(int tid)
 
 	objsnap_mktxn((int *)mytids, size_tids, &txn);
 	objsnap_txn_commit(&txn);
+
+	/* For the chunk allocator we write out a cold page for every new page. */
+	garbage_collect(total_size);
 
 	for (i = 0; i < size_tids; i++) {
 		int local_tid = mytids[i];
