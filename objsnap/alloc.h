@@ -84,6 +84,24 @@ oa_alloc(union objallocator *oa, int numblocks, obj_diskptr_t *ptrp)
 	}
 }
 
+static inline int
+oa_alloc_system(union objallocator *oa, obj_diskptr_t *ptrp)
+{
+	switch (obj_alloctype) {
+	case OBJALLOC_BINARY:
+		/* 
+		 * The binary allocator does not distinguish between
+		 * data and system block allocations.
+		 */
+		return (ba_alloc(&oa->ba, 1, ptrp));
+	case OBJALLOC_CHUNK:
+		return (ca_alloc_system(&oa->ca, ptrp));
+	default:
+		panic("invalid allocator type %d\n", obj_alloctype);
+	}
+}
+
+
 static inline void
 oa_free(union objallocator *oa, obj_diskptr_t ptr)
 {

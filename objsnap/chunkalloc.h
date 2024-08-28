@@ -85,6 +85,5 @@ int ca_alloc(struct chunkallocator *ca, int numblocks, obj_diskptr_t *ptr);
 void ca_free(struct chunkallocator *ca, obj_diskptr_t tofree);
 void ca_destroy(struct chunkallocator *ca);
 void ca_print(struct chunkallocator *ca);
-void ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp);
-void ca_free_system(struct chunkallocator *ca, obj_diskptr_t ptr);
+int ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptr);
 #endif /* __CHUNKALLOCATOR_H_ */

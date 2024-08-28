@@ -576,7 +576,7 @@ ca_tryalloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 	return (0);
 }
 
-void
+int
 ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 {
 	int error;
@@ -585,4 +585,5 @@ ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 		error = ca_tryalloc_system(ca, ptrp);
 	} while (error != 0);
 
+	return (0);
 }
