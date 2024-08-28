@@ -58,8 +58,6 @@
                        __asm__ volatile ("pause" ::: ); \
        } while(0)
 
-#define TXN_MAXBP (4)
-
 static int objsnap_osdata_init_syncer(void);
 
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
@@ -416,6 +414,9 @@ objsnap_checkpoint_txn(int tid)
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
+	if (args->tid >= OBJTID_APP)
+		panic("tid either invalid or reserved for GC");
+	
 	return (objsnap_checkpoint_txn(args->tid));
 }
 
@@ -483,6 +484,9 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 	vm_offset_t addr = args->os_page;
 	index_t inode_i = args->os_index;
 	vm_page_t m;
+
+	if (tid >= OBJTID_APP)
+		panic("tid either invalid or reserved for GC");
 	
 	if (set->d_cnt >= MAXDRTYCNT)
 		panic("Too many dirty pages in transaction %d\n", set->d_cnt);
