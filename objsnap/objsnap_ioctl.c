@@ -108,24 +108,24 @@ set_msg(int tid, uint64_t msg, uint64_t *expected)
 }
 
 static void
-objsnap_io_uio(void *data, struct pageset *pgset, size_t pgcnt)
+objsnap_io_uio(struct objsnap_txn *txn, size_t pgoff, size_t pgcnt, void *data)
 {
 	size_t resid = BLOCKSIZE * pgcnt;
 	struct iovec aiov[16];
 	uint64_t before;
 	struct uio uio;
-	int i;
 	int error;
+	int i;
 
 	for (i = 0; i < pgcnt; i++) {
-		aiov[i].iov_base = (void *)(uintptr_t)(pgset[i].offset);
+		aiov[i].iov_base = (void *)PHYS_TO_DMAP(txn->d_page[pgoff + i]->phys_addr);
 		aiov[i].iov_len = BLOCKSIZE;
 	}
 
 	uio.uio_iov = (struct iovec *)&aiov;
 	uio.uio_iovcnt = pgcnt;
 	uio.uio_resid = resid;
-	uio.uio_segflg = UIO_USERSPACE;
+	uio.uio_segflg = UIO_SYSSPACE;
 	uio.uio_rw = UIO_WRITE;
 	uio.uio_td = curthread;
 	uio.uio_offset = 0;
@@ -138,129 +138,21 @@ objsnap_io_uio(void *data, struct pageset *pgset, size_t pgcnt)
 	}
 }
 
-static void
-objsnap_msnp_done(struct buf *bp)
-{
-	vm_page_t m;
-	int i;
-
-	for (i = 0; i < bp->b_npages; i++) {
-		m = bp->b_pages[i];
-		bp->b_pages[i] = NULL;
-
-		m->flags &= ~VPO_SASCOW;
-	}
-
-	bp->b_bufsize = bp->b_bcount = 0;
-	bp->b_npages = 0;
-
-	bdone(bp);
-}
-
-/* 
- * MemSnap transactions take physical pages directly and are zero-copy.
- */
 static void __attribute__((noinline))
-objsnap_io_msnp(struct objsnap_txn *set)
+objsnap_io(struct objsnap_txn *set)
 {
+	struct g_consumer *cp = osdata.os_consumer;
 	obj_diskptr_t ptr = set->d_ptr;
-	uint64_t before;
-	struct buf *bp;
-	uint64_t ind;
-	uint64_t off;
-	int cnt, i;
-	int error;
-
-	for (ind = 0, cnt = 0; ind < set->d_cnt; ind += cnt) {
-		_Static_assert(BLOCKSIZE == PAGE_SIZE, "ObjSnap block size");
-
-		off = DEVICE_BLOCK_NUM(ptr.offset + ind);
-		cnt = min(MAXBCACHEBUF / BLOCKSIZE, set->d_cnt - ind);
-
-		bp = getpbuf(NULL);
-		KASSERT(bp != NULL, ("could not get pbuf"));
-
-		bp->b_data = unmapped_buf;
-
-		bp->b_lblkno = off;
-		bp->b_blkno = DEVICE_BLOCK_NUM(bp->b_lblkno);
-		bp->b_iooffset = dbtob(bp->b_lblkno);
-		bp->b_iocmd = BIO_WRITE;
-
-		bp->b_npages = cnt;
-		bp->b_resid = bp->b_bufsize = bp->b_bcount = bp->b_npages * PAGE_SIZE;
-		bp->b_iodone = objsnap_msnp_done;
-
-		for (i = 0; i < cnt; i++)
-			bp->b_pages[i] = set->d_msnp[ind + i];
-
-		bp->b_flags &= ~B_INVAL;
-		bp->b_rcred = crhold(curthread->td_ucred);
-		bp->b_wcred = crhold(curthread->td_ucred);
-
-		OS_START(DATAWRITE, &before);
-		BUF_ASSERT_LOCKED(bp);
-		g_vfs_strategy(&osdata.os_vp->v_bufobj, bp);
-
-		error = bufwait(bp);
-		if (error != 0)
-			panic("error %d\n", error);
-		relpbuf(bp, NULL);
-
-		OS_STOP(DATAWRITE, &before);
-	}
-}
-
-static void __attribute__((noinline))
-objsnap_io_block(struct objsnap_txn *set)
-{
-	obj_diskptr_t ptr = set->d_ptr;
-	struct buf *src, *dst;
-	uint64_t off;
-	uint64_t ind;
-	int cnt;
-	int i;
-
-	KASSERT(set->d_type == OBJTXN_BLOCK, ("not a block transaction"));
-
-	for (ind = 0, cnt = 0; ind < set->d_cnt; ind += cnt) {
-		off = DEVICE_BLOCK_NUM(ptr.offset + ind);
-		cnt = min(MAXDRTYCNT, set->d_cnt - ind);
-
-		
-		dst = getblk(osdata.os_vp, off, cnt * BLOCKSIZE, 
-			0, 0, GB_UNMAPPED);
-
-		for (i = 0; i < cnt; i++) {
-			src = getblk(osdata.os_vp, set->d_blk[ind + i].blkoff,
-				BLOCKSIZE, 0, 0, GB_UNMAPPED);
-
-			memcpy(dst->b_pages[i], src->b_pages[0], PAGE_SIZE);
-
-			brelse(src);
-		}
-
-		bwrite(dst);
-	}
-}
-
-static void __attribute__((noinline))
-objsnap_io_page(struct objsnap_txn *set)
-{
-	obj_diskptr_t ptr = set->d_ptr;
+	int left = set->d_cnt;	
 	int pagecnt;
 	int error;
-	int left = set->d_cnt;	
 	int pgoff = 0;
-	struct g_consumer *cp = osdata.os_consumer;
-
-	KASSERT(set->d_type == OBJTXN_PAGE, ("not a page transaction"));
+	void *data;
 
 	while (left) {
 		pagecnt = min(OBJSNAP_MAXUIO, left);
-		void * data = malloc(BLOCKSIZE * pagecnt, M_OBJSNAP, M_WAITOK | M_ZERO);
-
-		objsnap_io_uio(data, &set->d_pg[pgoff], pagecnt);
+		data = malloc(BLOCKSIZE * pagecnt, M_OBJSNAP, M_WAITOK | M_ZERO);
+		objsnap_io_uio(set, pgoff, pagecnt, data);
 
 		error = g_write_data(cp, DEVICE_BLOCK_NUM(ptr.offset + set->d_cnt - left) * 512, data, BLOCKSIZE * pagecnt);
 		if (error) {
@@ -333,28 +225,20 @@ objsnap_wait_entry(int tid)
 }
 
 static void __attribute__((noinline))
-objsnap_mktxn(int *mytids, size_t size_tids, enum objsnap_txn_type type, struct objsnap_txn *txn)
+objsnap_mktxn(int *mytids, size_t size_tids, struct objsnap_txn *txn)
 {
 	int i, j, ind;
 	int tmptid;
-
-	txn->d_type = type;
 
 	for (i = 0, ind = 0; i < size_tids; i++) {
 		tmptid = mytids[i];
 
 		for (j = 0; j < tpgs[tmptid].d_cnt; j++) { 
-			switch (type) {
-			case OBJTXN_PAGE:
-				txn->d_pg[ind++] = tpgs[tmptid].d_pg[j];
-				break;
-			case OBJTXN_BLOCK:
-				txn->d_blk[ind++] = tpgs[tmptid].d_blk[j];
-				break;
-			case OBJTXN_MSNP:
-				txn->d_msnp[ind++] = tpgs[tmptid].d_msnp[j];
-				break;
-			}
+			txn->d_page[ind] = tpgs[tmptid].d_page[j];
+			KASSERT(txn->d_page[ind] != NULL, ("transaction includes NULL page"));
+			txn->d_index[ind] = tpgs[tmptid].d_index[j];
+			txn->d_inode[ind] = tpgs[tmptid].d_inode[j];
+			ind += 1;
 		}
 		tpgs[tmptid].d_cnt = 0;
 	}
@@ -370,32 +254,14 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 	uint64_t before;
 	obj_diskptr_t walblk;
 	int error;
-	vm_page_t m;
 	int i;
 
 	OS_START(DATAWRITE, &before);
 
 	for (i = 0; i < npages; i++) {
-		switch (txn->d_type) {
-		case OBJTXN_PAGE:
-			we.we_ptrs[i].w_inode = txn->d_pg[i].inode;
-			we.we_ptrs[i].w_index = txn->d_pg[i].pindex;
-			we.we_ptrs[i].w_offset = txn->d_ptr.offset + i;
-			break;
-		case OBJTXN_BLOCK:
-			we.we_ptrs[i].w_inode = txn->d_blk[i].objino;
-			we.we_ptrs[i].w_index = IDX_TO_OFF(txn->d_blk[i].objoff);
-			we.we_ptrs[i].w_offset = txn->d_ptr.offset + i;
-			break;
-		case OBJTXN_MSNP:
-			m = txn->d_msnp[i];
-			we.we_ptrs[i].w_inode = m->object->objid;
-			we.we_ptrs[i].w_index = m->pindex;
-			we.we_ptrs[i].w_offset = txn->d_ptr.offset + i;
-			break;
-		default:
-			panic("invalid txn type %d\n", txn->d_type);
-		}	
+		we.we_ptrs[i].w_inode = txn->d_inode[i];
+		we.we_ptrs[i].w_index = txn->d_index[i];
+		we.we_ptrs[i].w_offset = txn->d_ptr.offset + i;
 	}
 
 	we.we_cnt = npages;
@@ -431,24 +297,7 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 	allocate_txn_block(txn);
 	OS_STOP(ALLOCATE, &before);
 
-
-	/* Write out out the transaction. */
-	switch (txn->d_type) {
-	case OBJTXN_PAGE:
-		objsnap_io_page(txn);
-		break;
-
-	case OBJTXN_BLOCK:
-		objsnap_io_block(txn);
-		break;
-
-	case OBJTXN_MSNP:
-		objsnap_io_msnp(txn);
-		break;
-
-	default:
-		panic("invalid transaction data type %d\n", txn->d_type);
-	}
+	objsnap_io(txn);
 
 	/* Construct the transaction entry on the WAL and flush it. */
 	objsnap_wal_log(txn, txn->d_cnt);
@@ -480,7 +329,7 @@ objsnap_printstats(void)
 }
 
 void
-objsnap_checkpoint_txn(int tid, enum objsnap_txn_type type)
+objsnap_checkpoint_txn(int tid)
 {
 	struct objsnap_txn txn;
 	uint64_t checkpoint;
@@ -539,7 +388,7 @@ objsnap_checkpoint_txn(int tid, enum objsnap_txn_type type)
 	if (total_size > MAXDRTYCNT)
 		panic("transaction size too large");
 
-	objsnap_mktxn((int *)mytids, size_tids, type, &txn);
+	objsnap_mktxn((int *)mytids, size_tids, &txn);
 	objsnap_txn_commit(&txn);
 
 	for (i = 0; i < size_tids; i++) {
@@ -567,7 +416,7 @@ objsnap_checkpoint_txn(int tid, enum objsnap_txn_type type)
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
-	return (objsnap_checkpoint_txn(args->tid, OBJTXN_PAGE));
+	return (objsnap_checkpoint_txn(args->tid));
 }
 
 void
@@ -591,70 +440,67 @@ objsnap_create(struct objsnap_create_args *args)
 	return;
 }
 
-static int
-usrptr_to_page(vm_offset_t ptr, struct pageset *pinfo) {
+static vm_page_t
+usrptr_to_page(vm_offset_t addr) {
 	vm_map_entry_t entry;
 	vm_object_t obj;
 	vm_pindex_t pindex;
 	vm_prot_t out_prot;
 	boolean_t wired;
+	vm_page_t m;
 
 	struct proc *p = curthread->td_proc;
 	struct vmspace *vms = p->p_vmspace;
     	vm_map_t map = &vms->vm_map;
 
-
 	// Check if page is valid range
-	if (!vm_map_range_valid(&vms->vm_map, ptr, ptr + BLOCKSIZE))
-		return (-1);
+	if (!vm_map_range_valid(&vms->vm_map, addr, addr+ BLOCKSIZE))
+		return (NULL);
 
-	if (vm_map_lookup(&map, ptr, VM_PROT_READ, 
+	if (vm_map_lookup(&map, addr, VM_PROT_READ, 
 		&entry, &obj, &pindex, &out_prot, &wired) != KERN_SUCCESS) {
 		// Error handling
-		return (-1);
+		return (NULL);
 	}	
+
+	VM_OBJECT_WLOCK(obj);
+	m = vm_page_lookup(obj, pindex);
+	if (m == NULL)
+		panic("dirty page not resident");
+	VM_OBJECT_WUNLOCK(obj);
 
 	vm_map_lookup_done(map, entry);
 
-	pinfo->obj = obj;
-	pinfo->pindex = pindex;
-	pinfo->offset = ptr;
-	return (0);
+	return (m);
 }
 
 
 static int
 objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 {
+	int tid = args->os_tid;
+	struct objsnap_txn *set = &tpgs[tid];
 	vm_offset_t addr = args->os_page;
 	index_t inode_i = args->os_index;
-	int tid = args->os_tid;
-
-	struct pageset pageinfo;
-	pageinfo.inode = inode_i;
-	struct objsnap_txn *set = &tpgs[tid];
-	int error = 0;
+	vm_page_t m;
 	
-	error = usrptr_to_page(addr, &pageinfo);
-	if (error) {
-		printf("Error: Bad dirty page\n");
-		return EINVAL;
-	}
+	if (set->d_cnt >= MAXDRTYCNT)
+		panic("Too many dirty pages in transaction %d\n", set->d_cnt);
+
+	m = usrptr_to_page(addr);
+	if (m == NULL)
+		panic("Bad dirty page\n");
 
 	// SLOW LOOKUP
 	for (int i = 0; i < set->d_cnt; i++) {
-		vm_pindex_t p = set->d_pg[i].pindex;
-		if (pageinfo.pindex == p) {
+		KASSERT(set->d_page[i] != NULL, ("found NULL page during dirtying"));
+		if (set->d_page[i] == m)
 			return (0);
-		}
 	}
 
-	if (set->d_cnt > MAXDRTYCNT) {
-		printf("TRYING TO OVERLOAD THE THREAD %d\n", set->d_cnt);
-		return (0);
-	}
-
-	set->d_pg[set->d_cnt] = pageinfo;
+	set->d_page[set->d_cnt] = m;
+	set->d_index[set->d_cnt] = m->pindex;
+	set->d_inode[set->d_cnt] = inode_i;
 	set->d_cnt += 1;
 
 	return (0);

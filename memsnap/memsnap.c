@@ -242,6 +242,7 @@ msnp_genio(struct pglist *snaplist, int tid)
 {
 	struct objsnap_txn *txn = &tpgs[tid];
 	vm_page_t m, mtmp;
+	int i;
 
 	KASSERT(0 <= tid && tid < MAXTHREADS, ("invalid tid %d", tid));
 	/* 
@@ -255,7 +256,10 @@ msnp_genio(struct pglist *snaplist, int tid)
 		vm_page_lock(m);
 		KASSERT(m->object != NULL, ("stray page found"));
 
-		txn->d_msnp[txn->d_cnt++] = m;
+		txn->d_page[txn->d_cnt] = m;
+		txn->d_index[txn->d_cnt] = m->pindex;
+		txn->d_index[txn->d_cnt] = m->pindex;
+		txn->d_cnt += 1;
 
 		msnp_page_untrack_unlocked(snaplist, m);
 
@@ -264,7 +268,13 @@ msnp_genio(struct pglist *snaplist, int tid)
 
 	KASSERT(txn->d_cnt > 0, ("empty commit"));
 
-	objsnap_checkpoint_txn(tid, OBJTXN_MSNP);
+	objsnap_checkpoint_txn(tid);
+
+	for (i = 0; i < txn->d_cnt; i++) {
+		m = txn->d_page[i];
+		m->flags &= ~VPO_SASCOW;
+	}
+
 }
 
 static __attribute__((noinline)) void

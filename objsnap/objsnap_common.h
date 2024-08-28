@@ -4,39 +4,18 @@
 #define MAXTHREADS (64)
 #define MAXDRTYCNT (64)
 
-struct pageset {
-	vm_object_t obj;
-	vm_pindex_t pindex;
-	vm_offset_t offset;
-	index_t inode;
-};
-
-struct blockset {
-	uint64_t blkoff; 
-	uint64_t objoff;
-	index_t objino;
-};
-
-enum objsnap_txn_type {
-	OBJTXN_PAGE,
-	OBJTXN_BLOCK,
-	OBJTXN_MSNP,
-};
-
 struct objsnap_txn {
 	int d_cnt;	/* Size of the working set in disk blocks. */
-	union {
-		struct pageset d_pg[MAXDRTYCNT];
-		struct blockset d_blk[MAXDRTYCNT];
-		vm_page_t d_msnp[MAXDRTYCNT];
-	};
+	vm_page_t d_page[MAXDRTYCNT];
+	vm_pindex_t d_index[MAXDRTYCNT];
+	vm_offset_t d_offset[MAXDRTYCNT];
+	vm_offset_t d_inode[MAXDRTYCNT];
 	obj_diskptr_t d_ptr; /* Backing disk pointer. */
-	enum objsnap_txn_type d_type; /* Transaction data format. */
 } __attribute__((aligned(64))) ;
 
 extern struct objsnap_txn tpgs[MAXTHREADS];
 
-void objsnap_checkpoint_txn(int, enum objsnap_txn_type);
+void objsnap_checkpoint_txn(int);
 void objsnap_create_inode(int *);
 
 #endif /* _OBJSNAP_COMMON_H_ */ 

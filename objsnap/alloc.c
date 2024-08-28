@@ -26,7 +26,7 @@
 #include "vtree.h"
 #include "btree.h"
 
-const enum obj_alloctype obj_alloctype = OBJALLOC_CHUNK;
+const enum obj_alloctype obj_alloctype = OBJALLOC_BINARY;
 
 struct allocator alloc;
 

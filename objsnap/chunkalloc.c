@@ -333,7 +333,6 @@ ca_blkalloc(struct ca_chunk *ch, struct objsnap_txn *txn)
 {
 	const size_t numblocks = txn->d_cnt;
 	struct ca_objid *backmap;
-	vm_page_t m;
 	int ind, i;
 
 	KASSERT(ch->cac_alloc_index + numblocks <= CA_BLOCKS, ("chunk cannot satisfy allocation"));
@@ -343,22 +342,8 @@ ca_blkalloc(struct ca_chunk *ch, struct objsnap_txn *txn)
 		ind = ch->cac_alloc_index + i; 
 		backmap = &ch->cac_backmap[ind];
 
-		switch (txn->d_type) {
-		case OBJTXN_PAGE:
-			backmap->cao_ino = txn->d_pg[i].inode;
-			backmap->cao_off = txn->d_pg[i].pindex;
-			break;
-		case OBJTXN_BLOCK:
-			panic("unhandled right now");
-			break;
-		case OBJTXN_MSNP:
-			m = txn->d_msnp[i];
-			backmap->cao_ino = m->object->objid;
-			backmap->cao_off = m->pindex;
-			break;
-		default:
-			panic("invalid txn type %d\n", txn->d_type);
-		}
+		backmap->cao_ino = txn->d_inode[i];
+		backmap->cao_off = txn->d_index[i];
 	}
 
 	txn->d_ptr.offset = ch->cac_ptr.offset + ch->cac_alloc_index;
