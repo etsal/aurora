@@ -9,8 +9,9 @@
 #include <sys/taskqueue.h>
 
 #include "arraylist.h"
-#include "chunkalloc.h"
+#include "objsnap_common.h"
 #include "objsnap_internal.h"
+#include "chunkalloc.h"
 
 MALLOC_DEFINE(M_CHUNKALLOC, "Chunk allocator", "chunkalloc");
 
@@ -328,25 +329,40 @@ ca_age(struct chunkallocator *ca, int numblocks)
 }
 
 static void
-ca_blkalloc(struct ca_chunk *ch, int numblocks, obj_diskptr_t *ptrp)
+ca_blkalloc(struct ca_chunk *ch, struct objsnap_txn *txn)
 {
-	int __unused ind, i;
+	const size_t numblocks = txn->d_cnt;
+	struct ca_objid *backmap;
+	vm_page_t m;
+	int ind, i;
 
 	KASSERT(ch->cac_alloc_index + numblocks <= CA_BLOCKS, ("chunk cannot satisfy allocation"));
 
 	/* Scan all sectors till we find a free one. */
 	for (i = 0; i < numblocks ; i++) {
-		ind = ch->cac_ptr.offset + ch->cac_alloc_index + i; 
-		panic("Have not populated the backmap");
-		/* 
-		 * XXX Populate the backmap. We need to get the write-combined
-		 * transaction, go through it, and get the inode/offset pair for each block.
-		 * We then go through the chunk and log the pair down.
-		 */
+		ind = ch->cac_alloc_index + i; 
+		backmap = &ch->cac_backmap[ind];
+
+		switch (txn->d_type) {
+		case OBJTXN_PAGE:
+			backmap->cao_ino = txn->d_pg[i].inode;
+			backmap->cao_off = txn->d_pg[i].pindex;
+			break;
+		case OBJTXN_BLOCK:
+			panic("unhandled right now");
+			break;
+		case OBJTXN_MSNP:
+			m = txn->d_msnp[i];
+			backmap->cao_ino = m->object->objid;
+			backmap->cao_off = m->pindex;
+			break;
+		default:
+			panic("invalid txn type %d\n", txn->d_type);
+		}
 	}
 
-	ptrp->offset = ch->cac_ptr.offset + ch->cac_alloc_index;
-	ptrp->size = numblocks;
+	txn->d_ptr.offset = ch->cac_ptr.offset + ch->cac_alloc_index;
+	txn->d_ptr.size = numblocks;
 	
 	ch->cac_blocks_used += numblocks;
 	ch->cac_alloc_index += numblocks;
@@ -381,14 +397,15 @@ ca_free_select(struct chunkallocator *ca, int numblocks, struct ca_chunk **chp, 
 }
 
 static int
-ca_tryalloc(struct chunkallocator *ca, int numblocks, obj_diskptr_t *ptrp)
+ca_tryalloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn)
 {
+	const size_t numblocks = txn->d_cnt;
 	struct ca_chunk *ch;
 	int error;
 	int chind;
 
 	if (numblocks > ca->ca_txnsz_blk)
-		panic("requested allocation too large (%d, max %d)\n", numblocks, ca->ca_txnsz_blk);
+		panic("requested allocation too large (%ld, max %d)\n", numblocks, ca->ca_txnsz_blk);
 
 	/* Age as many hot blocks as we are allocating. */
 	ca_age(ca, numblocks);
@@ -411,7 +428,7 @@ ca_tryalloc(struct chunkallocator *ca, int numblocks, obj_diskptr_t *ptrp)
 		return (EAGAIN);
 	}
 
-	ca_blkalloc(ch, numblocks, ptrp);
+	ca_blkalloc(ch, txn);
 
 	/* Move fully allocated chunks to the hot list. */
 	if (ch->cac_alloc_index >= ca->ca_txnsz_blk) {
@@ -429,12 +446,12 @@ ca_tryalloc(struct chunkallocator *ca, int numblocks, obj_diskptr_t *ptrp)
 }
 
 int
-ca_alloc(struct chunkallocator *ca, int numblocks, obj_diskptr_t *ptrp)
+ca_alloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn)
 {
 	int error;
 
 	do {
-		error = ca_tryalloc(ca, numblocks, ptrp);
+		error = ca_tryalloc_txn(ca, txn);
 	} while (error != 0);
 
 	return (0);

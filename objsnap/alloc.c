@@ -96,17 +96,19 @@ objsnap_blkalloc_wal(obj_diskptr_t *ptr)
 }
 
 int
-allocate_block(int i, obj_diskptr_t *ptr)
+allocate_txn_block(struct objsnap_txn *txn)
 {
     uint64_t before;
     int error;
+
     OS_START(ALLOCATE, &before);
-    error = oa_alloc(&alloc.alloc_impl, i, ptr);
+    error = oa_alloc_txn(&alloc.alloc_impl, txn);
     if (error) {
         panic("Problem allocating!");
     }
-    if (ptr->offset <= (superblock.super_max_inodes + MAX_WAL_ENTRIES + 2)) {
-	    printf("ERROR: PTR TOO EARLY INCORRECT LOCATION OVERWRITE FOR NOW %u\n", ptr->offset);
+    if (txn->d_ptr.offset <= (superblock.super_max_inodes + MAX_WAL_ENTRIES + 2)) {
+	    printf("ERROR: PTR TOO EARLY INCORRECT LOCATION OVERWRITE"
+		"FOR NOW %u\n", txn->d_ptr.offset);
     }
     OS_STOP(ALLOCATE, &before);
 

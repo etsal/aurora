@@ -42,6 +42,7 @@
 
 #include <objsnap_ioctl.h>
 
+#include "objsnap_common.h"
 #include "objsnap_internal.h"
 #include "alloc.h"
 #include "btree.h"
@@ -427,7 +428,7 @@ objsnap_txn_commit(struct objsnap_txn *txn)
 
 	OS_START(ALLOCATE, &before);
 	// TODO:CHECK ERROR
-	allocate_block(txn->d_cnt, &txn->d_ptr);
+	allocate_txn_block(txn);
 	OS_STOP(ALLOCATE, &before);
 
 
