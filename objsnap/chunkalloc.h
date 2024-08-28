@@ -35,6 +35,8 @@ struct ca_objid {
 	uint32_t cao_off;
 };
 
+TAILQ_HEAD(ca_system_list, ca_chunk);
+
 struct ca_chunk {
 	struct mtx 		cac_mtx;
 	int 			cac_index;
@@ -45,6 +47,7 @@ struct ca_chunk {
 	uint64_t 		cac_blocks_used;
 	uint64_t 		cac_alloc_index;
 	enum ca_state		cac_state;
+	TAILQ_ENTRY(ca_chunk)	ca_next;
 };
 
 struct chunkallocator {
@@ -69,11 +72,8 @@ struct chunkallocator {
 	uint64_t		ca_cold_cnt[CA_COLD_BUCKETS];
 
 	/* Chunk lists for system blocks (used for inodes/bnodes). */
-	struct ca_chunk		**ca_system;
-	uint64_t		ca_system_cnt;
-
-	struct ca_chunk		**ca_system_full;
-	uint64_t		ca_system_full_cnt;
+	struct ca_system_list		ca_system_alloc;
+	struct ca_system_list		ca_system_full;
 
 	/*
 	 * XXX Add stats back.

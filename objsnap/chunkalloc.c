@@ -30,6 +30,8 @@ cac_from_free(struct chunkallocator *ca, size_t chind, struct ca_chunk **chp)
 
 	mtx_assert(&ca->ca_mtx, MA_OWNED);
 
+	KASSERT(chind < ca->ca_free_cnt, ("removing invalid chind %ld", chind));
+
 	ch = ca->ca_free[chind];
 	mtx_assert(&ch->cac_mtx, MA_OWNED);
 
@@ -165,6 +167,9 @@ ca_init(struct chunkallocator *ca, uint64_t startoff, size_t numblocks)
 
 	ca->ca_free_cnt = 0;
 	ca->ca_free = ca_arrayalloc(sizeof(*ca->ca_free), ca->ca_chunk_cnt);
+
+	TAILQ_INIT(&ca->ca_system_alloc);
+	TAILQ_INIT(&ca->ca_system_full);
 
 	mtx_lock(&ca->ca_mtx);
 	ca_init_chunks(ca, startoff);
@@ -464,6 +469,15 @@ ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 	}
 
 	ch->cac_blocks_used -= ptr.size;
+
+	/* Special case for the system block allocator. */
+	if (ch->cac_state == CA_SYSTEM_FULL) {
+		TAILQ_REMOVE(&ca->ca_system_full, ch, ca_next);
+		KASSERT(ch->cac_state == CA_SYSTEM_FULL, ("invalid block state %d", ch->cac_state));
+		ch->cac_state = CA_SYSTEM;
+		TAILQ_INSERT_HEAD(&ca->ca_system_alloc, ch, ca_next);
+	}
+
 	mtx_unlock(&ch->cac_mtx);
 }
 
@@ -527,34 +541,39 @@ ca_tryalloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 
 	/* If we have a system */
 	mtx_lock(&ca->ca_mtx);
-	if (ca->ca_system_cnt != 0) {
-		ch = ca->ca_system[ca->ca_system_cnt - 1];
 
-		ca_blkalloc_system(ch, ptrp);
+	/* If necessary, pop a free block off the main allocator and into the system allocator. */
+	if (TAILQ_EMPTY(&ca->ca_system_alloc)) {
 
-		/* 
-		 * If the block is full, we remove it from the non-free system list and put it
-		 * in the full system list.
-		 */
-		if (ch->cac_blocks_used == CA_BLOCKS) {
-			ca->ca_system_cnt -= 1;
-			ca->ca_system_full[ca->ca_system_full_cnt++] = ch;
-		}
+		cac_from_free(ca, ca->ca_free_cnt - 1, &ch);
+		KASSERT(ch->cac_state == CA_FREE, ("invalid block state %d", ch->cac_state));
+		ch->cac_state = CA_SYSTEM;
+
+		TAILQ_INSERT_HEAD(&ca->ca_system_alloc, ch, ca_next);
 
 		mtx_unlock(&ca->ca_mtx);
-		return (0);
+
+		return (EAGAIN);
 	}
 
-	/* Pop a free block off the main allocator and into the system allocator. */
+	ch = TAILQ_FIRST(&ca->ca_system_alloc);
+	KASSERT(ch->cac_state == CA_SYSTEM, ("invalid block state %d", ch->cac_state));
 
-	cac_from_free(ca, ca->ca_free_cnt - 1, &ch);
-	ch->cac_state = CA_SYSTEM;
+	ca_blkalloc_system(ch, ptrp);
 
-	ca->ca_system[ca->ca_system_cnt++] = ch;
+	/* 
+	 * If the block is full, we remove it from the non-free system list and put it
+	 * in the full system list.
+	 */
+	if (ch->cac_blocks_used == CA_BLOCKS) {
+		TAILQ_REMOVE(&ca->ca_system_alloc, ch, ca_next);
+		KASSERT(ch->cac_state == CA_SYSTEM, ("invalid block state %d", ch->cac_state));
+		ch->cac_state = CA_SYSTEM_FULL;
+		TAILQ_INSERT_HEAD(&ca->ca_system_full, ch, ca_next);
+	}
 
 	mtx_unlock(&ca->ca_mtx);
-
-	return (EAGAIN);
+	return (0);
 }
 
 void
@@ -566,14 +585,4 @@ ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 		error = ca_tryalloc_system(ca, ptrp);
 	} while (error != 0);
 
-}
-
-void
-ca_free_system(struct chunkallocator *ca, obj_diskptr_t ptr)
-{
-	/* XXX Find the chunk for the object disk. */
-	/* Free the block */
-	/* XXX If the chunk is in the full list, move it to the empty list */
-	panic("unimplemented");
-	/* XXX Get */
 }
