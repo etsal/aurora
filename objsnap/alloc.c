@@ -113,6 +113,24 @@ allocate_block(int i, obj_diskptr_t *ptr)
     return (0);
 }
 
+int
+allocate_system_block(obj_diskptr_t *ptr)
+{
+    uint64_t before;
+    int error;
+    OS_START(ALLOCATE, &before);
+    error = oa_alloc_system(&alloc.alloc_impl, ptr);
+    if (error) {
+        panic("Problem allocating!");
+    }
+    if (ptr->offset <= (superblock.super_max_inodes + MAX_WAL_ENTRIES + 2)) {
+	    printf("ERROR: PTR TOO EARLY INCORRECT LOCATION OVERWRITE FOR NOW %u\n", ptr->offset);
+    }
+    OS_STOP(ALLOCATE, &before);
+
+    return (0);
+}
+
 void 
 free_block(obj_diskptr_t ptr)
 {
@@ -162,7 +180,7 @@ osinode_t *allocate_inode()
 
     osinode_t *newinode = malloc(sizeof(osinode_t), M_OBJSNAP, M_WAITOK);
     newinode->i_index = atomic_fetchadd_int(&superblock.super_next, 2);
-    allocate_block(1, &newinode->i_treeptr);
+    allocate_system_block(&newinode->i_treeptr);
     newinode->i_version = 0;
     newinode->i_cnt = 0;
 

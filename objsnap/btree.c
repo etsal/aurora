@@ -145,7 +145,7 @@ btnode_create(btnode_t node, btree_t tree, uint8_t type)
 	uint64_t before;
   	obj_diskptr_t ptr;
 	// TODO: CHECK ERROR
-	allocate_block(1, &ptr);
+	allocate_system_block(&ptr);
 
 	OS_START(GETBLK, &before);
 	struct buf *bp = getblk(tree->tr_vp, DEVICE_BLOCK_NUM(ptr.offset), BLOCKSIZE, 0, 0, 0);
@@ -210,7 +210,7 @@ path_cow(bpath_t path)
        struct bufobj *bo;
 	bo = &tmp->n_tree->tr_vp->v_bufobj;
 	obj_diskptr_t newptr;
-	allocate_block(1, &newptr);
+	allocate_system_block(&newptr);
 
 	brelvp(tmp->n_bp);
 
