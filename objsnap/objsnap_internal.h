@@ -14,6 +14,7 @@
 #include <sys/sysctl.h>
 #include <sys/vnode.h>
 #include <sys/taskqueue.h>
+#include <sys/sysctl.h>
 
 #include <vm/vm.h>
 #include <vm/uma.h>
@@ -46,6 +47,8 @@
 #define OS_START(name, before) do { ctstart(OS_STAT_GET_##name(), before); } while(0)
 #define OS_STOP(name, before) do {ctstop(OS_STAT_GET_##name(), before); } while(0)
 #define OS_STOP_SAMPLE(name, before, sample) do { if ((*before % sample) == 0) ctstop(OS_STAT_GET_##name(), before); } while(0)
+
+SYSCTL_DECL(_objsnap);
 
 enum objsync_state {
 	OBJSYNC_UNINIT = 0,

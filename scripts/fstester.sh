@@ -2,6 +2,7 @@
 
 DISK="/dev/nvd0"
 ARGS="--name=random_write_fsync --filename=/testmnt/test --rw=randwrite --runtime=60 --group_reporting --new_group"
+PRINT=""
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 run() {
 	iostat -d nvd0 1 > /tmp/gstat.out &
@@ -21,7 +22,7 @@ run() {
 	lat_ns=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write clat_ns mean)
 	lat_99=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write clat_ns percentile string:99.000000)
 	iokbytes=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write clat_ns percentile string:99.000000)
-	goodput_kib=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write io_kbytes)
+	goodput_kib=$($SCRIPT_DuR/jsparse.py /tmp/run.out jobs 0 write io_kbytes)
 	goodput_mib=$(expr $goodput_kib / 1024)
 	echo "$3, $1, $4, $iops, $lat_ns, $lat_99, $goodput_mib, $throughput_mib, $disk_iops" >> "$2"
 }
@@ -99,7 +100,7 @@ run_once_objsnap() {
 	iostat -hd nvd0 1 > /tmp/gstat.out &
 	IOSTAT=$(pgrep iostat)
 	sleep 2
-	$SCRIPT_DIR/../objsnap.sh /dev/nvd0 $1 "$3" 60 | tail -n -1 > backingfile &
+	$SCRIPT_DIR/../objsnap.sh /dev/nvd0 $1 "$3" 60 $PRINT > backingfile &
 	WAITFOR=$!
 	sleep 5
 	PID=$(pgrep objsnap)
@@ -114,9 +115,8 @@ run_once_objsnap() {
 	disk_iops=$(cat /tmp/gstat.out | tail -n +2 | awk '{ sum += $2 } END { print sum }')
 	rm /tmp/temp
 
-	exec 3< backingfile
+	echo "$(cat backingfile), $throughput_mbs, $disk_iops, $cpu" >> $2
 	rm backingfile
-	echo "$(cat <&3), $throughput_mbs, $disk_iops, $cpu" >> $2
 }
 
 test_objsnap() {
@@ -152,19 +152,94 @@ test_objsnap_dirtyset() {
 }
 
 
-OUT="out"
-DIRTYSETOUT="dirtyset"
-THREADS=24
-MAXDIRTYSET=8
-#truncate -s 0 "$OUT"
-#echo "fs,num_threads,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$OUT"
-#test_objsnap $THREADS "$OUT" "1"
-#test_ffs_journal $THREADS "$OUT"
-#test_ffs_bs $THREADS "$OUT"
-#test_ffs $THREADS "$OUT"
-#test_zfs $THREADS "$OUT"
+benchmark_fses() {
+	OUT="out"
+	truncate -s 0 "$OUT"
+	echo "fs,num_threads,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$OUT"
+	test_objsnap $THREADS "$OUT" "1"
+	test_ffs_journal $THREADS "$OUT"
+	test_ffs_bs $THREADS "$OUT"
+	test_ffs $THREADS "$OUT"
+	test_zfs $THREADS "$OUT"
+}
 
-truncate -s 0 "$DIRTYSETOUT"
-echo "fs,num_threads,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$DIRTYSETOUT"
-test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
-test_zfs_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+benchmark_ckpt_size() {
+	DIRTYSETOUT="dirtyset"
+	MAXDIRTYSET=8
+	truncate -s 0 "$DIRTYSETOUT"
+	echo "fs,num_threads,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$DIRTYSETOUT"
+	test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+	test_zfs_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+}
+
+benchmark_wait_time() {
+	WAITOUT="waitout"
+	truncate -s 0 "$WAITOUT"
+	dmesg -c > /dev/null
+	echo "wait,ckpt_on,waiter_latency,waiter_amount,combiner_latency,combiner_amount,avg_size,metadata_ratio" > "$WAITOUT"
+	wait_times=(0 2 5 10 30)
+	for num in ${wait_times[@]}
+	do
+		touch conf.sys
+		touch /tmp/tmpout
+		truncate -s 0 /tmp/tmpout
+		PRINT="-p"
+		echo "objsnap.wait=$num" >> conf.sys
+		echo "objsnap.ckpt_flush=0" >> conf.sys
+		run_once_objsnap "$THREADS" "/tmp/tmpout" 1
+		goodput=$(cat /tmp/tmpout | tail -n 1 |  awk -F ","  '{ gsub(" ", "", $7); print $7}')
+		throughput=$(cat /tmp/tmpout | tail -n 1 | awk -F ","  '{ gsub(" ", "", $8); print $8}')
+		ratio=$(awk "BEGIN {print $throughput / $goodput}")
+		waiter_latency=$(cat /tmp/tmpout | grep WAITERS | awk '{print $8}')
+		waiter_amount=$(cat /tmp/tmpout | grep WAITERS | awk '{ gsub(",","", $6); print $6}')
+		combiner_latency=$(cat /tmp/tmpout | grep WRITERS | awk '{print $8}')
+		combiner_amount=$(cat /tmp/tmpout | grep WRITERS | awk '{ gsub(",","", $6); print $6}')
+
+		dmesg -c > /tmp/tmpout
+
+		transaction_size=$(cat /tmp/tmpout | grep "Transaction sizes" | awk '{print $3}')
+		transaction_cnt=$(cat /tmp/tmpout | grep "Transaction cnt" | awk '{print $3}')
+		avg_txn=$(awk "BEGIN { print $transaction_size / $transaction_cnt }")
+
+		echo "$num,0,$waiter_latency,$waiter_amount,$combiner_latency,$combiner_amount,$avg_txn,$ratio" >> $WAITOUT
+		
+		rm conf.sys
+		rm /tmp/tmpout
+		PRINT=""
+	done
+	for num in ${wait_times[@]}
+	do
+		touch conf.sys
+		touch /tmp/tmpout
+		truncate -s 0 /tmp/tmpout
+		PRINT="-p"
+		echo "objsnap.wait=$num" >> conf.sys
+		echo "objsnap.ckpt_flush=1" >> conf.sys
+		run_once_objsnap "$THREADS" "/tmp/tmpout" 1
+		goodput=$(cat /tmp/tmpout | tail -n 1 |  awk -F ","  '{ gsub(" ", "", $7); print $7}')
+		throughput=$(cat /tmp/tmpout | tail -n 1 | awk -F ","  '{ gsub(" ", "", $8); print $8}')
+		ratio=$(awk "BEGIN {print $throughput / $goodput}")
+		waiter_latency=$(cat /tmp/tmpout | grep WAITERS | awk '{print $8}')
+		waiter_amount=$(cat /tmp/tmpout | grep WAITERS | awk '{ gsub(",","", $6); print $6}')
+		combiner_latency=$(cat /tmp/tmpout | grep WRITERS | awk '{print $8}')
+		combiner_amount=$(cat /tmp/tmpout | grep WRITERS | awk '{ gsub(",","", $6); print $6}')
+
+		dmesg -c > /tmp/tmpout
+
+		transaction_size=$(cat /tmp/tmpout | grep "Transaction sizes" | awk '{print $3}')
+		transaction_cnt=$(cat /tmp/tmpout | grep "Transaction cnt" | awk '{print $3}')
+		avg_txn=$(awk "BEGIN { print $transaction_size / $transaction_cnt }")
+
+		echo "$num,1,$waiter_latency,$waiter_amount,$combiner_latency,$combiner_amount,$avg_txn,$ratio" >> $WAITOUT
+		
+		rm conf.sys
+		rm /tmp/tmpout
+		PRINT=""
+	done
+
+}
+
+THREADS=24
+#benchmark_fses
+#benchmark_ckpt_size
+benchmark_wait_time

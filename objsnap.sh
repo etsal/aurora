@@ -18,6 +18,8 @@ kldload objsnap/objsnap.ko
 
 stat -x /dev/objsnap
 
+sysctl -f conf.sys 2> /dev/null
+
 ./tools/new_objsnap/new_objsnap $DISK $2 $3 $4 $5
 
 kldunload objsnap
