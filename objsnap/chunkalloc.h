@@ -5,10 +5,13 @@
 #define CA_BLOCKS (CA_CHUNKSZ / BLOCKSIZE)
 #define CA_COLD_BUCKETS (8)
 #define CA_SYSTEM_INO (0xFFFFFFFF)
-
-#define CA_SETALL(size) ((size) == 64 ? UINT64_MAX : ((1ULL << (size)) - 1))
 #define CA_TXNSIZE (64)
-#define CA_CRITICAL_WATERMARK (4)
+
+/*
+ * This knob determines how full we keep the to-launder list.
+ */
+#define CA_SURPLUS_THRESHOLD (CA_BLOCKS * 25)
+
 /* 
  * This knob determines the size of the hot list. The larger the ratio, the more
  * larger the hot list ends up becoming because we require more pages to be used
@@ -22,6 +25,7 @@
 
 
 enum ca_state {
+	CA_NOQUEUE,
 	CA_FREE,
 	CA_HOT,
 	CA_COLD,
@@ -77,6 +81,7 @@ struct chunkallocator {
 	struct ca_system_list		ca_system_full;
 
 	struct ca_system_list		ca_launder;
+	uint64_t			ca_launder_surplus;
 	struct ca_chunk			*ca_launder_dst;
 
 	/*

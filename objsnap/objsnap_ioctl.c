@@ -386,11 +386,11 @@ objsnap_checkpoint_txn(int tid)
 	if (total_size > MAXDRTYCNT)
 		panic("transaction size too large");
 
-	objsnap_mktxn((int *)mytids, size_tids, &txn);
-	objsnap_txn_commit(&txn);
-
 	/* For the chunk allocator we write out a cold page for every new page. */
 	garbage_collect(total_size);
+
+	objsnap_mktxn((int *)mytids, size_tids, &txn);
+	objsnap_txn_commit(&txn);
 
 	for (i = 0; i < size_tids; i++) {
 		int local_tid = mytids[i];
@@ -417,9 +417,6 @@ objsnap_checkpoint_txn(int tid)
 static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
-	if (args->tid >= OBJTID_APP)
-		panic("tid either invalid or reserved for GC");
-	
 	return (objsnap_checkpoint_txn(args->tid));
 }
 
@@ -488,9 +485,6 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 	index_t inode_i = args->os_index;
 	vm_page_t m;
 
-	if (tid >= OBJTID_APP)
-		panic("tid either invalid or reserved for GC");
-	
 	if (set->d_cnt >= MAXDRTYCNT)
 		panic("Too many dirty pages in transaction %d\n", set->d_cnt);
 

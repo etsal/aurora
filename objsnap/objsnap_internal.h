@@ -25,8 +25,6 @@
 #include "vtree.h"
 
 #define OBJMAGIC (0xdeadbeef)
-#define TID_NUMGC (1)
-#define OBJTID_APP (MAXTHREADS - TID_NUMGC)
 
 #define LOCK(lock, type) (lockmgr(lock, type, NULL))
 #define UNLOCK(lock) (lockmgr(lock, LK_RELEASE, NULL))
