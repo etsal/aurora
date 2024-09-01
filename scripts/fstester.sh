@@ -3,6 +3,8 @@
 DISK="/dev/nvd0"
 ARGS="--name=random_write_fsync --filename=/testmnt/test --rw=randwrite --runtime=60 --group_reporting --new_group"
 PRINT=""
+NUM_OBJECTS="1"
+SIZE_OBJECT="10"
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 run() {
 	iostat -d nvd0 1 > /tmp/gstat.out &
@@ -24,7 +26,7 @@ run() {
 	iokbytes=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write clat_ns percentile string:99.000000)
 	goodput_kib=$($SCRIPT_DuR/jsparse.py /tmp/run.out jobs 0 write io_kbytes)
 	goodput_mib=$(expr $goodput_kib / 1024)
-	echo "$3, $1, $4, $iops, $lat_ns, $lat_99, $goodput_mib, $throughput_mib, $disk_iops" >> "$2"
+	echo "$3, $1, 1, $4, $iops, $lat_ns, $lat_99, $goodput_mib, $throughput_mib, $disk_iops" >> "$2"
 }
 
 test_zfs() {
@@ -100,8 +102,10 @@ run_once_objsnap() {
 	iostat -hd nvd0 1 > /tmp/gstat.out &
 	IOSTAT=$(pgrep iostat)
 	sleep 2
-	$SCRIPT_DIR/../objsnap.sh /dev/nvd0 $1 "$3" 60 $PRINT > backingfile &
+	$SCRIPT_DIR/../objsnap.sh -p /dev/nvd0 -t $1 -d $3 \
+		-r 60 $PRINT -o $NUM_OBJECTS -g $SIZE_OBJECT > backingfile &
 	WAITFOR=$!
+	echo $WAITFOR
 	sleep 5
 	PID=$(pgrep objsnap)
 	sleep 20
@@ -115,7 +119,7 @@ run_once_objsnap() {
 	disk_iops=$(cat /tmp/gstat.out | tail -n +2 | awk '{ sum += $2 } END { print sum }')
 	rm /tmp/temp
 
-	echo "$(cat backingfile), $throughput_mbs, $disk_iops, $cpu" >> $2
+	echo "$(cat backingfile | tail -n 1), $throughput_mbs, $disk_iops, $cpu" >> $2
 	rm backingfile
 }
 
@@ -155,7 +159,7 @@ test_objsnap_dirtyset() {
 benchmark_fses() {
 	OUT="out"
 	truncate -s 0 "$OUT"
-	echo "fs,num_threads,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$OUT"
+	echo "fs,num_threads,num_objects,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$OUT"
 	test_objsnap $THREADS "$OUT" "1"
 	test_ffs_journal $THREADS "$OUT"
 	test_ffs_bs $THREADS "$OUT"
@@ -167,7 +171,12 @@ benchmark_ckpt_size() {
 	DIRTYSETOUT="dirtyset"
 	MAXDIRTYSET=8
 	truncate -s 0 "$DIRTYSETOUT"
-	echo "fs,num_threads,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$DIRTYSETOUT"
+	echo "fs,num_threads,num_objects,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$DIRTYSETOUT"
+	NUM_OBJECTS="5"
+	SIZE_OBJECT="2"
+	test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+	SIZE_OBJECT="10"
+	NUM_OBJECTs="1"
 	test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
 	test_zfs_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
 }
@@ -183,7 +192,7 @@ benchmark_wait_time() {
 		touch conf.sys
 		touch /tmp/tmpout
 		truncate -s 0 /tmp/tmpout
-		PRINT="-p"
+		PRINT="-s"
 		echo "objsnap.wait=$num" >> conf.sys
 		echo "objsnap.ckpt_flush=0" >> conf.sys
 		run_once_objsnap "$THREADS" "/tmp/tmpout" 1
@@ -215,7 +224,7 @@ benchmark_wait_time() {
 		PRINT="-p"
 		echo "objsnap.wait=$num" >> conf.sys
 		echo "objsnap.ckpt_flush=1" >> conf.sys
-		run_once_objsnap "$THREADS" "/tmp/tmpout" 1
+		run_once_objsnap "$THREADS" "/tmp/tmpout" 1"1"
 		goodput=$(cat /tmp/tmpout | tail -n 1 |  awk -F ","  '{ gsub(" ", "", $7); print $7}')
 		throughput=$(cat /tmp/tmpout | tail -n 1 | awk -F ","  '{ gsub(" ", "", $8); print $8}')
 		ratio=$(awk "BEGIN {print $throughput / $goodput}")
@@ -241,5 +250,5 @@ benchmark_wait_time() {
 
 THREADS=24
 #benchmark_fses
-#benchmark_ckpt_size
-benchmark_wait_time
+benchmark_ckpt_size
+#benchmark_wait_time

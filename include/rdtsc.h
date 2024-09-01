@@ -63,7 +63,7 @@ rdtsc_cycles(void)
  * well but at a much higher cost for the instruction itself
  */
 static inline __attribute__((always_inline)) uint64_t
-rdtscp_cycles()
+rdtscp_cycles(void)
 {
 #if defined(_i386_)
   _Static_assert(false, "Unsupported architecture");
@@ -79,7 +79,7 @@ rdtscp_cycles()
 }
 
 static inline __attribute__((always_inline)) double
-rdtsc_average()
+rdtsc_average(void)
 {
   uint64_t iterations = 10000000;
   uint64_t cost1, cost2;
@@ -94,7 +94,7 @@ rdtsc_average()
 }
 
 static inline __attribute__((always_inline)) double
-rdtscp_average()
+rdtscp_average(void)
 {
   uint64_t iterations = 10000000;
   uint64_t cost1, cost2;

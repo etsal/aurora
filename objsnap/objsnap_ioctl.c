@@ -212,6 +212,7 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	STAT_TO_ARGS(args, GETBLK);
 	STAT_TO_ARGS(args, WRITERS);
 	STAT_TO_ARGS(args, WAITERS);
+	STAT_TO_ARGS(args, DIRTY);
 	args->os_cnt = OS_STAT_LAST;
 	return (0);
 }
@@ -386,7 +387,6 @@ static void
 objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 {
 	struct objsnap_txn txn_pg;
-	uint64_t checkpoint;
 	uint64_t waiters_time;
 	uint64_t writers_time;
 	int tid = args->tid;
@@ -394,6 +394,10 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 	size_t size_tids = 0;
 	int total_size = 0;
 	int i;
+	if (tpgs[tid].d_cnt == 0) {
+		printf("NOTHING TO CHECKPOINT?!\n");
+		return;
+	}
 
 	int success = set_msg(tid, MSG_CHECKPOINT, MSG_NONE);
 	if (!success) {
@@ -401,14 +405,12 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 		set_msg(tid, MSG_CHECKPOINT, MSG_FORCED);
 	}
 
-	OS_START(CHECKPOINT, &checkpoint);
 	OS_START(WAITERS, &waiters_time);
 	OS_START(WRITERS, &writers_time);
 
 	if (objsnap_wait_entry(tid)) {
 		/* Our write is fully serviced, we're done. */
 		OS_STOP(WAITERS, &waiters_time);
-		OS_STOP(CHECKPOINT, &checkpoint);
 		return;
 	}
 
@@ -445,7 +447,6 @@ objsnap_checkpoint(struct objsnap_checkpoint_args *args)
 
 	objsnap_wait_completion(tid);
 	OS_STOP(WRITERS, &writers_time);
-	OS_STOP(CHECKPOINT, &checkpoint);
 
 
 	return;
@@ -502,6 +503,7 @@ usrptr_to_page(vm_offset_t ptr, struct pageset *pinfo) {
 static int
 objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 {
+	uint64_t before;
 	vm_offset_t addr = args->os_page;
 	index_t inode_i = args->os_index;
 	int tid = args->os_tid;
@@ -511,11 +513,13 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 	struct objsnap_txn *set = &tpgs[tid];
 	int error = 0;
 	
+	OS_START(DIRTY, &before);
 	error = usrptr_to_page(addr, &pageinfo);
 	if (error) {
 		printf("Error: Bad dirty page\n");
 		return EINVAL;
 	}
+	OS_STOP(DIRTY, &before);
 
 	// SLOW LOOKUP
 	for (int i = 0; i < set->d_cnt; i++) {
@@ -740,7 +744,7 @@ check_within(uint64_t s, uint64_t e, int within, int mod) {
 static void
 objsnap_wal_syncer(void *ctx)
 {
-	index_t inode_i[32];
+	index_t inode_i[128];
 	memset(inode_i, 0, sizeof(index_t) * 32);
 	mtx_lock(&osdata.os_syncer_lk);
 	osdata.os_syncer_exit = OBJSYNC_RUNNING;
