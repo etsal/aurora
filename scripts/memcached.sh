@@ -1,8 +1,9 @@
 MEMCACHED_DIR="/root/memcached/"
-MEMCACHED_ARGS="-R 10000 -m 16384 -u root -o no_lru_crawler,no_lru_maintainer -C -c 4096 -t 24"
+THREADS=24
+MEMCACHED_ARGS="-R 10000 -m 16384 -u root -o no_lru_crawler,no_lru_maintainer -C -c 4096"
 RUNNER_IP="192.168.2.132"
 MEMCACHED_IP="192.168.2.131"
-MEMTIER_ARGS="-d 512 -n 5000 -t 12 -c 64 -s $MEMCACHED_IP -p 11211 -4 -P memcache_text"
+MEMTIER_ARGS="-d 512 -n 2500 -t 12 -c 64 -s $MEMCACHED_IP -p 11211 -4 -P memcache_text"
 OBJSNAP="/root/ryan/objsnap/objsnap.ko"
 MEMCACHED_OBJSNAP_ARGS="-e $MEMCACHED_DIR/dummyfile"
 KEY="/root/.ssh/sky5"
@@ -11,7 +12,7 @@ USER="ryan"
 MEMCACHE_PID=""
 startup() {
 	kldload $OBJSNAP
-	$MEMCACHED_DIR/memcached $1 $MEMCACHED_ARGS > /tmp/serverout 2> /tmp/serverout  &
+	$MEMCACHED_DIR/memcached $1 $MEMCACHED_ARGS "-t $THREADS" > /tmp/serverout 2> /tmp/serverout  &
 	MEMCACHE_PID=$!
 }
 
@@ -83,9 +84,58 @@ run_base() {
 	done
 }
 
+run_objsnap_thread() {
+	build "-DOBJSNAP=1"
+	for i in $(seq 1 24)
+	do
+		for t in $(seq 1 10)
+		do
+			export THREADS=$i
+			startup "$MEMCACHED_OBJSNAP_ARGS"
+			sleep 5
+			results=$(runner_go "objsnap" 5 5)
+			sleep 5
+			stop_mc
+			set -- $results
+			if [ "$5" != "-nan" ]; then
+				sleep 5
+				break
+			fi
+		done
+		echo "$1,$i,$2,$3,$4,$5"
+	done
+
+}
+
+run_base_thread() {
+	build ""
+	for i in $(seq 1 24)
+	do
+		for t in $(seq 1 10)
+		do
+			export THREADS=$i
+			startup ""
+			sleep 5
+			results=$(runner_go "objsnap" 5 5)
+			sleep 5
+			stop_mc
+			set -- $results
+			if [ "$5" != "-nan" ]; then
+				sleep 5
+				break
+			fi
+		done
+		echo "$1,$i,$2,$3,$4,$5"
+	done
+
+}
+
 stop_mc
-echo "type,read,write,ops,set_lat_ms"
-run_objsnap
-run_base
+#echo "type,read,write,ops,set_lat_ms" > memcached
+#run_objsnap >> memcached
+#run_base >> memcached
+echo "type,thread_count,read,write,ops,set_lat_ms" > memcached_thread
+run_objsnap_thread >> memcached_thread
+run_base_thread >> memcached_thread
 
 
