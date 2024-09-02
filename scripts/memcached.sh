@@ -116,7 +116,7 @@ run_base_thread() {
 			export THREADS=$i
 			startup ""
 			sleep 5
-			results=$(runner_go "objsnap" 5 5)
+			results=$(runner_go "base" 5 5)
 			sleep 5
 			stop_mc
 			set -- $results
