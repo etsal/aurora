@@ -172,11 +172,11 @@ benchmark_ckpt_size() {
 	MAXDIRTYSET=8
 	truncate -s 0 "$DIRTYSETOUT"
 	echo "fs,num_threads,num_objects,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$DIRTYSETOUT"
-	NUM_OBJECTS="5"
-	SIZE_OBJECT="2"
+	export NUM_OBJECTS="5"
+	export SIZE_OBJECT="2"
 	test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
-	SIZE_OBJECT="10"
-	NUM_OBJECTs="1"
+	export SIZE_OBJECT="10"
+	export NUM_OBJECTS="1"
 	test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
 	test_zfs_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
 }

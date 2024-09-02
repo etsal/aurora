@@ -1,5 +1,5 @@
 MEMCACHED_DIR="/root/memcached/"
-MEMCACHED_ARGS="-R 10000 -m 16384 -u root -o no_lru_crawler,no_lru_maintainer -C -c 4096"
+MEMCACHED_ARGS="-R 10000 -m 16384 -u root -o no_lru_crawler,no_lru_maintainer -C -c 4096 -t 24"
 RUNNER_IP="192.168.2.132"
 MEMCACHED_IP="192.168.2.131"
 MEMTIER_ARGS="-d 512 -n 5000 -t 12 -c 64 -s $MEMCACHED_IP -p 11211 -4 -P memcache_text"
@@ -26,7 +26,7 @@ runner_go() {
 	ssh -i "$KEY" $USER@$RUNNER_IP "memtier_benchmark --ratio=$WRITE:$READ $MEMTIER_ARGS" 2> /dev/null > /tmp/results
 	ops=$(cat /tmp/results | grep -A 7 "ALL STATS" | tail -n 4 | awk '{print $2}' | tail -n 1)
 	set_lat=$(cat /tmp/results | grep -A 7 "ALL STATS" | tail -n 4 | awk '{print $5}' | tail -n 1)
-	echo "$1,$2,$3,$ops,$set_lat"
+	echo "$1 $2 $3 $ops $set_lat"
 }
 
 build() {
@@ -38,28 +38,48 @@ build() {
 }
 
 
-TOP=8
 run_objsnap() {
 	build "-DOBJSNAP=1"
-	for i in $(seq 1 $TOP)
+	for i in "1 9" "2 8" "4 6" "1 1" "6 4" "8 2" "9 1"
 	do
-		startup "$MEMCACHED_OBJSNAP_ARGS"
-		sleep 5
-		runner_go "objsnap" $TOP $i
-		sleep 5
-		stop_mc
+		for t in $(seq 1 10)
+		do
+			set -- $i
+			startup "$MEMCACHED_OBJSNAP_ARGS"
+			sleep 5
+
+			results=$(runner_go "objsnap" $2 $1)
+			sleep 5
+			stop_mc
+			set -- $results
+			if [ "$5" != "-nan" ]; then
+				sleep 5
+				break
+			fi
+		done
+		echo "$1,$2,$3,$4,$5"
 	done
 }
 
 run_base() {
 	build ""
-	for i in $(seq 1 $TOP)
+	for i in "1 9" "2 8" "4 6" "1 1" "6 4" "8 2" "9 1"
 	do
-		startup ""
-		sleep 5
-		runner_go "base" $TOP $i
-		sleep 5
-		stop_mc
+		for t in $(seq 1 10)
+		do
+			set -- $i
+			startup ""
+			sleep 5
+			results=$(runner_go "base" $2 $1)
+			sleep 5
+			stop_mc
+			set -- $results
+			if [ "$5" != "-nan" ]; then
+				sleep 5
+				break
+			fi
+		done
+		echo "$1,$2,$3,$4,$5"
 	done
 }
 
