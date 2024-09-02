@@ -24,7 +24,7 @@ run() {
 	lat_ns=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write clat_ns mean)
 	lat_99=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write clat_ns percentile string:99.000000)
 	iokbytes=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write clat_ns percentile string:99.000000)
-	goodput_kib=$($SCRIPT_DuR/jsparse.py /tmp/run.out jobs 0 write io_kbytes)
+	goodput_kib=$($SCRIPT_DIR/jsparse.py /tmp/run.out jobs 0 write io_kbytes)
 	goodput_mib=$(expr $goodput_kib / 1024)
 	echo "$3, $1, 1, $4, $iops, $lat_ns, $lat_99, $goodput_mib, $throughput_mib, $disk_iops" >> "$2"
 }
@@ -172,12 +172,12 @@ benchmark_ckpt_size() {
 	MAXDIRTYSET=8
 	truncate -s 0 "$DIRTYSETOUT"
 	echo "fs,num_threads,num_objects,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$DIRTYSETOUT"
-	export NUM_OBJECTS="5"
-	export SIZE_OBJECT="2"
-	test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
-	export SIZE_OBJECT="10"
-	export NUM_OBJECTS="1"
-	test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+	#export NUM_OBJECTS="5"
+	#export SIZE_OBJECT="2"
+	#test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+	#export SIZE_OBJECT="10"
+	#export NUM_OBJECTS="1"
+	#test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
 	test_zfs_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
 }
 
