@@ -263,3 +263,9 @@ garbage_collect(size_t numblocks)
 {
 	oa_gc(&alloc.alloc_impl, numblocks);
 }
+
+void
+reclaim_blocks(void)
+{
+	oa_reclaim(&alloc.alloc_impl);
+}

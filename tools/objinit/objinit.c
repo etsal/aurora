@@ -89,7 +89,7 @@ int objsnap_newfs(const char *path)
 	sb->super_size = size / BLOCKSIZE;
 	sb->super_asize = bsize;
 	sb->super_max_inodes = MAXINODES;
-	sb->super_next = 1;
+	sb->super_next = 3;
 	sb->super_version = 0;
 	sb->super_blk = 0;
 

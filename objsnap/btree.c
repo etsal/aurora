@@ -529,8 +529,11 @@ btnode_leaf_insert(btnode_t node, int idx, uint64_t key, void* value)
 static void
 btnode_leaf_update(btnode_t node, int idx, void* value)
 {
+  obj_diskptr_t *ptrp = (obj_diskptr_t *)&node->n_ch[idx + 1];
+
   KASSERT(BT_ISLEAF(node), ("MUST BE LEAF"));
-  memcpy(&node->n_ch[idx + 1], value, BT_VALSZ(node));
+  free_block(*ptrp);
+  memcpy(ptrp, value, BT_VALSZ(node));
   btnode_dirty(node);
 }
 

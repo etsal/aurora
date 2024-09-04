@@ -17,7 +17,21 @@
 #include "objsnap_internal.h"
 #include "chunkalloc.h"
 
+
 MALLOC_DEFINE(M_CHUNKALLOC, "Chunk allocator", "chunkalloc");
+
+static inline int
+ca_offset_to_chind(struct chunkallocator *ca, uint64_t offset)
+{
+	return ((offset  - ca->ca_startoff) * superblock.super_bsize) / CA_CHUNKSZ;
+}
+
+static inline uint64_t
+ca_chind_to_offset(struct chunkallocator *ca, int chind)
+{
+	KASSERT(CA_CHUNKSZ / superblock.super_bsize > 0, ("block size too large"));
+	return ca->ca_startoff + ((CA_CHUNKSZ / superblock.super_bsize) * chind);
+}
 
 static void *
 ca_arrayalloc(size_t numelems, size_t size)
@@ -41,7 +55,8 @@ cac_from_free(struct chunkallocator *ca, size_t chind, struct ca_chunk **chp)
 	struct ca_chunk *ch;
 
 	mtx_assert(&ca->ca_mtx, MA_OWNED);
-	KASSERT(chind < ca->ca_free_cnt, ("removing invalid chind %ld", chind));
+	KASSERT(chind < ca->ca_free_cnt, ("removing invalid chind %ld (currently %ld free)",
+				chind, ca->ca_free_cnt));
 
 	ch = ca->ca_free[chind];
 
@@ -57,16 +72,25 @@ cac_from_free(struct chunkallocator *ca, size_t chind, struct ca_chunk **chp)
 static void
 cac_free_pop(struct chunkallocator *ca, struct ca_chunk **chp)
 {
+	int i;
+
 	if (ca->ca_free_cnt == 0) 
 		panic("out of space");
 
-	return (cac_from_free(ca, ca->ca_free_cnt - 1, chp));
+	/* Find the first completely free block. */
+	for (i = ca->ca_free_cnt - 1; i >= 0; i--) {
+		if (ca->ca_free[i]->cac_alloc_index == 0)
+			return (cac_from_free(ca, i, chp));
+	}
+
+	/* No completely free block. */
+	panic("out of space");
 }
 
 static void
 cac_to_free(struct chunkallocator *ca, struct ca_chunk *ch)
 {
-	KASSERT(ch->cac_blocks_used == 0, ("freeing non-empty chunk"));
+	KASSERT(ch->cac_blocks_used == 0, ("freeing non-empty chunk %ld", ch->cac_blocks_used));
 	mtx_assert(&ca->ca_mtx, MA_OWNED);
 
 	ca_checkstate(ch, CA_NOQUEUE);
@@ -74,7 +98,6 @@ cac_to_free(struct chunkallocator *ca, struct ca_chunk *ch)
 	ch->cac_alloc_index = 0;
 	ch->cac_state = CA_FREE;
 	ca->ca_free[ca->ca_free_cnt++] = ch;
-
 }
 
 static void
@@ -113,7 +136,6 @@ cac_to_hot(struct chunkallocator *ca, struct ca_chunk *ch)
 	ca->ca_hot_end = (ca->ca_hot_end + 1) % ca->ca_chunk_cnt;
 	if (ca->ca_hot_start == ca->ca_hot_end)
 		panic("hot list full");
-
 }
 
 static void
@@ -129,14 +151,14 @@ cac_to_cold(struct chunkallocator *ca, struct ca_chunk *ch)
 	bucket = determine_bucket(ch->cac_blocks_used);
 	KASSERT(bucket < CA_COLD_BUCKETS, ("bucket offset %d too large", bucket));
 	ca->ca_cold[bucket][ca->ca_cold_cnt[bucket]++] = ch;
+
 }
 
 /* XXX cac_to_cold call for laundering cold blocks. */
 
 static void
-ca_init_chunks(struct chunkallocator *ca, uint64_t offset)
+ca_init_chunks(struct chunkallocator *ca)
 {
-	const size_t blk_per_chunk = CA_CHUNKSZ / superblock.super_bsize;
 	struct ca_chunk *ch;
 	obj_diskptr_t ptr;
 	int i;
@@ -153,11 +175,11 @@ ca_init_chunks(struct chunkallocator *ca, uint64_t offset)
 		ch->cac_alloc_index = 0;
 		ch->cac_state = CA_NOQUEUE;
 
-		bzero(ch->cac_backmap, sizeof(ch->cac_backmap));
-		bzero(ch->cac_launder, sizeof(ch->cac_launder));
+		bzero(ch->cac_backmap, sizeof(ch->cac_backmap[0]) * CA_BLOCKS);
+		bzero(ch->cac_launder, sizeof(ch->cac_launder[0]) * CA_BLOCKS);
 
-		ptr.offset = offset + blk_per_chunk * i;
-		ptr.size = blk_per_chunk;
+		ptr.offset = ca_chind_to_offset(ca, i); 
+		ptr.size = CA_CHUNKSZ / superblock.super_bsize;
 		ch->cac_ptr = ptr;
 	}
 }
@@ -171,6 +193,7 @@ ca_init(struct chunkallocator *ca, uint64_t startoff, size_t numblocks)
 	bzero(ca, sizeof(*ca));
 	mtx_init(&ca->ca_mtx, "objcamtx", NULL, MTX_DEF);
 
+	ca->ca_startoff = startoff;
 	ca->ca_txnsz_blk = CA_TXNSIZE;
 
 	/* All chunks in the allocator. */
@@ -209,7 +232,7 @@ ca_init(struct chunkallocator *ca, uint64_t startoff, size_t numblocks)
 
 	/* Dump all chunks into the free queue. */
 	mtx_lock(&ca->ca_mtx);
-	ca_init_chunks(ca, startoff);
+	ca_init_chunks(ca);
 	for (i = 0; i < ca->ca_chunk_cnt; i++)
 		cac_to_free(ca, &ca->ca_chunks[i]);
 	mtx_unlock(&ca->ca_mtx);
@@ -246,16 +269,16 @@ ca_print(struct chunkallocator *ca)
 
 /* ===== Garbage collection path. ===== */
 
-struct ca_getblk_args {
+struct ca_hot_to_launder_args {
 	struct task tk;
 	struct chunkallocator *ca;
 	struct ca_chunk *ch;
 };
 
 static void
-ca_getblk(void *ctx, int __unused pending)
+ca_hot_to_launder(void *ctx, int __unused pending)
 {
-	struct ca_getblk_args *args = (struct ca_getblk_args *)ctx;
+	struct ca_hot_to_launder_args *args = (struct ca_hot_to_launder_args *)ctx;
 	struct chunkallocator *ca = args->ca;
 	struct ca_chunk *ch = args->ch;
 	struct bio *bp;
@@ -302,7 +325,7 @@ static void
 ca_age(struct chunkallocator *ca)
 {
 	struct ca_chunk *chhot[CA_MAXHOT_TO_COLD];
-	struct ca_getblk_args *args;
+	struct ca_hot_to_launder_args *args;
 	struct ca_chunk *ch;
 	uint64_t chind;
 	int i;
@@ -344,7 +367,7 @@ ca_age(struct chunkallocator *ca)
 
 		args->ca = ca;
 		args->ch = ch;
-		TASK_INIT(&args->tk, 0, ca_getblk, &args->tk);
+		TASK_INIT(&args->tk, 0, ca_hot_to_launder, &args->tk);
 
 		MPASS(osdata.os_tq != NULL);
 		taskqueue_enqueue(osdata.os_tq, &args->tk);
@@ -407,8 +430,6 @@ ca_gc_move(struct chunkallocator *ca, struct ca_chunk *ch, obj_diskptr_t ptr)
 		txn.d_index[txn.d_cnt] = ch->cac_backmap[i].cao_off;
 		txn.d_offset[txn.d_cnt] = ptr.offset + txn.d_cnt;
 
-		ch->cac_backmap[i].cao_ino = 0;
-		ch->cac_backmap[i].cao_off = 0;
 		ch->cac_launder[i] = NULL;
 
 		txn.d_cnt += 1;
@@ -440,15 +461,29 @@ ca_gc(struct chunkallocator *ca, size_t numblocks)
 	ca_gc_alloc_from_dst(ca, numblocks, &ptr);
 
 	ca_gc_move(ca, ch, ptr);
+}
 
-	/* If the old chunk is completely free, move it to the free list. */
-	if (ch->cac_alloc_index == CA_BLOCKS) {
+void
+ca_reclaim(struct chunkallocator *ca)
+{
+	struct ca_chunk *ch, *tmp;
+
+	TAILQ_FOREACH_SAFE(ch, &ca->ca_launder, cac_next, tmp) {
+		/* 
+		 * We must have moved and reclaimed the blocks. 
+		 * This requires moving the blocks out and reclaiming
+		 * the original copies during checkpointing.
+		 */
+		if (ch->cac_blocks_used < CA_BLOCKS)
+			continue;
+
 		TAILQ_REMOVE(&ca->ca_launder, ch, cac_next);
 		ca_checkstate(ch, CA_LAUNDER);
 		ch->cac_state = CA_NOQUEUE;
 
 		cac_to_free(ca, ch);
 	}
+
 }
 
 /* ===== Main allocation path. ===== */
@@ -493,6 +528,8 @@ ca_blkalloc(struct ca_chunk *ch, struct objsnap_txn *txn)
 		ind = ch->cac_alloc_index + i; 
 		backmap = &ch->cac_backmap[ind];
 
+		KASSERT(txn->d_inode[i] != 0, ("allocating block for inode 0"));
+		KASSERT(backmap->cao_ino == 0, ("block already allocated"));
 		backmap->cao_ino = txn->d_inode[i];
 		backmap->cao_off = txn->d_index[i];
 	}
@@ -543,6 +580,11 @@ ca_tryalloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn)
 		return (EAGAIN);
 	}
 
+	KASSERT(ca_offset_to_chind(ca, ch->cac_ptr.offset) == ch->cac_index,
+			("chunk pointer inconsistent with its index: "
+			 "has %d while pointer is for %d\n", ch->cac_index,
+			 ca_offset_to_chind(ca, ch->cac_ptr.offset)));
+
 	ca_blkalloc(ch, txn);
 
 	/* Move fully allocated chunks to the hot list. */
@@ -584,7 +626,11 @@ ca_blkalloc_system(struct ca_chunk *ch, obj_diskptr_t *ptrp)
 			break;
 
 		KASSERT(ch->cac_backmap[i].cao_ino == CA_SYSTEM_INO,
-				("corrupted system backmap"));
+				("corrupted system backmap for (%d, %d), got (%d, %d) instead",
+				 ch->cac_ptr.offset + i,
+				 1,
+				 ch->cac_backmap[i].cao_ino,
+				 ch->cac_backmap[i].cao_off));
 	}
 
 	KASSERT(i < CA_BLOCKS, ("system chunk had no free block"));
@@ -646,6 +692,7 @@ static int
 ca_tryalloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 {
 	struct ca_chunk *ch;
+	int i;
 
 	/* If we have a system */
 	mtx_lock(&ca->ca_mtx);
@@ -653,6 +700,13 @@ ca_tryalloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 	/* If necessary, pop a free block off the main allocator and into the system allocator. */
 	if (TAILQ_EMPTY(&ca->ca_system_alloc)) {
 		cac_free_pop(ca, &ch);
+		for (i = 0; i < CA_BLOCKS; i++)
+			KASSERT(ch->cac_backmap[i].cao_ino == 0, ("block has set backmap values "
+						"(%d, %d)",
+						ch->cac_backmap[i].cao_ino,
+						ch->cac_backmap[i].cao_off));
+
+
 		cac_to_system(ca, ch);
 
 		mtx_unlock(&ca->ca_mtx);
@@ -671,6 +725,7 @@ ca_tryalloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 	if (ch->cac_blocks_used == CA_BLOCKS) {
 		cac_from_system(ca, ch);
 		cac_to_system_full(ca, ch);
+		printf("Retired block\n");
 	}
 
 	mtx_unlock(&ca->ca_mtx);
@@ -694,18 +749,20 @@ ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 void
 ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 {
+	int chind = ca_offset_to_chind(ca, ptr.offset);
 	struct ca_chunk *ch;
-	int chind = (ptr.offset * superblock.super_bsize) / CA_CHUNKSZ;
 	int choff, ind, i;
 
 	KASSERT(ptr.size != UINT_MAX, ("freeing invalid disk pointer"));
 	KASSERT(chind < ca->ca_chunk_cnt, ("freeing out-of-bounds chunk %d %ld", chind, ca->ca_chunk_cnt));
+	KASSERT(ptr.size > 0, ("freeing empty disk pointer"));
 
 	ch = &ca->ca_chunks[chind];
 	mtx_lock(&ch->cac_mtx);
 
 	KASSERT(ptr.offset >= ch->cac_ptr.offset, ("negative index into chunk"));
 	choff = ptr.offset - ch->cac_ptr.offset;
+	KASSERT(choff < CA_BLOCKS, ("invalid block offset %d in chunk %d\n", choff, ch->cac_index));
 
 	for (i = 0; i < ptr.size; i++) {
 		ind = choff + i;
@@ -722,8 +779,11 @@ ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 
 	/* Special case for the system block allocator. */
 	if (ch->cac_state == CA_SYSTEM_FULL) {
+		printf("Freeing from full (%d, %d)\n", ptr.offset, ptr.size);
 		cac_from_system_full(ca, ch);
 		cac_to_system(ca, ch);
+	} else if (ch->cac_state == CA_SYSTEM) {
+		printf("Freeing from system (%d, %d)\n", ptr.offset, ptr.size);
 	}
 
 	/* XXX If the block is cold, then we should adjust which bucket it is in. */

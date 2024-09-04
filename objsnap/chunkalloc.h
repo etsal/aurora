@@ -58,6 +58,7 @@ struct ca_chunk {
 struct chunkallocator {
 	struct mtx  		ca_mtx;
 
+	uint64_t		ca_startoff;
 	uint32_t		ca_txnsz_blk;
 
 	struct ca_chunk		*ca_chunks;
@@ -96,4 +97,6 @@ void ca_print(struct chunkallocator *ca);
 int ca_alloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn);
 int ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptr);
 void ca_gc(struct chunkallocator *ca, size_t numblocks);
+void ca_reclaim(struct chunkallocator *ca);
+
 #endif /* __CHUNKALLOCATOR_H_ */

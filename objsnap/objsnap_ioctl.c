@@ -236,6 +236,7 @@ objsnap_mktxn(int *mytids, size_t size_tids, struct objsnap_txn *txn)
 			KASSERT(txn->d_page[ind] != NULL, ("transaction includes NULL page"));
 			txn->d_index[ind] = tpgs[tmptid].d_index[j];
 			txn->d_inode[ind] = tpgs[tmptid].d_inode[j];
+			KASSERT(txn->d_inode[ind] != 0, ("IO on inode 0"));
 			ind += 1;
 		}
 		tpgs[tmptid].d_cnt = 0;
@@ -433,6 +434,8 @@ objsnap_create_inode(index_t *indexp)
 	}
 
 	*indexp = inode->i_index / 2;
+
+	KASSERT(*indexp != 0, ("created inode with index 0"));
 }
 
 static void
@@ -499,6 +502,8 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 		if (set->d_page[i] == m)
 			return (0);
 	}
+
+	KASSERT(inode_i != 0, ("dirtying inode 0"));
 
 	set->d_page[set->d_cnt] = m;
 	set->d_index[set->d_cnt] = m->pindex;
@@ -684,10 +689,14 @@ objsnap_sync_dirtylist(uint64_t threadlist_at, index_t inode_i[], int *inode_cnt
 		// Grab our vnode
 		struct objsnap_vnode *vnode = &vnode_cache[inode_i[i]];
 		for (int t = 0; t < set.we_cnt; t++) {
-			struct walptr *ptr = &set.we_ptrs[t];
-			if (ptr->w_inode == inode_i[i]) {
+			struct walptr *walptr = &set.we_ptrs[t];
+			obj_diskptr_t ptr = (obj_diskptr_t) {
+				.offset = walptr->w_offset,
+				.size = 1,
+			};
+			if (walptr->w_inode == inode_i[i]) {
 				VTREE_INSERT(&vnode->v_tree, 
-					ptr->w_index , &ptr->w_offset);
+					walptr->w_index , &ptr);
 			}
 		}
 
@@ -780,6 +789,7 @@ objsnap_wal_syncer(void *ctx)
 				movelist(&tree->tr_freeme, &tree->tr_deadlist);
 			}
 
+			reclaim_blocks();
   			VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
 			atomic_store_64(&alloc.alloc_walptr_tail, (alloc.alloc_walptr_tail + WAL_SYNCER_SIZE) % MAX_WAL_ENTRIES);
 		}
