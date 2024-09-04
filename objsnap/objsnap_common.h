@@ -17,7 +17,7 @@ extern struct objsnap_txn tpgs[MAXTHREADS];
 
 void objsnap_checkpoint_txn(int);
 void objsnap_create_inode(int *);
-void objsnap_txn_commit(struct objsnap_txn *);
+void objsnap_txn_commit(struct objsnap_txn *, bool);
 
 #endif /* _OBJSNAP_COMMON_H_ */ 
 

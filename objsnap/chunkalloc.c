@@ -127,7 +127,7 @@ cac_to_cold(struct chunkallocator *ca, struct ca_chunk *ch)
 	ch->cac_state = CA_COLD;
 
 	bucket = determine_bucket(ch->cac_blocks_used);
-	KASSERT(bucket >= CA_COLD_BUCKETS, ("bucket offset too large"));
+	KASSERT(bucket < CA_COLD_BUCKETS, ("bucket offset %d too large", bucket));
 	ca->ca_cold[bucket][ca->ca_cold_cnt[bucket]++] = ch;
 }
 
@@ -307,6 +307,7 @@ ca_age(struct chunkallocator *ca)
 	uint64_t chind;
 	int i;
 
+	MPASS(ca != NULL);
 	mtx_lock(&ca->ca_mtx);
 
 	/* Is the hot list empty? */
@@ -330,6 +331,7 @@ ca_age(struct chunkallocator *ca)
 
 	for (i = 0; i < chind; i++) {
 		ch = chhot[i];
+		MPASS(ch != NULL);
 
 		if (ch->cac_blocks_used == 0) {
 			cac_to_free(ca, ch);
@@ -344,8 +346,8 @@ ca_age(struct chunkallocator *ca)
 		args->ch = ch;
 		TASK_INIT(&args->tk, 0, ca_getblk, &args->tk);
 
+		MPASS(osdata.os_tq != NULL);
 		taskqueue_enqueue(osdata.os_tq, &args->tk);
-		mtx_unlock(&ch->cac_mtx);
 	}
 
 	mtx_unlock(&ca->ca_mtx);
@@ -355,10 +357,13 @@ static void
 ca_gc_alloc_from_dst(struct chunkallocator *ca, size_t numblocks, obj_diskptr_t *ptrp)
 {
 	obj_diskptr_t ptr;
+
 	/* 
 	 * Pop the required physical space from the soon-to-be cold chunk.
 	 * If full, move it to the cold list and allocate a new one. 
 	 */
+	mtx_lock(&ca->ca_mtx);
+
 	if (ca->ca_launder_dst != NULL && ca->ca_launder_dst->cac_alloc_index + numblocks > CA_BLOCKS) {
 		cac_to_cold(ca, ca->ca_launder_dst);
 		ca->ca_launder_dst = NULL;
@@ -367,9 +372,12 @@ ca_gc_alloc_from_dst(struct chunkallocator *ca, size_t numblocks, obj_diskptr_t 
 	if (ca->ca_launder_dst == NULL)
 		cac_free_pop(ca, &ca->ca_launder_dst);
 
+	ca->ca_launder_dst->cac_alloc_index += numblocks;
+
 	ptr.offset = ca->ca_launder_dst->cac_alloc_index;
 	ptr.size = numblocks;
-	ca->ca_launder_dst->cac_alloc_index += numblocks;
+
+	mtx_unlock(&ca->ca_mtx);
 
 	*ptrp = ptr;
 }
@@ -382,10 +390,16 @@ ca_gc_move(struct chunkallocator *ca, struct ca_chunk *ch, obj_diskptr_t ptr)
 
 	txn.d_ptr = ptr;
 	txn.d_cnt = 0;
-	
+
 	for (i = ch->cac_alloc_index; i < CA_BLOCKS; i++) {
-		if (ch->cac_launder[i] == NULL)
+		if (ch->cac_backmap[i].cao_ino == 0) {
+			/* Did the block get freed while we were in the laundry list? */
+			if (ch->cac_launder[i] != NULL) {
+				vm_page_free(ch->cac_launder[i]);
+				ch->cac_launder[i] = NULL;
+			}
 			continue;
+		}
 
 		/* Populate the transaction with the page and remove it from the chunk. */
 		txn.d_page[txn.d_cnt] = ch->cac_launder[i];
@@ -401,8 +415,9 @@ ca_gc_move(struct chunkallocator *ca, struct ca_chunk *ch, obj_diskptr_t ptr)
 		if (txn.d_cnt == ptr.size)
 			break;
 	}
+	ch->cac_alloc_index = i;
 
-	objsnap_txn_commit(&txn);
+	objsnap_txn_commit(&txn, false);
 
 	for (i = 0; i < txn.d_cnt; i++)
 		vm_page_free(txn.d_page[i]);
@@ -444,8 +459,6 @@ ca_free_select(struct chunkallocator *ca, int numblocks, struct ca_chunk **chp, 
 	struct ca_chunk *ch;
 	int chind;
 
-	mtx_lock(&ca->ca_mtx);
-
 	/* Grab the first chunk we find in the allocator. */
 	for (chind = ca->ca_free_cnt - 1; chind >= 0; chind--) {
 		ch = ca->ca_free[chind];
@@ -453,14 +466,13 @@ ca_free_select(struct chunkallocator *ca, int numblocks, struct ca_chunk **chp, 
 			break;
 	}
 
-	mtx_unlock(&ca->ca_mtx);
-
 	/* We didn't find any blocks. */
 	if (chind == -1)
 		return (ENOSPC);
 
 	mtx_lock(&ch->cac_mtx);
 
+	*chp = ch;
 	*chindp = chind;
 
 	return (0);
@@ -477,6 +489,7 @@ ca_blkalloc(struct ca_chunk *ch, struct objsnap_txn *txn)
 
 	/* Scan all sectors till we find a free one. */
 	for (i = 0; i < numblocks ; i++) {
+		MPASS(txn != NULL);
 		ind = ch->cac_alloc_index + i; 
 		backmap = &ch->cac_backmap[ind];
 
@@ -499,6 +512,7 @@ ca_tryalloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn)
 	int error;
 	int chind;
 
+	MPASS(ca != NULL);
 	if (numblocks > ca->ca_txnsz_blk)
 		panic("requested allocation too large (%ld, max %d)\n", numblocks, ca->ca_txnsz_blk);
 
@@ -510,16 +524,21 @@ ca_tryalloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn)
 	if (ca->ca_free_cnt == 0)
 		panic("allocator full");
 
+	mtx_lock(&ca->ca_mtx);
+
 	/* Find a block that can satisfy the allocation. */
 	error = ca_free_select(ca, numblocks, &ch, &chind);
-	if (error != 0)
+	if (error != 0) {
+		mtx_unlock(&ca->ca_mtx);
 		return (error);
+	}
 
 	/* 
 	 * Avoid TOCCTOU, someone may have consumed enough of the block
 	 * while we tried to lock that it cannot satisfy the allocation. 
 	 */
 	if (ch->cac_alloc_index + numblocks > ca->ca_txnsz_blk) {
+		mtx_unlock(&ch->cac_mtx);
 		mtx_unlock(&ca->ca_mtx);
 		return (EAGAIN);
 	}
@@ -528,15 +547,14 @@ ca_tryalloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn)
 
 	/* Move fully allocated chunks to the hot list. */
 	if (ch->cac_alloc_index >= ca->ca_txnsz_blk) {
-		mtx_lock(&ca->ca_mtx);
 
 		cac_from_free(ca, chind, &ch);
 		cac_to_hot(ca, ch);
 
-		mtx_unlock(&ca->ca_mtx);
 	} 
 	
 	mtx_unlock(&ch->cac_mtx);
+	mtx_unlock(&ca->ca_mtx);
 
 	return (0);
 }
