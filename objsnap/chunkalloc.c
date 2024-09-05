@@ -149,13 +149,15 @@ cac_to_cold(struct chunkallocator *ca, struct ca_chunk *ch)
 	ca_checkstate(ch, CA_NOQUEUE);
 	ch->cac_state = CA_COLD;
 
-	bucket = determine_bucket(ch->cac_blocks_used);
+	bucket = min((ch->cac_blocks_used * 4) / CA_BLOCKS, CA_COLD_BUCKETS - 1);
+	KASSERT(bucket >= 0, ("negative bucket"));
 	KASSERT(bucket < CA_COLD_BUCKETS, ("bucket offset %d too large", bucket));
 	ca->ca_cold[bucket][ca->ca_cold_cnt[bucket]++] = ch;
+	KASSERT(ca->ca_cold_cnt[bucket] < ca->ca_chunk_cnt, ("cold list index overflow"));
 
 }
 
-/* XXX cac_to_cold call for laundering cold blocks. */
+/* XXX cac_from_cold call for laundering cold blocks. */
 
 static void
 ca_init_chunks(struct chunkallocator *ca)
@@ -212,9 +214,8 @@ ca_init(struct chunkallocator *ca, uint64_t startoff, size_t numblocks)
 	ca->ca_hot_end = 0;
 	ca->ca_hot = ca_arrayalloc(sizeof(*ca->ca_hot), ca->ca_chunk_cnt);
 
-	_Static_assert(CA_BLOCKS == 1 << CA_COLD_BUCKETS, "wrong number of cold buckets");
 	for (i = 0; i < CA_COLD_BUCKETS; i++) {
-		ca->ca_cold_cnt[i] = ca->ca_chunk_cnt;
+		ca->ca_cold_cnt[i] = 0;
 		ca->ca_cold[i] = ca_arrayalloc(sizeof(struct ca_chunk *), ca->ca_chunk_cnt);
 	}
 
@@ -357,14 +358,17 @@ ca_age(struct chunkallocator *ca)
 			break;
 	}
 
-	/* XXX Possibly turn heavily loaded chunks cold instead of laundering them. */
-
 	for (i = 0; i < chind; i++) {
 		ch = chhot[i];
 		MPASS(ch != NULL);
 
 		if (ch->cac_blocks_used == 0) {
 			cac_to_free(ca, ch);
+			continue;
+		}
+
+		if (ch->cac_blocks_used >= CA_COLD_LOAD_THRESHOLD) {
+			cac_to_cold(ca, ch);
 			continue;
 		}
 
@@ -738,7 +742,6 @@ ca_tryalloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 	if (ch->cac_blocks_used == CA_BLOCKS) {
 		cac_from_system(ca, ch);
 		cac_to_system_full(ca, ch);
-		printf("Retired block\n");
 	}
 
 	mtx_unlock(&ca->ca_mtx);

@@ -3,8 +3,9 @@
 
 #define CA_CHUNKSZ (1UL * 1024 * 1024)
 #define CA_BLOCKS (2048)
-#define CA_COLD_BUCKETS (11)
+#define CA_COLD_BUCKETS (4)
 #define CA_SYSTEM_INO (0xFFFFFFFF)
+#define CA_COLD_LOAD_THRESHOLD (CA_BLOCKS / 2)
 
 /*
  * This knob determines how full we keep the to-launder list.
@@ -72,8 +73,8 @@ struct chunkallocator {
 	uint64_t		ca_hot_end;
 
 	/* Chunks that hold less recently accessed data. */
-	struct ca_chunk		**ca_cold[CA_COLD_BUCKETS];
-	uint64_t		ca_cold_cnt[CA_COLD_BUCKETS];
+	struct ca_chunk		**ca_cold[CA_COLD_BUCKETS + 1];
+	uint64_t		ca_cold_cnt[CA_COLD_BUCKETS + 1];
 
 	/* Chunk lists for system blocks (used for inodes/bnodes). */
 	struct ca_system_list		ca_system_alloc;
