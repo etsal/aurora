@@ -258,7 +258,8 @@ msnp_genio(struct pglist *snaplist, int tid)
 
 		txn->d_page[txn->d_cnt] = m;
 		txn->d_index[txn->d_cnt] = m->pindex;
-		txn->d_index[txn->d_cnt] = m->pindex;
+		txn->d_inode[txn->d_cnt] = m->object->objid;
+		KASSERT(m->object->objid != 0, ("found object ID 0"));
 		txn->d_cnt += 1;
 
 		msnp_page_untrack_unlocked(snaplist, m);
@@ -423,6 +424,9 @@ msnp_create_objinit(struct pfs_node *ctrl, struct pfs_node *pn, size_t size)
 	objsnap_create_inode(&ino);
 	if (ino == OBJINO_BADINDEX)
 		panic("objsnap inode allocation failed\n");
+
+	if (ino == 0)
+		panic("inode with index 0");
 
 	if (svp->sn_obj != NULL)
 		panic("double init for SAS object");
