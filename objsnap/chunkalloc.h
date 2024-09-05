@@ -2,15 +2,14 @@
 #define __CHUNKALLOC_H__
 
 #define CA_CHUNKSZ (1UL * 1024 * 1024)
-#define CA_BLOCKS (CA_CHUNKSZ / BLOCKSIZE)
-#define CA_COLD_BUCKETS (8)
+#define CA_BLOCKS (2048)
+#define CA_COLD_BUCKETS (11)
 #define CA_SYSTEM_INO (0xFFFFFFFF)
-#define CA_TXNSIZE (64)
 
 /*
  * This knob determines how full we keep the to-launder list.
  */
-#define CA_SURPLUS_THRESHOLD (CA_BLOCKS * 25)
+#define CA_SURPLUS_THRESHOLD (CA_BLOCKS * 10)
 
 /* 
  * This knob determines the size of the hot list. The larger the ratio, the more
@@ -59,7 +58,6 @@ struct chunkallocator {
 	struct mtx  		ca_mtx;
 
 	uint64_t		ca_startoff;
-	uint32_t		ca_txnsz_blk;
 
 	struct ca_chunk		*ca_chunks;
 	uint64_t 		ca_chunk_cnt;
