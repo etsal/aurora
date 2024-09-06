@@ -10,7 +10,7 @@
 
 #include <objsnap.h>
 
-int objsnap_newfs(const char *path)
+int objsnap_newfs_objinit(const char *path)
 {
 	int status;
 	struct stat st;
@@ -127,7 +127,7 @@ main(int argc, char *argv[])
 		return (0);
 	}
 
-	error = objsnap_newfs(argv[1]);
+	error = objsnap_newfs_objinit(argv[1]);
 	if (error != 0)
 		fprintf(stderr, "objsnap_init returned %d\n", error);
 

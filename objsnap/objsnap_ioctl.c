@@ -86,8 +86,11 @@ struct __attribute__((packed)) objsnap_wal_entry {
 };
 
 struct objsnap_wal_entry *wal_entries;
-
 static uint64_t global_msgs[MAXTHREADS];
+
+struct sysctl_ctx_list objsnap_ctx;
+int wait = 2;
+int ckpt_flush = 1;
 
 static uint64_t get_txn_id() {
 	return atomic_fetchadd_64(&global_txnid, 1);
@@ -178,6 +181,9 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 	STAT_TO_ARGS(args, CHECKPOINT);
 	STAT_TO_ARGS(args, ALLOCATE);
 	STAT_TO_ARGS(args, GETBLK);
+	STAT_TO_ARGS(args, WRITERS);
+	STAT_TO_ARGS(args, WAITERS);
+	STAT_TO_ARGS(args, DIRTY);
 	args->os_cnt = OS_STAT_LAST;
 	return (0);
 }
@@ -201,8 +207,6 @@ objsnap_wait_completion(int tid)
 static bool
 objsnap_wait_entry(int tid)
 {
-	int wait = (MAX_WRITERS - sema_value(&wr)) / 2;
-
 	if (wait > 0)
 		pause_sbt("combiner wait", wait * SBT_1US, 0 ,0);
 
@@ -339,12 +343,17 @@ void
 objsnap_checkpoint_txn(int tid)
 {
 	struct objsnap_txn txn;
-	uint64_t checkpoint;
+	uint64_t waiters_time;
+	uint64_t writers_time;
 	int mytids[MAXTHREADS];
 	size_t size_tids = 0;
 	int total_size = 0;
 	uint64_t expected;
 	int i;
+	if (tpgs[tid].d_cnt == 0) {
+		printf("NOTHING TO CHECKPOINT?!\n");
+		return;
+	}
 
 	expected = MSG_NONE;
 	int success = set_msg(tid, MSG_CHECKPOINT, &expected);
@@ -355,16 +364,14 @@ objsnap_checkpoint_txn(int tid)
 			panic("Succeeded on state transition from MSG_FORCED?\n");
 	}
 
-	OS_START(CHECKPOINT, &checkpoint);
+	OS_START(WAITERS, &waiters_time);
+	OS_START(WRITERS, &writers_time);
 
 	if (objsnap_wait_entry(tid)) {
 		/* Our write is fully serviced, we're done. */
-		OS_STOP(CHECKPOINT, &checkpoint);
+		OS_STOP(WAITERS, &waiters_time);
 		return;
 	}
-
-	uint64_t unlock;	
-	OS_START(UNLOCK, &unlock);
 
 	/* Try to checkpoint ourselves, even if we fail we're still a writer. */
 	expected = MSG_CHECKPOINT;
@@ -416,9 +423,8 @@ objsnap_checkpoint_txn(int tid)
 	objsnap_wait_completion(tid);
 	if (get_msg(tid) != MSG_NONE)
 		panic("Did not actually get checkpointed\n");
-	OS_STOP(CHECKPOINT, &checkpoint);
+	OS_STOP(WRITERS, &writers_time);
 
-	OS_STOP(UNLOCK, &unlock);
 
 	return;
 }
@@ -728,11 +734,11 @@ check_within(uint64_t s, uint64_t e, int within, int mod) {
 }
  
 
-#define WAL_SYNCER_SIZE (512)
+#define WAL_SYNCER_SIZE (1024)
 static void
 objsnap_wal_syncer(void *ctx)
 {
-	index_t inode_i[32];
+	index_t inode_i[128];
 	memset(inode_i, 0, sizeof(index_t) * 32);
 	mtx_lock(&osdata.os_syncer_lk);
 	osdata.os_syncer_exit = OBJSYNC_RUNNING;
@@ -751,7 +757,9 @@ objsnap_wal_syncer(void *ctx)
 		// Clear out current tail to head of Wal entrys, no need for a lock
 		// If the head ptr outpaces us we just keep staying in the while look clearing
 		// stuff out
-		if (!check_within(tail, head, 2 * WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+		if (!check_within(tail, head, WAL_SYNCER_SIZE, MAX_WAL_ENTRIES)) {
+			uint64_t inode_before;
+			OS_START(INODE,&inode_before);
 			int inode_cnt = 0;
 			for (uint64_t i = tail; i < (tail + WAL_SYNCER_SIZE); i++ ) {
 				objsnap_sync_dirtylist((i % MAX_WAL_ENTRIES), inode_i, &inode_cnt);
@@ -800,11 +808,13 @@ objsnap_wal_syncer(void *ctx)
 				movelist(&tree->tr_freeme, &tree->tr_deadlist);
 			}
 
-  			VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
+			if (ckpt_flush)
+  				VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
 			atomic_store_64(&alloc.alloc_walptr_tail, (alloc.alloc_walptr_tail + WAL_SYNCER_SIZE) % MAX_WAL_ENTRIES);
+			OS_STOP(INODE,&inode_before);
 		}
 
-		pause_sbt("waiting to checkpoint", 200 * SBT_1US, 0 ,0);
+		pause_sbt("waiting to checkpoint", 10 * SBT_1US, 0 ,0);
 		mtx_lock(&osdata.os_syncer_lk);
 	}
 
@@ -959,6 +969,34 @@ objsnap_osdata_fini(void)
 	osdata.os_tq = NULL;
 }
 
+static void
+objsnap_sysctl_init(void)
+{
+	struct sysctl_oid *root;
+
+	sysctl_ctx_init(&objsnap_ctx);
+
+	root = SYSCTL_ADD_ROOT_NODE(&objsnap_ctx, OID_AUTO, "objsnap", CTLFLAG_RW,
+		0, "Objsnap Sysctl's");
+
+	(void)SYSCTL_ADD_INT(&objsnap_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+		"wait", CTLFLAG_RW, &wait, 2,
+		"Amount of time in microseconds that waiters will always wait");
+	(void)SYSCTL_ADD_INT(&objsnap_ctx, SYSCTL_CHILDREN(root), OID_AUTO,
+		"ckpt_flush", CTLFLAG_RW, &ckpt_flush, 1,
+		"Enable or disable flushing of object trees during checkpointing.");
+
+	return;
+}
+
+static void
+objsnap_sysctl_fini(void)
+{
+	if (sysctl_ctx_free(&objsnap_ctx))
+		printf("Failed to destroy sysctl\n");
+}
+
+
 static int
 objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 {
@@ -970,6 +1008,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		bzero(tpgs, sizeof(struct objsnap_txn) * MAXTHREADS);
 		bzero(global_msgs, sizeof(uint64_t) * MAXTHREADS);
 
+		objsnap_sysctl_init();
 		// TODO: FOR NOW JUST SET TO ZERO, During recovery we
 		// have to see the latest txn id
 		global_txnid = 0;
@@ -983,13 +1022,15 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		break;
 	case MOD_UNLOAD:
 		printf("Transaction sizes %lu\n", transaction_size);
-		printf("Transaction sizes cnt %lu\n", transaction_size_cnt);
+		printf("Transaction cnt %lu\n", transaction_size_cnt);
 
 		objsnap_osdata_fini();
 
 		objsnap_vncache_fini();
 
 		allocator_destroy();
+
+		objsnap_sysctl_fini();
 
     		break;
 	default:

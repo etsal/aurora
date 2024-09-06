@@ -14,6 +14,8 @@ int objsnap_dirty(index_t fd, int tid, void *ptr);
 int objsnap_stat(index_t fd, osinode_t *inode);
 int objsnap_checkpoint(int tid);
 int objsnap_systemstats(statblock *stats, int *cnt);
+int objsnap_newfs(const char *path);
+
 
 #ifdef __cplusplus
 }

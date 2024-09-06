@@ -327,20 +327,59 @@ threadedTest(int numthreads, int num_objs,
 	return avgs;
 }
 
+void print_usage() {
+	printf("Usage example: new_objsnap disk_path [-o value] [-d value] [-t value] [-r value] [-s]\n");
+	printf("	-p 		location of disk (e.g., /dev/nvd0)\n");
+	printf("	-o		num of objects to create and randomly select\n");
+	printf("	-d		size of dirty set on each checkpoint\n"); 
+	printf("	-t		number of threads to concurrently write\n");
+	printf("	-r		run benchmark for this long in seconds\n");
+	printf("	-g		size of each object in GiB's\n");
+	printf("	-s		print internal stats at end of run\n");
+	printf("	-h		print usage\n");
+}
+
 
 int
 main(int argc, char *argv[])
 {
-	if (argc < 5) {
-		printf("Usage: new_objsnap <disk> <threads> <dirty_set_size> <runFor> <optional>");
-		return (EX_USAGE);
-	}
+	int opt;
+	int totaldirtyset = 1;
+	int runFor = 60;
+	int numthreads = 1;
+	int numobjs = 1;
 	int ps = 0;
-	if (argc == 6) {
-		ps = 1;
-	}
+	int sizeGiB = 10;
 
-	disk = argv[1];
+	while ((opt = getopt(argc, argv, "p:o:d:t:r:g:sh")) != -1) {
+		switch (opt) {
+		case 'o':
+			numobjs = atoi(optarg);
+			break;
+		case 'd':
+			totaldirtyset = atoi(optarg);
+			break;
+		case 't':
+			numthreads = atoi(optarg);
+			break;
+		case 'r':
+			runFor = atoi(optarg);
+			break;
+		case 's':
+			ps = 1;
+			break;
+		case 'p':
+			disk = optarg;
+			break;
+		case 'g':
+			sizeGiB = atoi(optarg);
+			break;
+		case 'h':
+		default:
+			print_usage();
+			exit(1);
+		}
+	}
 
 	clock_cycles = get_clock_speed_sleep();
 
@@ -352,19 +391,10 @@ main(int argc, char *argv[])
 		return (-1);
     	}
 
-	int totaldirtyset = atoi(argv[3]);
-	int runFor = atoi(argv[4]);
-	int numthreads = atoi(argv[2]);
-	int numobjs = 1;
-	
 	int numblocks_per_obj_per_ckpt = totaldirtyset;
 	int MiB = (1024 * 1024) / BLOCKSIZE;
 	int GiB = (1024 * MiB);
-	/*
-	printf("Threads(%d), Blocksize (%lu), Total Dirty Set in Blocks (%d), Checkpoints per thread(%d), Number of objects(%d)\n",
-		numthreads, BLOCKSIZE, totaldirtyset, numCheckpoints, numobjs);
-	*/
-	auto samples = threadedTest(numthreads, numobjs, 10 * GiB, 
+	auto samples = threadedTest(numthreads, numobjs, sizeGiB * GiB, 
 		numblocks_per_obj_per_ckpt, runFor);
 	std::vector<uint64_t> totals_lat;
 	std::vector<uint64_t> total_txns;
@@ -386,14 +416,14 @@ main(int argc, char *argv[])
 	double goodput = 0;
 	for (auto &s : total_txns) {
 		iops += s / runFor;
-		goodput += ((double)s * (double)4) / ((double)1024) ;
+		goodput += ((double)s * (double)(totaldirtyset * 4)) / ((double)1024) ;
 
 	}
 
 	if (ps)
 		printstats(clock_cycles);
 
-	printf("objsnap, %d, %f, %f, %lu, %f", numthreads, iops, lat_ns, lat_99_ns, goodput);
+	printf("objsnap, %d, %d, %lu, %f, %f, %lu, %f", numthreads, numobjs, totaldirtyset * BLOCKSIZE, iops, lat_ns, lat_99_ns, goodput);
 
 	return (EX_OK);
 }
