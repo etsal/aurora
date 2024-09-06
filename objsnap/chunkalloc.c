@@ -834,6 +834,7 @@ ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 	struct ca_chunk *ch;
 	int choff, ind, i;
 
+	return;
 	KASSERT(ptr.size != UINT_MAX, ("freeing invalid disk pointer"));
 	KASSERT(chind < ca->ca_chunk_cnt, ("freeing out-of-bounds chunk %d %ld %d", chind, ca->ca_chunk_cnt, ptr.offset));
 	KASSERT(ptr.size > 0, ("freeing empty disk pointer"));

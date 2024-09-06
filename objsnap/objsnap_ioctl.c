@@ -142,6 +142,7 @@ objsnap_io(struct objsnap_txn *set)
 	struct g_consumer *cp = osdata.os_consumer;
 	obj_diskptr_t ptr = set->d_ptr;
 	int left = set->d_cnt;	
+	uint64_t offset;
 	int pagecnt;
 	int error;
 	int pgoff = 0;
@@ -152,9 +153,10 @@ objsnap_io(struct objsnap_txn *set)
 		data = malloc(BLOCKSIZE * pagecnt, M_OBJSNAP, M_WAITOK | M_ZERO);
 		objsnap_io_uio(set, pgoff, pagecnt, data);
 
-		error = g_write_data(cp, DEVICE_BLOCK_NUM(ptr.offset + set->d_cnt - left) * 512, data, BLOCKSIZE * pagecnt);
-		if (error) {
-			printf("1: Gwrite error %d\n", error);
+		offset = DEVICE_BLOCK_NUM(ptr.offset + set->d_cnt - left) * 512;
+		error = g_write_data(cp, offset, data, BLOCKSIZE * pagecnt);
+		if (error != 0) {
+			printf("IO: gwrite error %d for offset %ld\n", error, offset);
 		}
 
 		pgoff += pagecnt;
@@ -277,9 +279,10 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 
 	memcpy(other, &we, sizeof(struct objsnap_wal_entry));
 	
-	error = g_write_data(cp, DEVICE_BLOCK_NUM(walblk.offset) * 512, other, BLOCKSIZE);
+	uint64_t offset = DEVICE_BLOCK_NUM(walblk.offset) * 512;
+	error = g_write_data(cp, offset, other, BLOCKSIZE);
 	if (error) {
-		printf("wal: Gwrite error %d\n", error);
+		printf("wal: g_write_data error %d for offset %ld\n", error, offset);
 	}
 
 	OS_STOP(DATAWRITE, &before);
