@@ -290,7 +290,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 	return;
 }
 
-void __attribute__((noinline))
+void
 objsnap_txn_commit(struct objsnap_txn *txn, int tid, bool alloc)
 {
 	uint64_t before;
