@@ -317,6 +317,7 @@ slsfs_sas_trace_commit(void)
 	}
 
 	SDT_PROBE1(sas, , , write, written);
+	SDT_PROBE0(sas, , , block);
 
 	atomic_add_64(&msnp_commits, 1);
 }
