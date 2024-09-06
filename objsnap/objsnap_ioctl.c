@@ -793,7 +793,7 @@ objsnap_wal_syncer(void *ctx)
 				// Epoch 3 (inode 1): 2 new writes, 2 COWS, 5 freeme, 2 deadlist
 				// Epoch 4 (inode 2): 1 new writes, 1 COWS, 2 freeme, 1 deadlist
 				for (int i = 0; i < tree->tr_freeme.cnt; i++) {
-					free_block(tree->tr_freeme.list[i]);
+					free_block_system(tree->tr_freeme.list[i]);
 				}
 
 				// Move the deadlist to free list

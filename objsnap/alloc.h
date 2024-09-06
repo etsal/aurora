@@ -105,7 +105,22 @@ oa_alloc_system(union objallocator *oa, obj_diskptr_t *ptrp)
 
 
 static inline void
-oa_free(union objallocator *oa, obj_diskptr_t ptr)
+oa_free_data(union objallocator *oa, obj_diskptr_t ptr)
+{
+	switch (obj_alloctype) {
+	case OBJALLOC_BINARY:
+		/* XXX The binary allocator crashes when freeing data. */
+		return;
+	case OBJALLOC_CHUNK:
+		ca_free(&oa->ca, ptr);
+		return;
+	default:
+		panic("invalid allocator type %d\n", obj_alloctype);
+	}
+}
+
+static inline void
+oa_free_system(union objallocator *oa, obj_diskptr_t ptr)
 {
 	switch (obj_alloctype) {
 	case OBJALLOC_BINARY:
@@ -154,7 +169,8 @@ void allocator_destroy(void);
 int write_ondisk_inode(osinode_t *inode);
 int allocate_txn_block(struct objsnap_txn *txn, int tid);
 int allocate_system_block(obj_diskptr_t *ptr);
-void free_block(obj_diskptr_t ptr);
+void free_block_data(obj_diskptr_t ptr);
+void free_block_system(obj_diskptr_t ptr);
 int objsnap_blkalloc_wal(obj_diskptr_t *ptr);
 void garbage_collect(size_t numblocks);
 osinode_t *allocate_inode(void);

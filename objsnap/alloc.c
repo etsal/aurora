@@ -135,9 +135,15 @@ allocate_system_block(obj_diskptr_t *ptr)
 }
 
 void 
-free_block(obj_diskptr_t ptr)
+free_block_system(obj_diskptr_t ptr)
 {
-    oa_free(&alloc.alloc_impl, ptr);
+    oa_free_system(&alloc.alloc_impl, ptr);
+}
+
+void 
+free_block_data(obj_diskptr_t ptr)
+{
+    oa_free_data(&alloc.alloc_impl, ptr);
 }
 
 int 
