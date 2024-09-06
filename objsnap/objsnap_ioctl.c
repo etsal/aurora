@@ -236,7 +236,7 @@ objsnap_mktxn(int *mytids, size_t size_tids, struct objsnap_txn *txn)
 			KASSERT(txn->d_page[ind] != NULL, ("transaction includes NULL page"));
 			txn->d_index[ind] = tpgs[tmptid].d_index[j];
 			txn->d_inode[ind] = tpgs[tmptid].d_inode[j];
-			KASSERT(txn->d_inode[ind] != 0, ("IO on inode 0"));
+			KASSERT(txn->d_index[ind] != 0, ("committing on invalid inode 0"));
 			ind += 1;
 		}
 		tpgs[tmptid].d_cnt = 0;
@@ -513,6 +513,7 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 	set->d_index[set->d_cnt] = m->pindex;
 	set->d_inode[set->d_cnt] = inode_i;
 	set->d_cnt += 1;
+	KASSERT(inode_i != 0, ("dirtying invalid inode 0"));
 
 	return (0);
 }

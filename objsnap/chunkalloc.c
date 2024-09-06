@@ -50,6 +50,29 @@ ca_checkstate(struct ca_chunk *ch, enum ca_state state)
 		panic("invalid chunk state %d, expected %d\n", ch->cac_state, state);
 }
 
+#ifdef INVARIANTS
+static inline void
+ca_checkused(struct ca_chunk *ch)
+{
+	int i;
+	size_t used = 0;
+
+	for (i = 0; i < CA_BLOCKS; i++) {
+		if (ch->cac_backmap[i].cao_ino != 0)
+			used += 1;
+	}
+
+	KASSERT(used == ch->cac_blocks_used, ("expected %ld used blocks, found %ld", 
+				ch->cac_blocks_used, used));
+}
+#else
+static inline void
+ca_checkused(struct ca_chunk __unused *ch)
+{
+}
+
+#endif /* INVARIANTS */
+
 /*
  * Pop off the free list the chunk in index chind.
  */
@@ -96,8 +119,16 @@ cac_free_pop(struct chunkallocator *ca, struct ca_chunk **chp)
 static void
 cac_to_free(struct chunkallocator *ca, struct ca_chunk *ch)
 {
+	int i;
+
 	KASSERT(ch->cac_blocks_used == 0, ("freeing non-empty chunk %ld", ch->cac_blocks_used));
 	mtx_assert(&ca->ca_mtx, MA_OWNED);
+
+	for (i = ch->cac_alloc_index; i < CA_BLOCKS; i++) {
+		KASSERT(ch->cac_backmap[i].cao_ino == 0, 
+			("freeing chunk with dirty backmap index %d (value %d)",
+			 i, ch->cac_backmap[i].cao_ino));
+	}
 
 	ch->cac_state = CA_FREE;
 	ca->ca_free[ca->ca_free_cnt++] = ch;
@@ -401,13 +432,11 @@ ca_age(struct chunkallocator *ca)
 			continue;
 		}
 
-#if 0
 		if (ch->cac_blocks_used >= CA_COLD_LOAD_THRESHOLD) {
 			CA_COUNTER_INCREMENT(ca, hot_to_cold);
 			cac_to_cold(ca, ch);
 			continue;
 		}
-#endif
 
 		args = malloc(sizeof(*args), M_OBJSNAP, M_NOWAIT);
 		if (args == NULL)
@@ -519,9 +548,6 @@ ca_gc_move(struct chunkallocator *ca, struct ca_chunk *ch, size_t numblocks)
 	CA_COUNTER_ADD(ca, page_moves, txn.d_cnt);
 
 	objsnap_txn_commit(&txn, false);
-
-	ch->cac_blocks_used = i;
-	ch->cac_alloc_index = i;
 
 	for (i = 0; i < txn.d_cnt; i++) {
 		vm_page_unwire_noq(txn.d_page[i]);
@@ -839,6 +865,7 @@ ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 
 	if (ch->cac_state == CA_NOQUEUE && ch->cac_blocks_used == 0) {
 		mtx_lock(&ca->ca_mtx);
+		ca_checkused(ch);
 		ch->cac_alloc_index = 0;
 		cac_to_free(ca, ch);
 		mtx_unlock(&ca->ca_mtx);
