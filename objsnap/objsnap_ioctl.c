@@ -288,7 +288,7 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 }
 
 void __attribute__((noinline))
-objsnap_txn_commit(struct objsnap_txn *txn, bool alloc)
+objsnap_txn_commit(struct objsnap_txn *txn, int tid, bool alloc)
 {
 	uint64_t before;
 
@@ -298,7 +298,7 @@ objsnap_txn_commit(struct objsnap_txn *txn, bool alloc)
 	OS_START(ALLOCATE, &before);
 	// TODO:CHECK ERROR
 	if (alloc)
-		allocate_txn_block(txn);
+		allocate_txn_block(txn, tid);
 	OS_STOP(ALLOCATE, &before);
 
 	objsnap_io(txn);
@@ -396,7 +396,7 @@ objsnap_checkpoint_txn(int tid)
 	garbage_collect(total_size);
 
 	objsnap_mktxn((int *)mytids, size_tids, &txn);
-	objsnap_txn_commit(&txn, true);
+	objsnap_txn_commit(&txn, tid, true);
 
 	for (i = 0; i < size_tids; i++) {
 		int local_tid = mytids[i];

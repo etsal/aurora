@@ -97,13 +97,13 @@ objsnap_blkalloc_wal(obj_diskptr_t *ptr)
 }
 
 int
-allocate_txn_block(struct objsnap_txn *txn)
+allocate_txn_block(struct objsnap_txn *txn, int tid)
 {
     uint64_t before;
     int error;
 
     OS_START(ALLOCATE, &before);
-    error = oa_alloc_txn(&alloc.alloc_impl, txn);
+    error = oa_alloc_txn(&alloc.alloc_impl, tid, txn);
     if (error) {
         panic("Problem allocating!");
     }

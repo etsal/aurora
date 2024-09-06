@@ -6,6 +6,10 @@
 #define CA_COLD_BUCKETS (4)
 #define CA_SYSTEM_INO (0xFFFFFFFF)
 #define CA_COLD_LOAD_THRESHOLD (CA_BLOCKS / 2)
+#define CA_FREESLOTS (8)
+
+/* Dummy TID for the GC move thread. */
+#define CA_GC_TID (MAXTHREADS - 1)
 
 /*
  * This knob determines how full we keep the to-launder list.
@@ -67,8 +71,11 @@ struct ca_stats {
 	uint64_t 		cs_free_to_system;
 	uint64_t 		cs_system_to_full;
 	uint64_t 		cs_full_to_system;
+	uint64_t 		cs_op_alloc_fast[CA_FREESLOTS];
 	uint64_t 		cs_op_aging;
 	uint64_t 		cs_op_move;
+	uint64_t 		cs_op_alloc_fast_fail;
+	uint64_t 		cs_page_alloc_fast[CA_FREESLOTS];
 	uint64_t 		cs_page_moves;
 	uint64_t 		cs_hot_blocks_used;
 	uint64_t 		cs_op_free;
@@ -81,6 +88,10 @@ struct chunkallocator {
 
 	struct ca_chunk		*ca_chunks;
 	uint64_t 		ca_chunk_cnt;
+
+	/* Free slots for quick sharded allocations. */
+	struct ca_chunk		*ca_free_slots[CA_FREESLOTS];
+	struct mtx		ca_slot_mtx[CA_FREESLOTS];
 
 	/* Free chunks for servicing allocations. */
 	struct ca_chunk		**ca_free;
@@ -110,7 +121,7 @@ void ca_init(struct chunkallocator *ca, uint64_t offset, size_t numblocks);
 void ca_free(struct chunkallocator *ca, obj_diskptr_t tofree);
 void ca_destroy(struct chunkallocator *ca);
 void ca_print(struct chunkallocator *ca);
-int ca_alloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn);
+int ca_alloc_txn(struct chunkallocator *ca, int tid, struct objsnap_txn *txn);
 int ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptr);
 void ca_gc(struct chunkallocator *ca, size_t numblocks);
 

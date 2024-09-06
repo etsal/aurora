@@ -74,13 +74,13 @@ oa_destroy(union objallocator *oa)
 }
 
 static inline int
-oa_alloc_txn(union objallocator *oa, struct objsnap_txn *txn)
+oa_alloc_txn(union objallocator *oa, int tid, struct objsnap_txn *txn)
 {
 	switch (obj_alloctype) {
 	case OBJALLOC_BINARY:
 		return (ba_alloc(&oa->ba, txn->d_cnt, &txn->d_ptr));
 	case OBJALLOC_CHUNK:
-		return (ca_alloc_txn(&oa->ca, txn));
+		return (ca_alloc_txn(&oa->ca, tid, txn));
 	default:
 		panic("invalid allocator type %d\n", obj_alloctype);
 	}
@@ -152,7 +152,7 @@ void allocator_init(void);
 void allocator_destroy(void);
     
 int write_ondisk_inode(osinode_t *inode);
-int allocate_txn_block(struct objsnap_txn *txn);
+int allocate_txn_block(struct objsnap_txn *txn, int tid);
 int allocate_system_block(obj_diskptr_t *ptr);
 void free_block(obj_diskptr_t ptr);
 int objsnap_blkalloc_wal(obj_diskptr_t *ptr);

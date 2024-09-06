@@ -247,6 +247,9 @@ ca_init(struct chunkallocator *ca, uint64_t startoff, size_t numblocks)
 	ca->ca_hot_end = 0;
 	ca->ca_hot = ca_arrayalloc(sizeof(*ca->ca_hot), ca->ca_chunk_cnt);
 
+	for (i = 0; i < CA_FREESLOTS; i++)
+		mtx_init(&ca->ca_slot_mtx[i], "objslotmtx", NULL, MTX_DEF);
+
 	for (i = 0; i < CA_COLD_BUCKETS; i++) {
 		ca->ca_cold_cnt[i] = 0;
 		ca->ca_cold[i] = ca_arrayalloc(sizeof(struct ca_chunk *), ca->ca_chunk_cnt);
@@ -277,6 +280,9 @@ ca_destroy(struct chunkallocator *ca)
 {
 	int i;
 
+	for (i = 0; i < CA_FREESLOTS; i++)
+		mtx_destroy(&ca->ca_slot_mtx[i]);
+
 	for (i = 0; i < ca->ca_chunk_cnt; i++) 
 		mtx_destroy(&ca->ca_chunks[i].cac_mtx);
 
@@ -298,7 +304,8 @@ ca_destroy(struct chunkallocator *ca)
 void
 ca_print(struct chunkallocator *ca)
 {
-	uint64_t denom;
+	uint64_t denom, nom;
+	int i;
 
 	printf("===== CHUNK ALLOCATOR STATS =====\n");
 	printf("Chunks: %ld\n", ca->ca_chunk_cnt);
@@ -318,12 +325,23 @@ ca_print(struct chunkallocator *ca)
 	printf("Aging operations: %ld\n", CA_COUNTER(ca, op_aging));
 	printf("Free operations: %ld\n", CA_COUNTER(ca, op_free));
 	printf("Chunk move operations: %ld\n", CA_COUNTER(ca, op_move));
+	for (i = 0; i < CA_FREESLOTS; i++)
+		printf("Fast alloc (SLOT %d) operations: %ld\n", i, CA_COUNTER(ca, op_alloc_fast[i]));
+	printf("Failed fast allocation operations: %ld\n", CA_COUNTER(ca, op_alloc_fast_fail));
 
 	denom = CA_COUNTER(ca, op_move);
-	printf("Pages moved: %ld (avg %ld)\n", CA_COUNTER(ca, page_moves), denom ? CA_COUNTER(ca, page_moves) / denom : -1);
+	printf("Pages Moved: %ld (avg %ld)\n", CA_COUNTER(ca, page_moves), denom ? CA_COUNTER(ca, page_moves) / denom : -1);
 
 	denom = CA_COUNTER(ca, hot_to_free) + CA_COUNTER(ca, hot_to_launder) + CA_COUNTER(ca, hot_to_cold);
 	printf("Avg Blocks Used in [HOT]: %ld\n", denom ? CA_COUNTER(ca, hot_blocks_used) / denom : -1);
+
+	nom = denom = 0;
+	for (i = 0; i < CA_FREESLOTS; i++) {
+		nom += CA_COUNTER(ca, op_alloc_fast[i]);
+		denom += CA_COUNTER(ca, page_alloc_fast[i]);
+	}
+	printf("Pages (TXN) Allocated: %ld (avg %ld)\n", nom, denom ? nom / denom : -1);
+	printf("Fast allocations Allocated: %ld (avg %ld)\n", nom, denom ? nom / denom : -1);
 
 	printf("===== STATS END =====\n");
 }
@@ -547,7 +565,7 @@ ca_gc_move(struct chunkallocator *ca, struct ca_chunk *ch, size_t numblocks)
 
 	CA_COUNTER_ADD(ca, page_moves, txn.d_cnt);
 
-	objsnap_txn_commit(&txn, false);
+	objsnap_txn_commit(&txn, CA_GC_TID, false);
 
 	for (i = 0; i < txn.d_cnt; i++) {
 		vm_page_unwire_noq(txn.d_page[i]);
@@ -588,38 +606,60 @@ ca_gc(struct chunkallocator *ca, size_t numblocks)
 
 /* ===== Main allocation path. ===== */
 
-static int
-ca_free_select(struct chunkallocator *ca, int numblocks, struct ca_chunk **chp, int *chindp)
+static bool
+ca_tryalloc_fastpath(struct chunkallocator *ca, int ind, struct objsnap_txn *txn)
 {
-	struct ca_chunk *ch;
-	int chind;
+	struct ca_chunk *ch = ca->ca_free_slots[ind];
 
-	/* Grab the first chunk we find in the allocator. */
-	for (chind = ca->ca_free_cnt - 1; chind >= 0; chind--) {
-		ch = ca->ca_free[chind];
-		if (ch->cac_alloc_index + numblocks <= CA_BLOCKS)
-			break;
+	KASSERT(ind >= 0, ("negative slot index"));
+	KASSERT(ind < CA_FREESLOTS, ("slot index too large"));
+
+	mtx_lock(&ca->ca_slot_mtx[ind]);
+	if ((ch == NULL) || (ch->cac_alloc_index + txn->d_cnt > CA_BLOCKS)) {
+		mtx_unlock(&ca->ca_slot_mtx[ind]);
+		return (false);
 	}
 
-	/* We didn't find any blocks. */
-	if (chind == -1)
-		return (ENOSPC);
+	ca_blkalloc(ch, txn);
+	CA_COUNTER_INCREMENT(ca, op_alloc_fast[ind]);
+	CA_COUNTER_ADD(ca, page_alloc_fast[ind], txn->d_cnt);
 
-	mtx_lock(&ch->cac_mtx);
+	mtx_unlock(&ca->ca_slot_mtx[ind]);
 
-	*chp = ch;
-	*chindp = chind;
+	return (true);
+}
 
-	return (0);
+static void
+ca_tryalloc_fastpath_fix(struct chunkallocator *ca, int ind)
+{
+	struct ca_chunk **chp = &ca->ca_free_slots[ind];
+	struct ca_chunk *ch;
+
+	mtx_lock(&ca->ca_mtx);
+	mtx_lock(&ca->ca_slot_mtx[ind]);
+
+	CA_COUNTER_INCREMENT(ca, op_alloc_fast_fail);
+
+	if (*chp != NULL) {
+		cac_to_hot(ca, *chp);
+	}
+
+	cac_free_pop(ca, chp);
+	ch = *chp;
+
+	KASSERT(ca_offset_to_chind(ca, ch->cac_ptr.offset) == ch->cac_index,
+			("chunk pointer inconsistent with its index: "
+			 "has %d while pointer is for %d\n", ch->cac_index,
+			 ca_offset_to_chind(ca, ch->cac_ptr.offset)));
+
+	mtx_unlock(&ca->ca_slot_mtx[ind]);
+	mtx_unlock(&ca->ca_mtx);
 }
 
 static int
-ca_tryalloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn)
+ca_tryalloc_txn(struct chunkallocator *ca, int ind, struct objsnap_txn *txn)
 {
 	const size_t numblocks = txn->d_cnt;
-	struct ca_chunk *ch;
-	int error;
-	int chind;
 
 	MPASS(ca != NULL);
 	if (numblocks > CA_BLOCKS)
@@ -629,58 +669,24 @@ ca_tryalloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn)
 	if (ca->ca_launder_surplus < CA_SURPLUS_THRESHOLD)
 		ca_age(ca);
 
-	/* XXX This should never happen after we implement moves. */
 	if (ca->ca_free_cnt == 0)
 		panic("allocator full");
 
-	mtx_lock(&ca->ca_mtx);
+	if (ca_tryalloc_fastpath(ca, ind, txn))
+		return (0);
 
-	/* Find a block that can satisfy the allocation. */
-	error = ca_free_select(ca, numblocks, &ch, &chind);
-	if (error != 0) {
-		mtx_unlock(&ca->ca_mtx);
-		return (error);
-	}
+	ca_tryalloc_fastpath_fix(ca, ind);
 
-	/* 
-	 * Avoid TOCCTOU, someone may have consumed enough of the block
-	 * while we tried to lock that it cannot satisfy the allocation. 
-	 */
-	if (ch->cac_alloc_index + numblocks > CA_BLOCKS) {
-		mtx_unlock(&ch->cac_mtx);
-		mtx_unlock(&ca->ca_mtx);
-		return (EAGAIN);
-	}
-
-	KASSERT(ca_offset_to_chind(ca, ch->cac_ptr.offset) == ch->cac_index,
-			("chunk pointer inconsistent with its index: "
-			 "has %d while pointer is for %d\n", ch->cac_index,
-			 ca_offset_to_chind(ca, ch->cac_ptr.offset)));
-
-	ca_blkalloc(ch, txn);
-
-	/* Move fully allocated chunks to the hot list. */
-	if (ch->cac_alloc_index >= CA_BLOCKS) {
-
-		cac_from_free(ca, chind, &ch);
-		cac_to_hot(ca, ch);
-		CA_COUNTER_INCREMENT(ca, free_to_hot);
-
-	} 
-	
-	mtx_unlock(&ch->cac_mtx);
-	mtx_unlock(&ca->ca_mtx);
-
-	return (0);
+	return (EAGAIN);
 }
 
 int
-ca_alloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn)
+ca_alloc_txn(struct chunkallocator *ca, int tid, struct objsnap_txn *txn)
 {
 	int error;
 
 	do {
-		error = ca_tryalloc_txn(ca, txn);
+		error = ca_tryalloc_txn(ca, tid % CA_FREESLOTS, txn);
 	} while (error != 0);
 
 	return (0);
