@@ -37,15 +37,15 @@ allocator_init()
 {
 	bzero(&alloc, sizeof(struct allocator));
 	alloc.alloc_size_total_blocks = superblock.super_size;
+	alloc.alloc_starting_offset = (2 * superblock.super_max_inodes) + MAX_WAL_ENTRIES + 2;
 	lockinit(&alloc.alloc_lk, 0, "Objsnap Syncer Lock", 0, 0); 
 	alloc.alloc_bsize = BLOCKSIZE;
 
 	// Start the offset after inodes and wal thread list
 	// Every inode points to two objects
-	uint32_t offset = (2 * superblock.super_max_inodes) + MAX_WAL_ENTRIES + 2;
-	uint32_t left = alloc.alloc_size_total_blocks - offset;
+	uint32_t left = alloc.alloc_size_total_blocks - alloc.alloc_starting_offset;
 
-	oa_init(&alloc.alloc_impl, offset, left);
+	oa_init(&alloc.alloc_impl, alloc.alloc_starting_offset, left);
 
 	printf("Initial allocator State:\n");
 	oa_print(&alloc.alloc_impl);
@@ -60,6 +60,7 @@ allocator_init()
 void 
 allocator_destroy()
 {
+    oa_print(&alloc.alloc_impl);
     oa_destroy(&alloc.alloc_impl);
 }
 
@@ -262,10 +263,4 @@ void
 garbage_collect(size_t numblocks)
 {
 	oa_gc(&alloc.alloc_impl, numblocks);
-}
-
-void
-reclaim_blocks(void)
-{
-	oa_reclaim(&alloc.alloc_impl);
 }

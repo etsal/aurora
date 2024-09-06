@@ -55,6 +55,25 @@ struct ca_chunk {
 	vm_page_t		cac_launder[CA_BLOCKS];
 };
 
+struct ca_stats {
+	uint64_t 		cs_pop_from_free;
+	uint64_t 		cs_free_to_hot;
+	uint64_t 		cs_free_to_launder;
+	uint64_t 		cs_hot_to_free;
+	uint64_t 		cs_hot_to_cold;
+	uint64_t 		cs_hot_to_launder;
+	uint64_t 		cs_cold_to_launder;
+	uint64_t 		cs_launder_to_cold;
+	uint64_t 		cs_free_to_system;
+	uint64_t 		cs_system_to_full;
+	uint64_t 		cs_full_to_system;
+	uint64_t 		cs_op_aging;
+	uint64_t 		cs_op_move;
+	uint64_t 		cs_page_moves;
+	uint64_t 		cs_hot_blocks_used;
+	uint64_t 		cs_op_free;
+};
+
 struct chunkallocator {
 	struct mtx  		ca_mtx;
 
@@ -84,9 +103,7 @@ struct chunkallocator {
 	uint64_t			ca_launder_surplus;
 	struct ca_chunk			*ca_launder_dst;
 
-	/*
-	 * XXX Add stats back.
-	 */
+	struct ca_stats			ca_stats;
 };
 
 void ca_init(struct chunkallocator *ca, uint64_t offset, size_t numblocks);
@@ -96,6 +113,5 @@ void ca_print(struct chunkallocator *ca);
 int ca_alloc_txn(struct chunkallocator *ca, struct objsnap_txn *txn);
 int ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptr);
 void ca_gc(struct chunkallocator *ca, size_t numblocks);
-void ca_reclaim(struct chunkallocator *ca);
 
 #endif /* __CHUNKALLOCATOR_H_ */

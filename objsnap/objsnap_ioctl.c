@@ -261,6 +261,10 @@ objsnap_wal_log(struct objsnap_txn *txn, size_t npages)
 		we.we_ptrs[i].w_inode = txn->d_inode[i];
 		we.we_ptrs[i].w_index = txn->d_index[i];
 		we.we_ptrs[i].w_offset = txn->d_ptr.offset + i;
+		KASSERT(we.we_ptrs[i].w_offset > alloc.alloc_starting_offset,
+				("logging invalid pointer (%d, %d)",
+				 txn->d_ptr.offset, txn->d_ptr.size));
+
 	}
 
 	we.we_cnt = npages;
@@ -695,6 +699,9 @@ objsnap_sync_dirtylist(uint64_t threadlist_at, index_t inode_i[], int *inode_cnt
 				.size = 1,
 			};
 			if (walptr->w_inode == inode_i[i]) {
+				KASSERT(ptr.offset >= alloc.alloc_starting_offset, 
+						("[thread %ld, inode %d] inserting invalid pointer (%d,%d)",
+						 threadlist_at, inode_i[i], ptr.offset, ptr.size));
 				VTREE_INSERT(&vnode->v_tree, 
 					walptr->w_index , &ptr);
 			}
@@ -789,7 +796,6 @@ objsnap_wal_syncer(void *ctx)
 				movelist(&tree->tr_freeme, &tree->tr_deadlist);
 			}
 
-			reclaim_blocks();
   			VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
 			atomic_store_64(&alloc.alloc_walptr_tail, (alloc.alloc_walptr_tail + WAL_SYNCER_SIZE) % MAX_WAL_ENTRIES);
 		}

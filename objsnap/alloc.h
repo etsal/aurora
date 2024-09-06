@@ -33,6 +33,7 @@ union objallocator {
 
 struct allocator {
   size_t alloc_size_total_blocks;
+  size_t alloc_starting_offset;
   size_t alloc_bsize;
   struct lock alloc_lk;
   union objallocator alloc_impl;
@@ -147,21 +148,6 @@ oa_gc(union objallocator *oa, size_t numblocks)
 	}
 }
 
-static inline void
-oa_reclaim(union objallocator *oa)
-{
-	switch (obj_alloctype) {
-	case OBJALLOC_BINARY:
-		return;
-	case OBJALLOC_CHUNK:
-		ca_reclaim(&oa->ca);
-		return;
-	default:
-		panic("invalid allocator type %d\n", obj_alloctype);
-	}
-}
-
-
 void allocator_init(void);
 void allocator_destroy(void);
     
@@ -171,7 +157,6 @@ int allocate_system_block(obj_diskptr_t *ptr);
 void free_block(obj_diskptr_t ptr);
 int objsnap_blkalloc_wal(obj_diskptr_t *ptr);
 void garbage_collect(size_t numblocks);
-void reclaim_blocks(void);
 osinode_t *allocate_inode(void);
 
 #endif
