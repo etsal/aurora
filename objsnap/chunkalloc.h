@@ -7,6 +7,7 @@
 #define CA_SYSTEM_INO (0xFFFFFFFF)
 #define CA_COLD_LOAD_THRESHOLD (CA_BLOCKS / 2)
 #define CA_FREESLOTS (8)
+#define CA_HOT_CHUNKS_PERCENT (10)
 
 /* Dummy TID for the GC move thread. */
 #define CA_GC_TID (MAXTHREADS - 1)

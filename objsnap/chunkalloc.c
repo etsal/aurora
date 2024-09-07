@@ -660,13 +660,16 @@ static int
 ca_tryalloc_txn(struct chunkallocator *ca, int ind, struct objsnap_txn *txn)
 {
 	const size_t numblocks = txn->d_cnt;
+	size_t hot_cnt, hot_threshold;
 
 	MPASS(ca != NULL);
 	if (numblocks > CA_BLOCKS)
 		panic("requested allocation too large (%ld, max %d)\n", numblocks, CA_BLOCKS);
 
+	hot_cnt = (ca->ca_chunk_cnt + ca->ca_hot_end - ca->ca_hot_start) % ca->ca_chunk_cnt;
+	hot_threshold = ca->ca_chunk_cnt * CA_HOT_CHUNKS_PERCENT / 100;
 	/* Age as many hot blocks as we are allocating. */
-	if (ca->ca_launder_surplus < CA_SURPLUS_THRESHOLD)
+	if ((ca->ca_launder_surplus < CA_SURPLUS_THRESHOLD) && (hot_cnt >= hot_threshold))
 		ca_age(ca);
 
 	if (ca->ca_free_cnt == 0)
@@ -786,7 +789,6 @@ ca_tryalloc_system(struct chunkallocator *ca, obj_diskptr_t *ptrp)
 						ch->cac_backmap[i].cao_ino,
 						ch->cac_backmap[i].cao_off));
 		}
-
 
 		cac_to_system(ca, ch);
 
