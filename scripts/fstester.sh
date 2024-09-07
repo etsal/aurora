@@ -32,18 +32,21 @@ run() {
 test_zfs() {
 	for i in $(seq 1 $1) 
 	do
-		zpool create "test" $DISK
-		zfs create "test/test"
-		zfs set recordsize=4K "test/test"
-		zfs set mountpoint=/testmnt test/test
-		zfs set compression=off test/test
-		touch "/testmnt/test"
-		truncate -s 0 "/testmnt/test"
+		for t in $(seq 1 5)
+		do
+			zpool create "test" $DISK
+			zfs create "test/test"
+			zfs set recordsize=4K "test/test"
+			zfs set mountpoint=/testmnt test/test
+			zfs set compression=off test/test
+			touch "/testmnt/test"
+			truncate -s 0 "/testmnt/test"
 
-		run "$i" "$2" "zfs" "4096"
+			run "$i" "$2" "zfs" "4096"
 
-		umount /testmnt
-		zpool destroy "test"
+			umount /testmnt
+			zpool destroy "test"
+		done
 	done
 }
 
@@ -67,17 +70,20 @@ test_ffs_journal() {
 test_ffs() {
 	for i in $(seq 1 $1) 
 	do
-		newfs -b 4096 "$DISK"
-		tunefs -n enable "$DISK"
-		tunefs -j disable "$DISK"
-		tunefs -p "$DISK"
-		mount "$DISK" /testmnt
-		touch "/testmnt/test"
-		truncate -s 0 "/testmnt/test"
+		for t in $(seq 1 5)
+		do
+			newfs -b 4096 "$DISK"
+			tunefs -n enable "$DISK"
+			tunefs -j disable "$DISK"
+			tunefs -p "$DISK"
+			mount "$DISK" /testmnt
+			touch "/testmnt/test"
+			truncate -s 0 "/testmnt/test"
 
-		run "$i" "$2" "ffs+su" "4096"
+			run "$i" "$2" "ffs+su" "4096"
 
-		umount /testmnt
+			umount /testmnt
+		done
 	done
 }
 
@@ -126,32 +132,41 @@ run_once_objsnap() {
 test_objsnap() {
 	for i in $(seq 1 $1) 
 	do
-		run_once_objsnap "$i" "$2" "$3"
+		for t in $(seq 1 5)
+		do
+			run_once_objsnap "$i" "$2" "$3"
+		done
 	done
 }
 
 test_zfs_dirtyset() {
 	for i in $(seq 1 $3) 
 	do
-		zpool create "test" $DISK
-		zfs create "test/test"
-		zfs set recordsize=4K "test/test"
-		zfs set mountpoint=/testmnt test/test
-		zfs set compression=off test/test
-		touch "/testmnt/test"
-		truncate -s 0 "/testmnt/test"
+		for t in $(seq 1 5)
+		do
+			zpool create "test" $DISK
+			zfs create "test/test"
+			zfs set recordsize=4K "test/test"
+			zfs set mountpoint=/testmnt test/test
+			zfs set compression=off test/test
+			touch "/testmnt/test"
+			truncate -s 0 "/testmnt/test"
 
-		run $1 "$2" "zfs" "$((4096 * $i))"
+			run $1 "$2" "zfs" "$((4096 * $i))"
 
-		umount /testmnt
-		zpool destroy "test"
+			umount /testmnt
+			zpool destroy "test"
+		done
 	done
 }
 
 test_objsnap_dirtyset() {
 	for i in $(seq 1 $3) 
 	do
-		run_once_objsnap "$1" "$2" "$i"
+		for t in $(seq 1 5)
+		do
+			run_once_objsnap "$1" "$2" "$i"
+		done
 	done
 }
 
@@ -161,8 +176,8 @@ benchmark_fses() {
 	truncate -s 0 "$OUT"
 	echo "fs,num_threads,num_objects,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$OUT"
 	test_objsnap $THREADS "$OUT" "1"
-	test_ffs_journal $THREADS "$OUT"
-	test_ffs_bs $THREADS "$OUT"
+	#test_ffs_journal $THREADS "$OUT"
+	#test_ffs_bs $THREADS "$OUT"
 	test_ffs $THREADS "$OUT"
 	test_zfs $THREADS "$OUT"
 }
@@ -172,12 +187,12 @@ benchmark_ckpt_size() {
 	MAXDIRTYSET=8
 	truncate -s 0 "$DIRTYSETOUT"
 	echo "fs,num_threads,num_objects,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$DIRTYSETOUT"
-	#export NUM_OBJECTS="5"
-	#export SIZE_OBJECT="2"
-	#test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
-	#export SIZE_OBJECT="10"
-	#export NUM_OBJECTS="1"
-	#test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+	export NUM_OBJECTS="5"
+	export SIZE_OBJECT="2"
+	test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+	export SIZE_OBJECT="10"
+	export NUM_OBJECTS="1"
+	test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
 	test_zfs_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
 }
 
@@ -249,6 +264,6 @@ benchmark_wait_time() {
 }
 
 THREADS=24
-#benchmark_fses
+benchmark_fses
 benchmark_ckpt_size
-#benchmark_wait_time
+benchmark_wait_time
