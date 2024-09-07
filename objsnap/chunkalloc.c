@@ -311,7 +311,7 @@ ca_print(struct chunkallocator *ca)
 	printf("Chunks: %ld\n", ca->ca_chunk_cnt);
 	printf("Blocks per chunk: %d\n", CA_BLOCKS);
 	printf("Chunk size in bytes : %ld\n", CA_CHUNKSZ);
-	printf("Pages Popped Off of [FREE]: %ld\n", CA_COUNTER(ca, pop_from_free));
+	printf("Chunks Popped Off of [FREE]: %ld\n", CA_COUNTER(ca, pop_from_free));
 	printf("[FREE] Chunks Sent to [HOT]: %ld\n", CA_COUNTER(ca, free_to_hot));
 	printf("[FREE] Chunks Sent to [LAUNDER]: %ld\n", CA_COUNTER(ca, free_to_launder));
 	printf("[HOT] Chunks Sent to [FREE]: %ld\n", CA_COUNTER(ca, hot_to_free));
@@ -322,6 +322,7 @@ ca_print(struct chunkallocator *ca)
 	printf("[FREE] Chunks Sent To [SYSTEM]: %ld\n", CA_COUNTER(ca, free_to_system));
 	printf("[SYSTEM] Chunks Sent To [SYSTEM-FULL]: %ld\n", CA_COUNTER(ca, system_to_full));
 	printf("[SYSTEM] Chunks Reclaimed From [SYSTEM-FULL]: %ld\n", CA_COUNTER(ca, full_to_system));
+	printf("Chunks Reclaimed To [FREE]: %ld\n", CA_COUNTER(ca, reclaimed_to_free));
 	printf("Aging operations: %ld\n", CA_COUNTER(ca, op_aging));
 	printf("Free operations: %ld\n", CA_COUNTER(ca, op_free));
 	printf("Chunk move operations: %ld\n", CA_COUNTER(ca, op_move));
@@ -431,7 +432,6 @@ ca_age(struct chunkallocator *ca)
 		if (chhot[chind] == NULL)
 			break;
 
-		/* If we laundered enough blocks, break. */
 		ca->ca_launder_surplus += (CA_BLOCKS - chhot[chind]->cac_blocks_used);
 		if (ca->ca_launder_surplus >= CA_SURPLUS_THRESHOLD)
 			break;
@@ -872,6 +872,7 @@ ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 	mtx_unlock(&ch->cac_mtx);
 
 	if (ch->cac_state == CA_NOQUEUE && ch->cac_blocks_used == 0) {
+		CA_COUNTER_INCREMENT(ca, reclaimed_to_free);
 		mtx_lock(&ca->ca_mtx);
 		ca_checkused(ch);
 		ch->cac_alloc_index = 0;

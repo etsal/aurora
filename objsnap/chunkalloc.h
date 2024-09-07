@@ -80,6 +80,7 @@ struct ca_stats {
 	uint64_t 		cs_page_moves;
 	uint64_t 		cs_hot_blocks_used;
 	uint64_t 		cs_op_free;
+	uint64_t 		cs_reclaimed_to_free;
 };
 
 struct chunkallocator {
