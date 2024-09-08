@@ -395,8 +395,15 @@ ca_hot_to_launder(void *ctx, int __unused pending)
 	/* We hold the only reference to the chunk, since it has no queue. */
 	mtx_lock(&ca->ca_mtx);
 	for (i = 0; i < CA_BLOCKS; i++) {
-		KASSERT((ch->cac_launder[i] == NULL) == (ch->cac_backmap[i].cao_ino == 0),
-				("inconsistent laundered page state"));
+		if (ch->cac_launder[i] != NULL && ch->cac_backmap[i].cao_ino == 0) {
+			vm_page_unwire_noq(ch->cac_launder[i]);
+			vm_page_free(ch->cac_launder[i]);
+			ch->cac_launder[i] = NULL;
+		}
+
+		KASSERT((ch->cac_launder[i] == NULL) || (ch->cac_backmap[i].cao_ino == 0),
+				("inconsistent laundered page state %p %d",
+				 ch->cac_launder[i], ch->cac_backmap[i].cao_ino));
 	}
 
 	ca_checkstate(ch, CA_NOQUEUE);
@@ -599,6 +606,7 @@ ca_gc(struct chunkallocator *ca, size_t numblocks)
 	ca_checkstate(ch, CA_LAUNDER);
 	ch->cac_state = CA_NOQUEUE;
 
+	ca->ca_launder_surplus -= (CA_BLOCKS - ch->cac_blocks_used);
 	mtx_unlock(&ca->ca_mtx);
 
 	ca_gc_move(ca, ch, numblocks);
@@ -672,8 +680,10 @@ ca_tryalloc_txn(struct chunkallocator *ca, int ind, struct objsnap_txn *txn)
 	if ((ca->ca_launder_surplus < CA_SURPLUS_THRESHOLD) && (hot_cnt >= hot_threshold))
 		ca_age(ca);
 
-	if (ca->ca_free_cnt == 0)
+	if (ca->ca_free_cnt == 0) {
+		ca_print(ca);
 		panic("allocator full");
+	}
 
 	if (ca_tryalloc_fastpath(ca, ind, txn))
 		return (0);
