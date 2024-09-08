@@ -502,7 +502,7 @@ objsnap_dirty_page(struct objsnap_dirty_page_args *args)
 	index_t inode_i = args->os_index;
 	vm_page_t m;
 
-	if (set->d_cnt >= MAXDRTYCNT)
+	if (set->d_cnt > MAXDRTYCNT)
 		panic("Too many dirty pages in transaction %d\n", set->d_cnt);
 
 	m = usrptr_to_page(addr);
