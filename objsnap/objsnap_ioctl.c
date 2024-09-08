@@ -76,7 +76,6 @@ struct objsnap_vnode *vnode_cache = NULL;
 struct sema wr;
 uint64_t transaction_size = 0;
 uint64_t transaction_size_cnt = 0;
-vm_page_t hackpage;
 
 struct objsnap_txn tpgs[MAXTHREADS];
 
@@ -120,7 +119,7 @@ objsnap_io_uio(struct objsnap_txn *txn, size_t pgoff, size_t pgcnt, void *data)
 	int i;
 
 	for (i = 0; i < pgcnt; i++) {
-		aiov[i].iov_base = (void *)PHYS_TO_DMAP(hackpage->phys_addr);
+		aiov[i].iov_base = (void *)PHYS_TO_DMAP(txn->d_page[pgoff + i]->phys_addr);
 		aiov[i].iov_len = BLOCKSIZE;
 	}
 
@@ -243,7 +242,7 @@ objsnap_mktxn(int *mytids, size_t size_tids, struct objsnap_txn *txn)
 			KASSERT(txn->d_page[ind] != NULL, ("transaction includes NULL page"));
 			txn->d_index[ind] = tpgs[tmptid].d_index[j];
 			txn->d_inode[ind] = tpgs[tmptid].d_inode[j];
-			KASSERT(txn->d_index[ind] != 0, ("committing on invalid inode 0"));
+			KASSERT(txn->d_inode[ind] != 0, ("committing on invalid inode 0"));
 			ind += 1;
 		}
 		tpgs[tmptid].d_cnt = 0;
@@ -1015,8 +1014,6 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		global_txnid = 0;
 
 		objsnap_vncache_init();
-		hackpage = vm_page_alloc_freelist(VM_FREELIST_DEFAULT, VM_ALLOC_NORMAL | VM_ALLOC_NOOBJ | VM_ALLOC_WIRED);
-		printf("hackpages %p\n", (void *)PHYS_TO_DMAP(hackpage->phys_addr));
 
 		error = objsnap_osdata_init();
 		if (error != 0)

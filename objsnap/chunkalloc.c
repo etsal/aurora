@@ -81,6 +81,14 @@ ca_checkstate(struct ca_chunk *ch, enum ca_state state)
 	ca_checkused(ch);
 }
 
+static inline void
+ca_checkstate_unlocked(struct ca_chunk *ch, enum ca_state state)
+{
+	if (ch->cac_state != state)
+		panic("invalid chunk state %d, expected %d\n", ch->cac_state, state);
+	ca_checkused_unlocked(ch);
+}
+
 /*
  * Pop off the free list the chunk in index chind.
  */
@@ -225,9 +233,7 @@ ca_init_chunks(struct chunkallocator *ca)
 		ch->cac_state = CA_NOQUEUE;
 
 		bzero(ch->cac_backmap, sizeof(ch->cac_backmap[0]) * CA_BLOCKS);
-#if 0
 		bzero(ch->cac_launder, sizeof(ch->cac_launder[0]) * CA_BLOCKS);
-#endif
 
 		ptr.offset = ca_chind_to_offset(ca, i); 
 		ptr.size = CA_CHUNKSZ / BLOCKSIZE;
@@ -323,6 +329,10 @@ ca_print(struct chunkallocator *ca)
 	int i;
 
 	printf("===== CHUNK ALLOCATOR STATS =====\n");
+	if (ca->ca_chunk_cnt == 0) {
+		printf("Allocator uninitialized, exiting.\n");
+		return;
+	}
 	printf("Chunks: %ld\n", ca->ca_chunk_cnt);
 	printf("Blocks per chunk: %d\n", CA_BLOCKS);
 	printf("Hot list size in chunks: %ld\n", (ca->ca_chunk_cnt + ca->ca_hot_end - ca->ca_hot_start) % ca->ca_chunk_cnt);
@@ -392,15 +402,11 @@ ca_hot_to_launder(void *ctx, int __unused pending)
 	struct ca_hot_to_launder_args *args = (struct ca_hot_to_launder_args *)ctx;
 	struct chunkallocator *ca = args->ca;
 	struct ca_chunk *ch = args->ch;
-#if 0
 	struct bio *bp;
 	vm_page_t m;
 	int error;
 	int i;
-#endif
 
-	mtx_lock(&ch->cac_mtx);
-#if 0
 	for (i = 0; i < CA_BLOCKS; i++) {
 		if (ch->cac_backmap[i].cao_ino == 0)
 			continue;
@@ -422,14 +428,13 @@ ca_hot_to_launder(void *ctx, int __unused pending)
 
 		ch->cac_launder[i] = m;
 	}
-#endif
-
-	ch->cac_alloc_index = 0;
-	mtx_unlock(&ch->cac_mtx);
 
 	/* We hold the only reference to the chunk, since it has no queue. */
 	mtx_lock(&ca->ca_mtx);
-#if 0
+	mtx_lock(&ch->cac_mtx);
+
+	ch->cac_alloc_index = 0;
+
 	for (i = 0; i < CA_BLOCKS; i++) {
 		if (ch->cac_launder[i] != NULL && ch->cac_backmap[i].cao_ino == 0) {
 			vm_page_unwire_noq(ch->cac_launder[i]);
@@ -437,15 +442,16 @@ ca_hot_to_launder(void *ctx, int __unused pending)
 			ch->cac_launder[i] = NULL;
 		}
 
-		KASSERT((ch->cac_launder[i] == NULL) || (ch->cac_backmap[i].cao_ino == 0),
-				("inconsistent laundered page state %p %d",
+		KASSERT(((ch->cac_backmap[i].cao_ino == 0) || (ch->cac_launder[i] != NULL)),
+				("no launder page %p for allocation in chunk block (inode) %d",
 				 ch->cac_launder[i], ch->cac_backmap[i].cao_ino));
 	}
-#endif
 
-	ca_checkstate(ch, CA_NOQUEUE);
+	ca_checkstate_unlocked(ch, CA_NOQUEUE);
 	ch->cac_state = CA_LAUNDER;
 	TAILQ_INSERT_TAIL(&ca->ca_launder, ch, cac_next);
+
+	mtx_unlock(&ch->cac_mtx);
 	mtx_unlock(&ca->ca_mtx);
 
 	CA_COUNTER_INCREMENT(ca, op_age_io);
@@ -479,10 +485,6 @@ ca_age(struct chunkallocator *ca)
 			break;
 
 		ca->ca_launder_surplus += (CA_BLOCKS - chhot[chind]->cac_blocks_used);
-#if 0
-		if (ca->ca_launder_surplus >= CA_SURPLUS_THRESHOLD)
-			break;
-#endif
 	}
 
 	for (i = 0; i < chind; i++) {
@@ -594,29 +596,23 @@ ca_gc_move(struct chunkallocator *ca, struct ca_chunk *ch, size_t numblocks)
 	for (i = ch->cac_alloc_index; i < CA_BLOCKS; i++) {
 		if (ch->cac_backmap[i].cao_ino == 0) {
 			/* Did the block get freed while we were in the laundry list? */
-#if 0
 			if (ch->cac_launder[i] != NULL) {
 				vm_page_unwire_noq(ch->cac_launder[i]);
 				vm_page_free(ch->cac_launder[i]);
 				ch->cac_launder[i] = NULL;
 			}
-#endif
 			continue;
 		}
 
 		/* Populate the transaction with the page and remove it from the chunk. */
-#if 0
 		KASSERT(ch->cac_launder[i] != NULL, ("no laundered page for (%d, %ld %p %p)",
 					ch->cac_index, i, &ch->cac_launder[i], ch->cac_launder[i]));
-#endif
 
-		txn.d_page[txn.d_cnt] = hackpage;
+		txn.d_page[txn.d_cnt] = ch->cac_launder[i];
 		txn.d_inode[txn.d_cnt] = ch->cac_backmap[i].cao_ino;
 		txn.d_index[txn.d_cnt] = ch->cac_backmap[i].cao_off;
 
-#if 0
 		ch->cac_launder[i] = NULL;
-#endif
 
 		txn.d_cnt += 1;
 		if (txn.d_cnt == numblocks)
@@ -629,12 +625,10 @@ ca_gc_move(struct chunkallocator *ca, struct ca_chunk *ch, size_t numblocks)
 
 	objsnap_txn_commit(&txn, 0, false);
 
-#if 0
 	for (i = 0; i < txn.d_cnt; i++) {
 		vm_page_unwire_noq(txn.d_page[i]);
 		vm_page_free(txn.d_page[i]);
 	}
-#endif
 
 	CA_COUNTER_INCREMENT(ca, op_move);
 }
