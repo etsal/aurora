@@ -76,6 +76,7 @@ struct objsnap_vnode *vnode_cache = NULL;
 struct sema wr;
 uint64_t transaction_size = 0;
 uint64_t transaction_size_cnt = 0;
+vm_page_t hackpage;
 
 struct objsnap_txn tpgs[MAXTHREADS];
 
@@ -119,7 +120,7 @@ objsnap_io_uio(struct objsnap_txn *txn, size_t pgoff, size_t pgcnt, void *data)
 	int i;
 
 	for (i = 0; i < pgcnt; i++) {
-		aiov[i].iov_base = (void *)PHYS_TO_DMAP(txn->d_page[pgoff + i]->phys_addr);
+		aiov[i].iov_base = (void *)PHYS_TO_DMAP(hackpage->phys_addr);
 		aiov[i].iov_len = BLOCKSIZE;
 	}
 
@@ -191,7 +192,7 @@ objsnap_systemstats(struct objsnap_systemstats_args *args) {
 static void
 objsnap_wait_completion(int tid)
 {
-	const int threshold = 100000;
+	const int threshold = 1000000;
 	int times = 0;
 
 	for (times = 0; times < threshold; times++) {
@@ -734,7 +735,7 @@ check_within(uint64_t s, uint64_t e, int within, int mod) {
 }
  
 
-#define WAL_SYNCER_SIZE (1024)
+#define WAL_SYNCER_SIZE (128)
 static void
 objsnap_wal_syncer(void *ctx)
 {
@@ -1014,6 +1015,8 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		global_txnid = 0;
 
 		objsnap_vncache_init();
+		hackpage = vm_page_alloc_freelist(VM_FREELIST_DEFAULT, VM_ALLOC_NORMAL | VM_ALLOC_NOOBJ | VM_ALLOC_WIRED);
+		printf("hackpages %p\n", (void *)PHYS_TO_DMAP(hackpage->phys_addr));
 
 		error = objsnap_osdata_init();
 		if (error != 0)

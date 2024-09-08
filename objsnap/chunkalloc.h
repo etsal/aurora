@@ -1,13 +1,13 @@
 #ifndef __CHUNKALLOC_H__
 #define __CHUNKALLOC_H__
 
-#define CA_CHUNKSZ (1UL * 1024 * 1024)
+#define CA_CHUNKSZ (8UL * 1024 * 1024)
 #define CA_BLOCKS (2048)
 #define CA_COLD_BUCKETS (4)
 #define CA_SYSTEM_INO (0xFFFFFFFF)
-#define CA_COLD_LOAD_THRESHOLD (CA_BLOCKS / 2)
+#define CA_COLD_LOAD_THRESHOLD (9 * CA_BLOCKS / 10)
 #define CA_FREESLOTS (8)
-#define CA_HOT_CHUNKS_PERCENT (10)
+#define CA_HOT_CHUNKS_PERCENT (2)
 
 /* Dummy TID for the GC move thread. */
 #define CA_GC_TID (MAXTHREADS - 1)
@@ -80,7 +80,9 @@ struct ca_stats {
 	uint64_t 		cs_page_moves;
 	uint64_t 		cs_hot_blocks_used;
 	uint64_t 		cs_op_free;
+	uint64_t 		cs_op_gc_failed;
 	uint64_t 		cs_reclaimed_to_free;
+	uint64_t 		cs_op_age_io;
 };
 
 struct chunkallocator {

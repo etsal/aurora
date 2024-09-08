@@ -130,4 +130,6 @@ OS_STAT_DEFINE(DIRTY, 13);
 
 #define STAT_TO_ARGS(args, name) ((args)->os_stats[OS_STAT_##name]) = OS_TOSTAT_##name()
 
+extern vm_page_t hackpage;
+
 #endif

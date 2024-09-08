@@ -530,6 +530,7 @@ static void
 btnode_leaf_update(btnode_t node, int idx, void* value)
 {
   obj_diskptr_t *ptrp = (obj_diskptr_t *)&node->n_ch[idx + 1];
+  KASSERT(ptrp->offset < (superblock.super_size * BLOCKSIZE), ("offset too large"));
 
   KASSERT(BT_ISLEAF(node), ("MUST BE LEAF"));
   free_block_data(*ptrp);
