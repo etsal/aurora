@@ -9,7 +9,7 @@
 #define CA_SYSTEM_INO (0xFFFFFFFF)
 #define CA_COLD_LOAD_THRESHOLD (9 * CA_BLOCKS / 10)
 #define CA_FREESLOTS (8)
-#define CA_HOT_CHUNKS_PERCENT (2)
+#define CA_HOT_CHUNKS_PERCENT (4)
 
 /* Dummy TID for the GC move thread. */
 #define CA_GC_TID (MAXTHREADS - 1)
@@ -34,6 +34,7 @@ enum ca_state {
 	CA_SYSTEM,
 	CA_SYSTEM_FULL,
 	CA_LAUNDER,
+	CA_STATES,
 };
 
 struct ca_objid {

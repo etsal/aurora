@@ -47,6 +47,8 @@
 #include "alloc.h"
 #include "btree.h"
 
+SDT_PROVIDER_DEFINE(objsnap);
+
 #define MSG_NONE (0x0UL)
 #define MSG_CHECKPOINT (0x1UL)
 #define MSG_CHECKPOINTING (0x2UL)
@@ -63,6 +65,7 @@ static int objsnap_osdata_init_syncer(void);
 MALLOC_DEFINE(M_OBJSNAP, "objsnap", "objsnap");
 
 struct objsnap_txn tpgs[MAXTHREADS];
+vm_page_t hackpage;
 
 struct objsnap_metadata osdata;
 static uint64_t global_txnid;
@@ -910,7 +913,7 @@ objsnap_osdata_init(void)
 	osdata.os_tq = taskqueue_create("objsnap tasksqueue", M_WAITOK, 
 		taskqueue_thread_enqueue, &osdata.os_tq);
 
-	taskqueue_start_threads(&osdata.os_tq, MAXTHREADS, PI_DISK, "objsnap taskqueue");
+	taskqueue_start_threads(&osdata.os_tq, 1024, PI_DISK, "objsnap taskqueue");
 
 	/* Make the SLS available to userspace. */
 	error = make_dev_p(MAKEDEV_WAITOK | MAKEDEV_CHECKNAME, 
@@ -1005,6 +1008,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 	switch (inEvent) {
 	case MOD_LOAD:
 
+		hackpage = vm_page_alloc_freelist(VM_FREELIST_DEFAULT, VM_ALLOC_NORMAL | VM_ALLOC_NOOBJ);
 		bzero(tpgs, sizeof(struct objsnap_txn) * MAXTHREADS);
 		bzero(global_msgs, sizeof(uint64_t) * MAXTHREADS);
 
@@ -1032,6 +1036,7 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		objsnap_sysctl_fini();
 
+		vm_page_free(hackpage);
     		break;
 	default:
 		error = EOPNOTSUPP;

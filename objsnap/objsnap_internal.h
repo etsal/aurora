@@ -132,4 +132,6 @@ OS_STAT_DEFINE(DIRTY, 13);
 
 extern vm_page_t hackpage;
 
+SDT_PROVIDER_DECLARE(objsnap);
+
 #endif
