@@ -3,7 +3,9 @@
 
 #define CA_CHUNKSZ (8UL * 1024 * 1024)
 #define CA_BLOCKS (2048)
-#define CA_COLD_BUCKETS (4)
+#define CA_COLD_BUCKETS (1)
+#define CA_NOBUCKET (-1)
+
 #define CA_SYSTEM_INO (0xFFFFFFFF)
 #define CA_COLD_LOAD_THRESHOLD (9 * CA_BLOCKS / 10)
 #define CA_FREESLOTS (8)
@@ -11,11 +13,6 @@
 
 /* Dummy TID for the GC move thread. */
 #define CA_GC_TID (MAXTHREADS - 1)
-
-/*
- * This knob determines how full we keep the to-launder list.
- */
-#define CA_SURPLUS_THRESHOLD (CA_BLOCKS * 10)
 
 /* 
  * This knob determines the size of the hot list. The larger the ratio, the more
@@ -56,6 +53,7 @@ struct ca_chunk {
 	uint64_t 		cac_blocks_used;
 	uint64_t 		cac_alloc_index;
 	enum ca_state		cac_state;
+	uint8_t			cac_cold_bucket;
 	TAILQ_ENTRY(ca_chunk)	cac_next;
 	vm_page_t		cac_launder[CA_BLOCKS];
 };
@@ -68,6 +66,7 @@ struct ca_stats {
 	uint64_t 		cs_hot_to_cold;
 	uint64_t 		cs_hot_to_launder;
 	uint64_t 		cs_cold_to_launder;
+	uint64_t 		cs_cold_to_free;
 	uint64_t 		cs_launder_to_cold;
 	uint64_t 		cs_free_to_system;
 	uint64_t 		cs_system_to_full;
@@ -83,6 +82,8 @@ struct ca_stats {
 	uint64_t 		cs_op_gc_failed;
 	uint64_t 		cs_reclaimed_to_free;
 	uint64_t 		cs_op_age_io;
+	uint64_t 		cs_page_alloc;
+	uint64_t 		cs_page_free;
 };
 
 struct chunkallocator {
@@ -107,7 +108,7 @@ struct chunkallocator {
 	uint64_t		ca_hot_end;
 
 	/* Chunks that hold less recently accessed data. */
-	struct ca_chunk		**ca_cold[CA_COLD_BUCKETS + 1];
+	struct ca_system_list	ca_cold[CA_COLD_BUCKETS];
 	uint64_t		ca_cold_cnt[CA_COLD_BUCKETS + 1];
 
 	/* Chunk lists for system blocks (used for inodes/bnodes). */
@@ -115,7 +116,7 @@ struct chunkallocator {
 	struct ca_system_list		ca_system_full;
 
 	struct ca_system_list		ca_launder;
-	uint64_t			ca_launder_surplus;
+	uint64_t			ca_launder_cnt;
 	struct ca_chunk			*ca_launder_dst;
 
 	struct ca_stats			ca_stats;
