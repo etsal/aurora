@@ -7,7 +7,7 @@
 #define CA_NOBUCKET (-1)
 
 #define CA_SYSTEM_INO (0xFFFFFFFF)
-#define CA_COLD_LOAD_THRESHOLD (9 * CA_BLOCKS / 10)
+#define CA_COLD_LOAD_THRESHOLD (3 * CA_BLOCKS / 10)
 #define CA_FREESLOTS (8)
 #define CA_HOT_CHUNKS_PERCENT (4)
 
@@ -85,6 +85,8 @@ struct ca_stats {
 	uint64_t 		cs_op_age_io;
 	uint64_t 		cs_page_alloc;
 	uint64_t 		cs_page_free;
+	uint64_t 		cs_page_launder;
+	uint64_t 		cs_page_reclaim;
 };
 
 struct chunkallocator {

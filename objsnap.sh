@@ -9,6 +9,12 @@ stat -x /dev/objsnap
 
 sysctl -f conf.sys 2> /dev/null
 
+./scripts/objsnap.d > ./dtrace_results &
+sleep 1
+
 ./tools/new_objsnap/new_objsnap "$@"
+
+pkill dtrace
+sleep 2
 
 kldunload objsnap

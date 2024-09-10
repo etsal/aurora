@@ -323,7 +323,7 @@ print_stat(struct timerstat stat, uint64_t to_unit)
 	printf("Timer %s: avg(%lu), cnt(%lu), sum(%lu)\n", stat.name, stat.avg / to_unit, stat.cnt, stat.sum / to_unit);
 }
 
-static void
+void
 objsnap_printstats(void)
 {
 	uint64_t before = rdtscp();

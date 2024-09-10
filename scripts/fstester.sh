@@ -4,7 +4,7 @@ DISK="/dev/nvd0"
 ARGS="--name=random_write_fsync --filename=/testmnt/test --rw=randwrite --runtime=60 --group_reporting --new_group"
 PRINT=""
 NUM_OBJECTS="1"
-SIZE_OBJECT="10"
+SIZE_OBJECT="1"
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 run() {
 	iostat -d nvd0 1 > /tmp/gstat.out &
@@ -109,7 +109,7 @@ run_once_objsnap() {
 	IOSTAT=$(pgrep iostat)
 	sleep 2
 	$SCRIPT_DIR/../objsnap.sh -p /dev/nvd0 -t $1 -d $3 \
-		-r 60 $PRINT -o $NUM_OBJECTS -g $SIZE_OBJECT > backingfile &
+		-r 600 $PRINT -o $NUM_OBJECTS -g $SIZE_OBJECT > backingfile &
 	WAITFOR=$!
 	echo $WAITFOR
 	sleep 5
@@ -178,8 +178,8 @@ benchmark_fses() {
 	test_objsnap $THREADS "$OUT" "1"
 	#test_ffs_journal $THREADS "$OUT"
 	#test_ffs_bs $THREADS "$OUT"
-	test_ffs $THREADS "$OUT"
-	test_zfs $THREADS "$OUT"
+	#test_ffs $THREADS "$OUT"
+	#test_zfs $THREADS "$OUT"
 }
 
 benchmark_ckpt_size() {
@@ -187,13 +187,15 @@ benchmark_ckpt_size() {
 	MAXDIRTYSET=8
 	truncate -s 0 "$DIRTYSETOUT"
 	echo "fs,num_threads,num_objects,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu" >> "$DIRTYSETOUT"
-	export NUM_OBJECTS="5"
-	export SIZE_OBJECT="2"
-	test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
-	export SIZE_OBJECT="10"
+	#export NUM_OBJECTS="5"
+	#export SIZE_OBJECT="2"
+	#test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+	export SIZE_OBJECT="1"
 	export NUM_OBJECTS="1"
-	test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
-	test_zfs_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+	#test_objsnap_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+
+	run_once_objsnap $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
+	#test_zfs_dirtyset $THREADS "$DIRTYSETOUT" $MAXDIRTYSET
 }
 
 benchmark_wait_time() {
@@ -264,6 +266,6 @@ benchmark_wait_time() {
 }
 
 THREADS=24
-benchmark_fses
+#benchmark_fses
 benchmark_ckpt_size
-benchmark_wait_time
+#benchmark_wait_time
