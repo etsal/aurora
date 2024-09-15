@@ -34,6 +34,7 @@ enum ca_state {
 	CA_SYSTEM,
 	CA_SYSTEM_FULL,
 	CA_LAUNDER,
+	CA_BLKALLOC,
 	CA_STATES,
 };
 
@@ -57,6 +58,7 @@ struct ca_chunk {
 	uint8_t			cac_cold_bucket;
 	TAILQ_ENTRY(ca_chunk)	cac_next;
 	vm_page_t		cac_launder[CA_BLOCKS];
+	size_t			cac_movable;
 };
 
 struct ca_stats {
@@ -87,6 +89,7 @@ struct ca_stats {
 	uint64_t 		cs_page_free;
 	uint64_t 		cs_page_launder;
 	uint64_t 		cs_page_reclaim;
+	uint64_t 		cs_op_cleanup_successful;
 };
 
 struct chunkallocator {
@@ -132,5 +135,7 @@ void ca_print(struct chunkallocator *ca);
 int ca_alloc_txn(struct chunkallocator *ca, int tid, struct objsnap_txn *txn);
 int ca_alloc_system(struct chunkallocator *ca, obj_diskptr_t *ptr);
 void ca_gc(struct chunkallocator *ca, size_t numblocks);
+
+void ca_integrity_check(void);
 
 #endif /* __CHUNKALLOCATOR_H_ */

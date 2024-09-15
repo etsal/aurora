@@ -848,7 +848,7 @@ objsnap_wal_syncer(void *ctx)
 
 	printf("Starting checkpoint!\n");
 	while (osdata.os_syncer_exit == OBJSYNC_RUNNING) {
-		objsnap_wal_trigger_sync(WAL_SYNCER_SIZE);
+		objsnap_wal_trigger_sync(WAL_SYNCER_SIZE / 4);
 
 		pause_sbt("waiting to checkpoint", 10 * SBT_1US, 0 ,0);
 	}

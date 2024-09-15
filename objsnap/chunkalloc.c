@@ -16,6 +16,7 @@
 #include "objsnap_common.h"
 #include "objsnap_internal.h"
 #include "chunkalloc.h"
+#include "alloc.h"
 
 #define CA_COUNTER(ca, counter) ((ca)->ca_stats.cs_ ## counter)
 #define CA_COUNTER_INCREMENT(ca, counter) do { CA_COUNTER(ca, counter)++; } while (0)
@@ -112,6 +113,7 @@ cac_free_pop(struct chunkallocator *ca, struct ca_chunk **chp)
 	ca_checkstate(ch, CA_FREE);
 	ch->cac_state = CA_NOQUEUE;
 
+	ca->ca_free[chind] = NULL;
 	ca->ca_free_cnt -= 1;
 
 	CA_COUNTER_INCREMENT(ca, pop_from_free);
@@ -119,6 +121,42 @@ cac_free_pop(struct chunkallocator *ca, struct ca_chunk **chp)
 	*chp = ch;
 
 	ca_checkused(ch);
+}
+
+void
+ca_integrity_check(void)
+{
+	struct chunkallocator *ca = &alloc.alloc_impl.ca;
+	obj_diskptr_t expected, found;
+	struct objsnap_vnode *vnode;
+	uint64_t ino, off;
+	int i, j;
+
+	printf("Missing blocks: ");
+	for (i = 0; i < ca->ca_chunk_cnt; i++) {
+		if (ca->ca_chunks[i].cac_state != CA_NOQUEUE)
+			continue;
+
+		ca_checkused(&ca->ca_chunks[i]);
+		for (j = 0; j < CA_BLOCKS; j++) {
+			ino = ca->ca_chunks[i].cac_backmap[j].cao_ino;
+			if (ino == 0)
+				continue;
+
+
+			off = ca->ca_chunks[i].cac_backmap[j].cao_off;
+			expected.offset = ca->ca_chunks[i].cac_ptr.offset + j;
+			expected.size = 1;
+			/* Find the tree */
+
+			vnode = &vnode_cache[ino];
+			vtree_find(&vnode->v_tree, off, &found);
+			if (found.offset != expected.offset)
+				printf("[%x (found %x)] ", expected.offset, found.offset);
+		}
+	}
+	printf("\n");
+
 }
 
 static void
@@ -205,7 +243,6 @@ cac_to_cold(struct chunkallocator *ca, struct ca_chunk *ch)
 	ch->cac_cold_bucket = bucket;
 	ca->ca_cold_cnt[bucket] += 1;
 	KASSERT(ca->ca_cold_cnt[bucket] < ca->ca_chunk_cnt, ("cold list index overflow"));
-
 }
 
 static void
@@ -229,6 +266,34 @@ cac_from_cold(struct chunkallocator *ca, struct ca_chunk *ch)
 	ch->cac_state = CA_NOQUEUE;
 
 	ch->cac_cold_bucket = CA_NOBUCKET;
+}
+
+static void
+cac_free_to_alloc(struct chunkallocator *ca, struct ca_chunk **chp)
+{
+	struct ca_chunk *ch;
+
+	cac_free_pop(ca, &ch);
+	ca_checkstate(ch, CA_NOQUEUE);
+	ch->cac_state = CA_BLKALLOC;
+
+	*chp = ch;
+}
+
+static void
+cac_alloc_to_hot(struct chunkallocator *ca, struct ca_chunk *ch)
+{
+	ca_checkstate(ch, CA_BLKALLOC);
+	ch->cac_state = CA_NOQUEUE;
+	cac_to_hot(ca, ch);
+}
+
+static void
+cac_alloc_to_cold(struct chunkallocator *ca, struct ca_chunk *ch)
+{
+	ca_checkstate(ch, CA_BLKALLOC);
+	ch->cac_state = CA_NOQUEUE;
+	cac_to_cold(ca, ch);
 }
 
 static void
@@ -376,13 +441,28 @@ ca_print(struct chunkallocator *ca)
 	for (i = 0; i < ca->ca_chunk_cnt; i++) {
 		if (ca->ca_chunks[i].cac_state == CA_NOQUEUE) {
 			ca_checkused(&ca->ca_chunks[i]);
-			printf("%ld ", ca->ca_chunks[i].cac_blocks_used);
-			nom += ca->ca_chunks[i].cac_blocks_used;
-			denom += 1;
+			printf("%ld, ", ca->ca_chunks[i].cac_blocks_used);
 		}
 	}
 	printf("\n");
 
+	for (i = 0; i < ca->ca_chunk_cnt; i++) {
+		if (ca->ca_chunks[i].cac_state != CA_NOQUEUE)
+			continue;
+
+		printf("[%d] ", i);
+		for (int j = 0; j < CA_BLOCKS; j++) {
+			if (ca->ca_chunks[i].cac_backmap[j].cao_ino == 0)
+				continue;
+			printf("%d ", j);
+		}
+		nom += ca->ca_chunks[i].cac_blocks_used;
+		denom += 1;
+		printf("\n");
+	}
+	printf("\n");
+
+	printf("Successful cleanups: %ld\n", CA_COUNTER(ca, op_cleanup_successful));
 	printf("Chunks without a queue: %ld (total load %ld, average load %ld)\n",
 			denom, nom, denom ? nom / denom : denom);
 
@@ -481,6 +561,8 @@ ca_launder_task(void *ctx, int __unused pending)
 	int error;
 #endif
 
+	ch->cac_movable = 0;
+
 	SDT_PROBE0(objsnap, , , chunk_launder_start);
 	for (i = 0; i < CA_BLOCKS; i++) {
 		if (ch->cac_backmap[i].cao_ino == 0)
@@ -505,6 +587,8 @@ ca_launder_task(void *ctx, int __unused pending)
 
 		ch->cac_launder[i] = hackpage;
 		CA_COUNTER_INCREMENT(ca, page_launder);
+
+		ch->cac_movable += 1;
 	}
 
 	/* We hold the only reference to the chunk, since it has no queue. */
@@ -519,6 +603,8 @@ ca_launder_task(void *ctx, int __unused pending)
 			vm_page_free(ch->cac_launder[i]);
 #endif
 			ch->cac_launder[i] = NULL;
+			printf("[%d %ld]", ch->cac_index, ch->cac_alloc_index);
+			ch->cac_movable -= 1;
 		}
 
 		KASSERT(((ch->cac_backmap[i].cao_ino == 0) || (ch->cac_launder[i] != NULL)),
@@ -627,7 +713,7 @@ ca_blkalloc(struct ca_chunk *ch, struct objsnap_txn *txn, struct chunkallocator 
 	KASSERT(ch->cac_alloc_index >= ch->cac_blocks_used,
 			("block allocation inconsistency alloc_index is %ld vs blocks_used %ld",
 			 ch->cac_alloc_index, ch->cac_blocks_used));
-	ca_checkused_unlocked(ch);
+	ca_checkstate_unlocked(ch, CA_BLKALLOC);
 
 	/* Scan all sectors till we find a free one. */
 	for (i = 0; i < numblocks ; i++) {
@@ -667,13 +753,18 @@ ca_gc_mktxn(struct ca_chunk *ch, size_t numblocks, struct objsnap_txn *txn, vm_p
 				vm_page_free(ch->cac_launder[i]);
 #endif
 				ch->cac_launder[i] = NULL;
+				printf("[%d %ld]", ch->cac_index, ch->cac_alloc_index);
 			}
 			continue;
 		}
 
 		/* Populate the transaction with the page and remove it from the chunk. */
+		if (ch->cac_launder[i] == NULL)
+			continue;
+#if 0
 		KASSERT(ch->cac_launder[i] != NULL, ("no laundered page for (%d, %ld %p %p)",
 					ch->cac_index, i, &ch->cac_launder[i], ch->cac_launder[i]));
+#endif
 
 		/* Count and page list saved for later. */
 		ma[*cnt] = ch->cac_launder[i];
@@ -684,13 +775,14 @@ ca_gc_mktxn(struct ca_chunk *ch, size_t numblocks, struct objsnap_txn *txn, vm_p
 		txn->d_index[txn->d_cnt] = ch->cac_backmap[i].cao_off;
 
 		ch->cac_launder[i] = NULL;
+		ch->cac_movable -= 1;
 
 		txn->d_cnt += 1;
 		if (txn->d_cnt >= numblocks)
 			break;
 	}
 
-	ch->cac_alloc_index = min(i + 1, CA_BLOCKS);
+	ch->cac_alloc_index = min(i, CA_BLOCKS);
 
 	mtx_unlock(&ch->cac_mtx);
 }
@@ -711,7 +803,7 @@ ca_gc_move(struct chunkallocator *ca, struct ca_chunk *ch, size_t numblocks)
 	mtx_lock(&ca->ca_mtx);
 	if (ca->ca_launder_dst == NULL) {
 		CA_COUNTER_INCREMENT(ca, free_to_launder);
-		cac_free_pop(ca, &ca->ca_launder_dst);
+		cac_free_to_alloc(ca, &ca->ca_launder_dst);
 	}
 
 	distch = ca->ca_launder_dst;
@@ -727,8 +819,8 @@ ca_gc_move(struct chunkallocator *ca, struct ca_chunk *ch, size_t numblocks)
 
 	if (distch->cac_alloc_index == CA_BLOCKS) {
 		CA_COUNTER_INCREMENT(ca, launder_to_cold);
-		ca_checkstate(distch, CA_NOQUEUE);
-		cac_to_cold(ca, distch);
+		ca_checkstate(distch, CA_BLKALLOC);
+		cac_alloc_to_cold(ca, distch);
 		KASSERT(ca->ca_launder_dst == distch, ("inconsistent launder target"));
 		ca->ca_launder_dst = NULL;
 	}
@@ -791,6 +883,10 @@ ca_gc(struct chunkallocator *ca, size_t numblocks)
 			ch->cac_alloc_index = 0;
 			cac_to_free(ca, ch);
 		}
+		if (ch->cac_movable != 0)
+			printf("[%ld MOVABLE in %d]", ch->cac_movable, ch->cac_index);
+
+		CA_COUNTER_INCREMENT(ca, op_cleanup_successful);
 		mtx_unlock(&ch->cac_mtx);
 		mtx_unlock(&ca->ca_mtx);
 		return;
@@ -799,6 +895,7 @@ ca_gc(struct chunkallocator *ca, size_t numblocks)
 	ca_checkstate_unlocked(ch, CA_NOQUEUE);
 	ch->cac_state = CA_LAUNDER;
 	TAILQ_INSERT_HEAD(&ca->ca_launder, ch, cac_next);
+	ca->ca_launder_cnt += 1;
 
 	mtx_unlock(&ch->cac_mtx);
 	mtx_unlock(&ca->ca_mtx);
@@ -809,12 +906,15 @@ ca_gc(struct chunkallocator *ca, size_t numblocks)
 static bool
 ca_tryalloc_fastpath(struct chunkallocator *ca, int ind, struct objsnap_txn *txn)
 {
-	struct ca_chunk *ch = ca->ca_free_slots[ind];
+	struct ca_chunk *ch;
 
 	KASSERT(ind >= 0, ("negative slot index"));
 	KASSERT(ind < CA_FREESLOTS, ("slot index too large"));
 
 	mtx_lock(&ca->ca_slot_mtx[ind]);
+
+	ch = ca->ca_free_slots[ind];
+
 	if ((ch == NULL) || (ch->cac_alloc_index + txn->d_cnt > CA_BLOCKS)) {
 		mtx_unlock(&ca->ca_slot_mtx[ind]);
 		return (false);
@@ -843,9 +943,9 @@ ca_tryalloc_fastpath_fix(struct chunkallocator *ca, int ind)
 	CA_COUNTER_INCREMENT(ca, op_alloc_fast_fail);
 
 	if (*chp != NULL)
-		cac_to_hot(ca, *chp);
+		cac_alloc_to_hot(ca, *chp);
 
-	cac_free_pop(ca, chp);
+	cac_free_to_alloc(ca, chp);
 	ch = *chp;
 
 	KASSERT(ca_offset_to_chind(ca, ch->cac_ptr.offset) == ch->cac_index,
@@ -1066,6 +1166,7 @@ ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 
 		/* No need to clean the page anymore. */
 		if (ch->cac_launder[ind] != 0) {
+			ch->cac_movable -= 1;
 #if 0
 			vm_page_free(ch->cac_launder[ind]);
 #endif
