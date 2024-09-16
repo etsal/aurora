@@ -127,7 +127,13 @@ msnp_page_track(vm_offset_t vaddr, struct pglist *pglist, vm_page_t m)
 {
 	vm_page_lock(m);
 
-	TAILQ_INSERT_HEAD(pglist, m, snapq);
+	if (m->vaddr != 0) {
+		vm_page_unlock(m);
+		return;
+	}
+
+	TAILQ_INSERT_TAIL(pglist, m, snapq);
+	KASSERT(m->vaddr == 0, ("tracking page w/ preexisting vaddr %lx (new address %lx)", m->vaddr, vaddr));
 	m->vaddr = vaddr;
 
 	atomic_add_64(&msnp_inserts, 1);
@@ -139,6 +145,7 @@ static void
 msnp_page_untrack_unlocked(struct pglist *pglist, vm_page_t m)
 {
 
+	KASSERT(m->vaddr != 0, ("untracking page w/o vaddr"));
 	m->vaddr = 0;
 	TAILQ_REMOVE(pglist, m, snapq);
 
