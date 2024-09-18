@@ -12,7 +12,7 @@ extern "C" {
 
 #define SLS_SAS_INITADDR (0x600000000000ULL)
 #define SLS_SAS_MAXADDR (0x700000000000ULL)
-#define MAX_SAS_SIZE (5UL * 1024 * 1024 * 1024)
+#define MAX_SAS_SIZE (20UL * 1024 * 1024 * 1024)
 
 int slsfs_sas_create(char *path, size_t size);
 int slsfs_sas_map(int fd, void **addrp);
