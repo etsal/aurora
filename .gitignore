@@ -135,3 +135,5 @@ backingfile
 
 memsnap/opt_global.h
 memsnap/i386
+dirtyset
+dtrace_results

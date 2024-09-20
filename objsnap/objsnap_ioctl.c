@@ -49,6 +49,8 @@
 
 SDT_PROVIDER_DEFINE(objsnap);
 
+uint8_t *objbit;
+
 #define MSG_NONE (0x0UL)
 #define MSG_CHECKPOINT (0x1UL)
 #define MSG_CHECKPOINTING (0x2UL)
@@ -545,6 +547,9 @@ superblock_init(struct vnode *vp)
 	memcpy(&superblock, bp->b_data, sizeof(super_t));
 	brelse(bp);
 	printf("Size of disk %zu\n", superblock.super_size);	
+
+	objbit = malloc(sizeof(*objbit) * superblock.super_size, M_TEMP, M_ZERO | M_WAITOK);
+	bzero(objbit, sizeof(*objbit) * superblock.super_size);
 	return (0);
 };
 
@@ -643,6 +648,7 @@ objsnap_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag __unused,
 		if (superblock.super_bsize == 0) {
 			error = -1;
 		}
+
 		break;
 
 	case OBJSNAP_CHECKPOINT:
@@ -798,6 +804,32 @@ objsnap_wal_update_trees(index_t *inode_i, size_t inode_cnt)
 		// Move the deadlist to free list
 		movelist(&tree->tr_freeme, &tree->tr_deadlist);
 	}
+}
+
+/*
+ * WARNING: This routine is for debugging purposes only and cannot be run while
+ * the store is servicing transactions.
+ */
+bool
+objsnap_wal_search(uint32_t offset)
+{
+	struct objsnap_wal_entry set;
+	uint64_t head, tail;
+	uint64_t ind, i;
+
+
+	objsnap_wal_get_bounds(&head, &tail);
+
+	for (ind = tail; ind != head; ind = (ind + 1) % MAX_WAL_ENTRIES) {
+		set = wal_entries[ind];
+		for (i = 0; i < set.we_cnt; i++) {
+			if (set.we_ptrs[i].w_offset == offset)
+				return (true);
+			
+		}
+	}
+
+	return (false);
 }
 
 static void
@@ -1063,6 +1095,8 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		if (error != 0)
 			return (error);
 
+		printf("Super size %ld\n", superblock.super_size);
+		objbit = NULL;
 		break;
 	case MOD_UNLOAD:
 		printf("Transaction sizes %lu\n", transaction_size);
@@ -1076,6 +1110,8 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 
 		objsnap_sysctl_fini();
 
+		if (objbit != NULL)
+			free(objbit, M_TEMP);
 		vm_page_free(hackpage);
     		break;
 	default:

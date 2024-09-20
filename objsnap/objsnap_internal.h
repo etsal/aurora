@@ -132,6 +132,9 @@ OS_STAT_DEFINE(DIRTY, 13);
 
 extern vm_page_t hackpage;
 void objsnap_printstats(void);
+bool objsnap_wal_search(uint32_t offset);
+
+extern uint8_t *objbit;
 
 SDT_PROVIDER_DECLARE(objsnap);
 

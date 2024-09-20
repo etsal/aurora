@@ -1,2 +1,0 @@
-fs,num_threads,num_objects,dirty_size,iops,lat_ns,lat_99_ns,goodput_mib,throughput_mib,disk_iops,avgcpu
-objsnap, 1, 2, 32768, 3608.000000, 251144.423578, 365462, 225.531250, 258.24, 15290, 

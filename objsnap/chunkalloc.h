@@ -54,11 +54,13 @@ struct ca_chunk {
 
 	uint64_t 		cac_blocks_used;
 	uint64_t 		cac_alloc_index;
+	uint64_t 		cac_clean_index;
 	enum ca_state		cac_state;
 	uint8_t			cac_cold_bucket;
 	TAILQ_ENTRY(ca_chunk)	cac_next;
 	vm_page_t		cac_launder[CA_BLOCKS];
 	size_t			cac_movable;
+	int			cac_laundered;
 };
 
 struct ca_stats {
@@ -102,6 +104,7 @@ struct chunkallocator {
 
 	/* Free slots for quick sharded allocations. */
 	struct ca_chunk		*ca_free_slots[CA_FREESLOTS];
+	struct ca_chunk		*ca_launder_slots[CA_FREESLOTS];
 	struct mtx		ca_slot_mtx[CA_FREESLOTS];
 
 	/* Free chunks for servicing allocations. */

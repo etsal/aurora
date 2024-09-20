@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 
-DISK="/dev/nvd0"
+DISK="/dev/vtbd1"
 ARGS="--name=random_write_fsync --filename=/testmnt/test --rw=randwrite --runtime=60 --group_reporting --new_group"
 PRINT=""
 NUM_OBJECTS="1"
 SIZE_OBJECT="1"
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 run() {
-	iostat -d nvd0 1 > /tmp/gstat.out &
+	iostat -d vtbd1 1 > /tmp/gstat.out &
 	sleep 2
 	IOSTAT_PID=$!
 	fio $ARGS --iodepth=1 --fsync=1 --numjobs=$1 --size=10G --output=/tmp/run.out --output-format=json --bs="$4" &
@@ -16,7 +16,7 @@ run() {
 	sleep 5
 	kill -SIGINT $IOSTAT_PID
 	lines=$(wc -l /tmp/gstat.out)
-	grep -v 'nvd0' /tmp/gstat.out > /tmp/temp
+	grep -v 'vtbd1' /tmp/gstat.out > /tmp/temp
 	grep -v 'tps' /tmp/temp > /tmp/gstat.out
 	throughput_mib=$(cat /tmp/gstat.out | tail -n +2 | awk '{ sum += $3} END { print sum }')
 	disk_iops=$(cat /tmp/gstat.out | tail -n +2 | awk '{ sum += $2 } END { print sum }')
@@ -105,11 +105,11 @@ test_ffs_bs() {
 }
 
 run_once_objsnap() {
-	iostat -hd nvd0 1 > /tmp/gstat.out &
+	iostat -hd vtbd1 1 > /tmp/gstat.out &
 	IOSTAT=$(pgrep iostat)
 	sleep 2
-	$SCRIPT_DIR/../objsnap.sh -p /dev/nvd0 -t $1 -d $3 \
-		-r 600 $PRINT -o $NUM_OBJECTS -g $SIZE_OBJECT > backingfile &
+	$SCRIPT_DIR/../objsnap.sh -p /dev/vtbd1 -t $1 -d $3 \
+		-r 20 $PRINT -o $NUM_OBJECTS -g $SIZE_OBJECT > backingfile &
 	WAITFOR=$!
 	echo $WAITFOR
 	sleep 5
@@ -118,7 +118,7 @@ run_once_objsnap() {
 	cpu=$(top -p "$PID" -Hb | tail -n +7 | awk '{ print $10 }' | sed 's/.$//' | awk '{ sum += $1; n++ } END { print sum / n;}')
 	wait "$WAITFOR"
 	kill -INT "$IOSTAT"
-	grep -v 'nvd0' /tmp/gstat.out > /tmp/temp
+	grep -v 'vtbd1' /tmp/gstat.out > /tmp/temp
 	grep -v 'tps' /tmp/temp > /tmp/gstat.out
 	lines=$(wc -l /tmp/gstat.out | awk '{ print $1}')
 	throughput_mbs=$(cat /tmp/gstat.out | tail -n +2 | awk '{ sum += $3 } END { print sum }')
