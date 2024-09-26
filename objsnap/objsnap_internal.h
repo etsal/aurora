@@ -134,7 +134,7 @@ extern vm_page_t hackpage;
 void objsnap_printstats(void);
 bool objsnap_wal_search(uint32_t offset);
 
-extern uint8_t *objbit;
+extern uint32_t *objbit;
 
 SDT_PROVIDER_DECLARE(objsnap);
 

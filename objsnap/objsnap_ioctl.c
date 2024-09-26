@@ -49,7 +49,7 @@
 
 SDT_PROVIDER_DEFINE(objsnap);
 
-uint8_t *objbit;
+uint32_t *objbit;
 
 #define MSG_NONE (0x0UL)
 #define MSG_CHECKPOINT (0x1UL)
@@ -431,7 +431,6 @@ objsnap_checkpoint_txn(int tid)
 		panic("Did not actually get checkpointed\n");
 	OS_STOP(WRITERS, &writers_time);
 
-
 	return;
 }
 
@@ -547,7 +546,6 @@ superblock_init(struct vnode *vp)
 	memcpy(&superblock, bp->b_data, sizeof(super_t));
 	brelse(bp);
 	printf("Size of disk %zu\n", superblock.super_size);	
-
 	objbit = malloc(sizeof(*objbit) * superblock.super_size, M_TEMP, M_ZERO | M_WAITOK);
 	bzero(objbit, sizeof(*objbit) * superblock.super_size);
 	return (0);
@@ -863,7 +861,10 @@ objsnap_wal_trigger_sync(size_t sync_size)
 	if (ckpt_flush)
 		VOP_FSYNC(osdata.os_vp, MNT_WAIT, curthread);
 
-	atomic_store_64(&alloc.alloc_walptr_tail, (alloc.alloc_walptr_tail + sync_size) % MAX_WAL_ENTRIES);
+	lockmgr(&alloc.alloc_lk, LK_EXCLUSIVE, 0);
+	alloc.alloc_walptr_tail = (alloc.alloc_walptr_tail + sync_size) % MAX_WAL_ENTRIES;
+	lockmgr(&alloc.alloc_lk, LK_RELEASE, 0);
+
 	OS_STOP(INODE,&before);
 
 	mtx_lock(&osdata.os_syncer_lk);
@@ -880,7 +881,7 @@ objsnap_wal_syncer(void *ctx)
 
 	printf("Starting checkpoint!\n");
 	while (osdata.os_syncer_exit == OBJSYNC_RUNNING) {
-		objsnap_wal_trigger_sync(WAL_SYNCER_SIZE / 4);
+		objsnap_wal_trigger_sync(WAL_SYNCER_SIZE);
 
 		pause_sbt("waiting to checkpoint", 10 * SBT_1US, 0 ,0);
 	}
@@ -1095,7 +1096,6 @@ objsnapHandler(struct module *inModule, int inEvent, void *inArg)
 		if (error != 0)
 			return (error);
 
-		printf("Super size %ld\n", superblock.super_size);
 		objbit = NULL;
 		break;
 	case MOD_UNLOAD:

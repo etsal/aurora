@@ -58,6 +58,8 @@ cac_movable_add(struct ca_chunk *ch, size_t ind)
 	ch->cac_movable += 1;
 	ch->cac_laundered += 1;
 
+	KASSERT(ch->cac_backmap[ind].cao_state == CA_BLKALLOC, ("improper allocated page state"));
+	ch->cac_backmap[ind].cao_state = CA_LAUNDER;
 	/* XXX Attach the real page */
 }
 
@@ -73,6 +75,12 @@ cac_movable_remove(struct ca_chunk *ch, size_t ind)
 	ch->cac_movable -= 1;
 	KASSERT(ch->cac_laundered > 0, ("no laundered blocks to free"));
 	ch->cac_laundered -= 1;
+
+	if (ch->cac_backmap[ind].cao_state == CA_FREE)
+		return;
+
+	KASSERT(ch->cac_backmap[ind].cao_state == CA_LAUNDER, ("improper laundered page state %d", ch->cac_backmap[ind].cao_state));
+	ch->cac_backmap[ind].cao_state = CA_HOT;
 	/* XXX Free the real page */
 }
 
@@ -347,8 +355,12 @@ ca_init_chunks(struct chunkallocator *ca)
 		ch->cac_cold_bucket = CA_NOBUCKET;
 		ch->cac_laundered = 0;
 
-		bzero(ch->cac_backmap, sizeof(ch->cac_backmap[0]) * CA_BLOCKS);
 		bzero(ch->cac_launder, sizeof(ch->cac_launder[0]) * CA_BLOCKS);
+		for (int j = 0; j < CA_BLOCKS; j++) {
+			ch->cac_backmap[j].cao_ino = 0;
+			ch->cac_backmap[j].cao_off = 0;
+			ch->cac_backmap[j].cao_state = CA_FREE;
+		}
 
 		ptr.offset = ca_chind_to_offset(ca, i); 
 		ptr.size = CA_CHUNKSZ / BLOCKSIZE;
@@ -360,12 +372,17 @@ void
 ca_init(struct chunkallocator *ca, uint64_t startoff, size_t numblocks)
 {
 	size_t diskbytes;
+	size_t roundup;
 	int i;
 
 	bzero(ca, sizeof(*ca));
 	mtx_init(&ca->ca_mtx, "objcamtx", NULL, MTX_DEF);
 
-	ca->ca_startoff = startoff;
+	/* Align the starting offset to the next chunk boundary. */
+	roundup = ((startoff + CA_BLOCKS - 1) / CA_BLOCKS) * CA_BLOCKS;
+	numblocks -= (roundup - numblocks);
+
+	ca->ca_startoff = roundup;
 
 	/* All chunks in the allocator. */
 	diskbytes = numblocks * BLOCKSIZE;
@@ -483,33 +500,34 @@ ca_print(struct chunkallocator *ca)
 	printf("Loads: ");
 	nom = denom = 0;
 	for (i = 0; i < ca->ca_chunk_cnt; i++) {
-		if (ca->ca_chunks[i].cac_state == CA_NOQUEUE) {
-			ca_checkused(&ca->ca_chunks[i]);
-			nom += 1;
-			KASSERT(ca->ca_chunks[i].cac_movable == 0, ("noqueue chunk still has movable blocks"));
-			printf("(%ld, %d) ", ca->ca_chunks[i].cac_blocks_used, ca->ca_chunks[i].cac_laundered);
-			//cac_print(&ca->ca_chunks[i]);
-		}
-	}
-	printf("\nTotal: %ld\n", nom);
+		struct ca_chunk *c = &ca->ca_chunks[i];
 
-#if 0
-	for (i = 0; i < ca->ca_chunk_cnt; i++) {
-		if (ca->ca_chunks[i].cac_state != CA_NOQUEUE)
+		if (c->cac_blocks_used == 0)
 			continue;
 
-		printf("[%d] ", i);
+		if (c->cac_state != CA_NOQUEUE)
+			continue;
+
+		ca_checkused(c);
+
+		KASSERT(c->cac_movable == 0, ("noqueue chunk still has movable blocks"));
+
+		printf("[%d, (%ld)]: ", c->cac_index, c->cac_blocks_used);
 		for (int j = 0; j < CA_BLOCKS; j++) {
-			if (ca->ca_chunks[i].cac_backmap[j].cao_ino == 0)
+			if (c->cac_backmap[j].cao_ino == 0) {
+				KASSERT(c->cac_backmap[j].cao_state == CA_FREE, ("improper freed block state"));
 				continue;
-			printf("%d ", j);
+			}
+
+			KASSERT(c->cac_ptr.offset == ca_chind_to_offset(ca, i), ("invalid conversion?"));
+			KASSERT(c->cac_backmap[j].cao_off ==  objbit[c->cac_ptr.offset + j], ("invalid offset logged"));
+			KASSERT(c->cac_backmap[j].cao_state == CA_HOT, ("found page not moved"));
+			KASSERT(c->cac_backmap[j].cao_ino == 1, ("found invalid inode"));
+			printf("%d, ", c->cac_backmap[j].cao_off);
 		}
-		nom += ca->ca_chunks[i].cac_blocks_used;
-		denom += 1;
 		printf("\n");
 	}
-	printf("\n");
-#endif
+
 
 	printf("Successful cleanups: %ld\n", CA_COUNTER(ca, op_cleanup_successful));
 	printf("Chunks without a queue: %ld (total load %ld, average load %ld)\n",
@@ -646,7 +664,6 @@ ca_launder_task(void *ctx, int __unused pending)
 	mtx_lock(&ca->ca_mtx);
 	mtx_lock(&ch->cac_mtx);
 
-	KASSERT(ch->cac_laundered == 0, ("chunk has %d laundered pages", ch->cac_laundered));
 	ch->cac_clean_index = 0;
 
 	for (i = 0; i < CA_BLOCKS; i++) {
@@ -775,15 +792,15 @@ ca_blkalloc(struct ca_chunk *ch, struct objsnap_txn *txn, struct chunkallocator 
 		KASSERT(backmap->cao_ino == 0, ("block already allocated with inode %d", backmap->cao_ino));
 		backmap->cao_ino = txn->d_inode[i];
 		backmap->cao_off = txn->d_index[i];
+		backmap->cao_state = CA_BLKALLOC;
+
+		if (objbit[ch->cac_ptr.offset + ch->cac_alloc_index + i] != 0)
+			printf("double alloc %ld\n", ch->cac_ptr.offset + ch->cac_alloc_index + i);
+		objbit[ch->cac_ptr.offset + ch->cac_alloc_index + i] = txn->d_index[i];
 	}
 
 	txn->d_ptr.offset = ch->cac_ptr.offset + ch->cac_alloc_index;
 	txn->d_ptr.size = numblocks;
-	for (i = 0; i < txn->d_ptr.size; i++) {
-		if (objbit[txn->d_ptr.offset + i] != 0)
-			printf("double alloc %d\n", txn->d_ptr.offset);
-		objbit[txn->d_ptr.offset + i] = 1;
-	}
 	
 	ch->cac_blocks_used += numblocks;
 	ch->cac_alloc_index += numblocks;
@@ -1081,12 +1098,13 @@ ca_blkalloc_system(struct ca_chunk *ch, obj_diskptr_t *ptrp)
 
 	ch->cac_backmap[i].cao_ino = CA_SYSTEM_INO;
 	ch->cac_backmap[i].cao_off = CA_SYSTEM_INO;
+	ch->cac_backmap[i].cao_state = CA_SYSTEM;
 
 	ptr.offset = ch->cac_ptr.offset + i;
 	ptr.size = 1;
 	if (objbit[ptr.offset] != 0)
 		printf("system double alloc %d\n", objbit[ptr.offset]);
-	objbit[ptr.offset] = 1;
+	objbit[ptr.offset] = ptr.offset;
 
 	ch->cac_blocks_used += 1;
 	mtx_unlock(&ch->cac_mtx);
@@ -1222,6 +1240,7 @@ ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 		KASSERT(ch->cac_backmap[ind].cao_ino != 0, ("freeing already free block %d", ptr.offset));
 		ch->cac_backmap[ind].cao_ino = 0;
 		ch->cac_backmap[ind].cao_off = 0;
+		ch->cac_backmap[ind].cao_state = CA_FREE;
 
 		/* No need to clean the page anymore. */
 		if (ch->cac_launder[ind] != 0) {

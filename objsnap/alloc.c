@@ -38,6 +38,7 @@ allocator_init()
 	bzero(&alloc, sizeof(struct allocator));
 	alloc.alloc_size_total_blocks = superblock.super_size;
 	alloc.alloc_starting_offset = (2 * superblock.super_max_inodes) + MAX_WAL_ENTRIES + 2;
+
 	lockinit(&alloc.alloc_lk, 0, "Objsnap Syncer Lock", 0, 0); 
 	alloc.alloc_bsize = BLOCKSIZE;
 

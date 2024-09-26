@@ -41,6 +41,7 @@ enum ca_state {
 struct ca_objid {
 	uint32_t cao_ino;
 	uint32_t cao_off;
+	enum ca_state cao_state;
 };
 
 TAILQ_HEAD(ca_system_list, ca_chunk);
