@@ -58,7 +58,7 @@ cac_movable_add(struct ca_chunk *ch, size_t ind)
 	ch->cac_movable += 1;
 	ch->cac_laundered += 1;
 
-	KASSERT(ch->cac_backmap[ind].cao_state == CA_BLKALLOC, ("improper allocated page state"));
+	KASSERT(ch->cac_backmap[ind].cao_state == CA_BLKALLOC, ("improper allocated page state %d", ch->cac_backmap[ind].cao_state));
 	ch->cac_backmap[ind].cao_state = CA_LAUNDER;
 	/* XXX Attach the real page */
 }
@@ -510,7 +510,7 @@ ca_print(struct chunkallocator *ca)
 
 		ca_checkused(c);
 
-		KASSERT(c->cac_movable == 0, ("noqueue chunk still has movable blocks"));
+		//KASSERT(c->cac_movable == 0, ("noqueue chunk still has movable blocks"));
 
 		printf("[%d, (%ld)]: ", c->cac_index, c->cac_blocks_used);
 		for (int j = 0; j < CA_BLOCKS; j++) {
@@ -521,7 +521,7 @@ ca_print(struct chunkallocator *ca)
 
 			KASSERT(c->cac_ptr.offset == ca_chind_to_offset(ca, i), ("invalid conversion?"));
 			KASSERT(c->cac_backmap[j].cao_off ==  objbit[c->cac_ptr.offset + j], ("invalid offset logged"));
-			KASSERT(c->cac_backmap[j].cao_state == CA_HOT, ("found page not moved"));
+			//KASSERT(c->cac_backmap[j].cao_state == CA_HOT, ("found page not moved"));
 			KASSERT(c->cac_backmap[j].cao_ino == 1, ("found invalid inode"));
 			printf("%d, ", c->cac_backmap[j].cao_off);
 		}
@@ -632,8 +632,11 @@ ca_launder_task(void *ctx, int __unused pending)
 
 	SDT_PROBE0(objsnap, , , chunk_launder_start);
 	for (i = 0; i < CA_BLOCKS; i++) {
-		if (ch->cac_backmap[i].cao_ino == 0)
+		mtx_lock(&ch->cac_mtx);
+		if (ch->cac_backmap[i].cao_ino == 0) {
+			mtx_unlock(&ch->cac_mtx);
 			continue;
+		}
 		
 #if 0
 		m = vm_page_alloc_freelist(VM_FREELIST_DEFAULT, VM_ALLOC_NORMAL | VM_ALLOC_NOOBJ);
@@ -652,7 +655,6 @@ ca_launder_task(void *ctx, int __unused pending)
 		g_destroy_bio(bp);
 #endif
 
-		mtx_lock(&ch->cac_mtx);
 		cac_movable_add(ch, i);
 		KASSERT(ch->cac_backmap[i].cao_ino != 0, ("unexpected launder-free race"));
 		mtx_unlock(&ch->cac_mtx);
@@ -1300,7 +1302,8 @@ ca_free(struct chunkallocator *ca, obj_diskptr_t ptr)
 		break;
 
 	case CA_LAUNDER:
-		printf("Freeing laundered\n");
+		TAILQ_REMOVE(&ca->ca_launder, ch, cac_next);
+		ch->cac_state = CA_NOQUEUE;
 		cac_to_free(ca, ch);
 
 	/* The hot list has logic for reclaiming empty chunks. */

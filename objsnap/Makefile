@@ -1,7 +1,7 @@
 KMOD	= objsnap
 CLEANFILES = .depend*
 DPSRCS 	= offset.inc
-SRCS	= arraylist.c binaryalloc.c chunkalloc.c objsnap_ioctl.c alloc.c btree.c vtree.c vnode_if.h
+SRCS	= array.c arraylist.c binaryalloc.c chunkalloc.c objsnap_ioctl.c alloc.c btree.c vtree.c vnode_if.h
 CFLAGS	+= -DKDTRACE_HOOKS -DSMP -DKLD_TIED -I../include -g
 CLEANFILES = .depend*
 WITH_CTF = 1

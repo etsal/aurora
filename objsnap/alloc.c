@@ -25,6 +25,7 @@
 #include "alloc.h"
 #include "vtree.h"
 #include "btree.h"
+#include "array.h"
 
 const enum obj_alloctype obj_alloctype = OBJALLOC_CHUNK;
 
@@ -199,7 +200,7 @@ osinode_t *allocate_inode()
 
     // We must allocate the btree first and place it in our inode structures
     btree_t btree = btree_create();
-    vnode->v_tree = vtree_create(btree, &btreeops, 0);
+    vnode->v_tree = vtree_create(btree, &arrops, 0);
     VTREE_INIT(&vnode->v_tree, osdata.os_vp, 
         newinode->i_treeptr, sizeof(obj_diskptr_t));
     printf("Root Inode at %u\n", newinode->i_treeptr.offset);

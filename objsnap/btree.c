@@ -733,81 +733,11 @@ btree_delete(void* treep, uint64_t key, void* value)
   return ret;
 }
 
-#define BULK_DONE (0)
-#define BULK_SPLIT (1)
-#define BULK_CONTINUE (2)
-#define BULK_MAX ((uint64_t)(-1))
-
-static int
-btnode_bulkinsert(bpath_t path, kvp** keyvalues, size_t* len, uint64_t max_key)
-{
-  int idx;
-  btnode_t next;
-  kvp* kvs = *keyvalues;
-  int inserted;
-
-  btnode_t cur = path_getcur(path);
-  if (*len == 0)
-    return BULK_DONE;
-
-  /* If we are at a leaf the remaining keys can go here */
-  if (BT_ISLEAF(cur)) {
-
-    /* Function will update len for us and tell us by how much
-     * through the returned inserted variable */
-    if (BT_COWCHECK(cur)) {
-      path_cow(path);
-    }
-
-    inserted = btnode_leaf_bulkinsert(cur, kvs, len, max_key);
-    /* Update our pointer to further along the list */
-    *keyvalues = &kvs[inserted];
-
-    if (cur->n_len == BT_MAX_KEYS) {
-      btnode_split(path);
-      return BULK_SPLIT;
-    }
-
-    return BULK_CONTINUE;
-  }
-
-  next = btnode_go_deeper(path, kvs[0].key, LK_EXCLUSIVE);
-  cur = path_parent(path);
-  /* What is our index */
-  idx = path_getindex(path);
-  /* It is the last child */
-  if (idx != cur->n_len) {
-    /* Change our max key */
-    max_key = path_parent(path)->n_keys[idx];
-  }
-
-  return btnode_bulkinsert(path, keyvalues, len, max_key);
-}
-
 /* Assume keyvalues list is sorted */
 int
 btree_bulkinsert(void* treep, kvp* keyvalues, size_t len)
 {
-  btree_t tree = (btree_t)treep;
-
-  int ret;
-  bpath path;
-  path.p_len = 0;
-
-  path_add(&path, tree, tree->tr_ptr, INDEX_NULL, LK_EXCLUSIVE);
-  ret = btnode_bulkinsert(&path, &keyvalues, &len, BULK_MAX);
-  while (ret != BULK_DONE) {
-    /* We got some amount of keys done */
-    path_unacquire(&path, LK_EXCLUSIVE);
-    /* Reset our path */
-    path.p_len = 0;
-    path_add(&path, tree, tree->tr_ptr, INDEX_NULL, LK_EXCLUSIVE);
-    ret = btnode_bulkinsert(&path, &keyvalues, &len, BULK_MAX);
-  }
-
-  path_unacquire(&path, LK_EXCLUSIVE);
-
-  return 0;
+  panic("no");
 }
 
 int
